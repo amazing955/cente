@@ -1,0 +1,1018 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard | Backup Tape Inventory</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            min-height: 100vh;
+            background: #f4f7fb;
+        }
+        .sidebar {
+            position: sticky;
+            top: 0;
+            min-height: 100vh;
+            height: 100vh;
+            overflow-y: auto;
+            background: linear-gradient(135deg,#0548ad,#001f54);
+            color: white;
+        }
+        .sidebar a {
+            color: rgba(255,255,255,.85);
+            text-decoration: none;
+        }
+        .sidebar a:hover {
+            color: white;
+        }
+        .sidebar .nav-link.active {
+            background: rgba(255,255,255,.15);
+            border-radius: .5rem;
+        }
+        .summary-card {
+            border-left: .4rem solid #0548ad;
+            min-height: 140px;
+        }
+        .section-card {
+            min-height: 100%;
+        }
+        .notification-item {
+            background: #ffffff;
+            border-radius: .75rem;
+            padding: 1rem;
+            box-shadow: 0 0 12px rgba(0,0,0,.05);
+        }
+        .small-text {
+            font-size: .9rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row g-0">
+            <aside class="col-lg-2 sidebar p-4">
+                <div class="mb-5">
+                    <h5 class="text-white">Admin Panel</h5>
+                    <small class="text-white-50">Overview</small>
+                </div>
+                <nav class="nav flex-column gap-2" role="tablist" aria-orientation="vertical">
+                    {% for tab in dashboard_tabs %}
+                        <button class="nav-link px-3 py-2{% if forloop.first %} active{% endif %}" id="tab-{{ tab.tab_id }}" data-bs-toggle="tab" data-bs-target="#{{ tab.tab_id }}" type="button" role="tab" aria-controls="{{ tab.tab_id }}" aria-selected="{% if forloop.first %}true{% else %}false{% endif %}">{{ tab.label }}</button>
+                    {% endfor %}
+                    <a class="nav-link px-3 py-2 text-danger" id="tab-logout" href="/signout/" role="button">Logout</a>
+                </nav>
+            </aside>
+
+            <main class="col-lg-10 p-4">
+                <div class="tab-content">
+                    <section class="tab-pane fade" id="overview" role="tabpanel" aria-labelledby="tab-overview">
+                        <div class="row mb-4">
+                            <div class="col-12 d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h2 class="mb-1">Overview</h2>
+                                    <p class="text-muted mb-0">Click a feature from the left navigation to show it here.</p>
+                                </div>
+                                <div class="d-flex gap-2 align-items-center">
+                                    {% if request.user.is_superuser %}
+                                        <a href="/admin/" class="btn btn-dark btn-sm">Admin Site</a>
+                                    {% endif %}
+                                    <button class="btn btn-outline-primary me-2">Generate Report</button>
+                                    <button class="btn btn-primary">Export PDF</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row gy-3 mb-4">
+                            <div class="col-sm-6 col-xl-3">
+                                <div class="card summary-card shadow-sm p-3">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <small class="text-uppercase text-muted">Users</small>
+                                            <h3 class="mb-0">{{ total_users }}</h3>
+                                        </div>
+                                        <span class="badge bg-primary">Total</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-sm-6 col-xl-3">
+                                <div class="card summary-card shadow-sm p-3">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <small class="text-uppercase text-muted">Tapes</small>
+                                            <h3 class="mb-0">{{ total_tapes }}</h3>
+                                        </div>
+                                        <span class="badge bg-info">Inventory</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-sm-6 col-xl-3">
+                                <div class="card summary-card shadow-sm p-3">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <small class="text-uppercase text-muted">Alerts</small>
+                                            <h3 class="mb-0">{{ alert_count }}</h3>
+                                        </div>
+                                        <span class="badge bg-danger">Active</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-sm-6 col-xl-3">
+                                <div class="card summary-card shadow-sm p-3">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <small class="text-uppercase text-muted">Pending Shipments</small>
+                                            <h3 class="mb-0">{{ pending_shipments }}</h3>
+                                        </div>
+                                        <span class="badge bg-warning text-dark">Pending</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="tab-pane fade" id="users" role="tabpanel" aria-labelledby="tab-users">
+                        <div class="row mb-4">
+                            <div class="col-12 d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h2 class="mb-1">Users</h2>
+                                    <p class="text-muted mb-0">Manage accounts, roles, and access status.</p>
+                                </div>
+                                <div class="btn-group">
+                                    <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#addUserPanel" aria-expanded="false" aria-controls="addUserPanel">Add User</button>
+                                    {% if edit_user_form %}
+                                        <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#editUserPanel" aria-expanded="true" aria-controls="editUserPanel">Edit User</button>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="collapse mb-4" id="addUserPanel">
+                            <div class="card shadow-sm section-card p-4">
+                                <div class="d-flex justify-content-between align-items-start mb-3">
+                                    <div>
+                                        <h5 class="mb-1">Create New User</h5>
+                                        <p class="text-muted mb-0">Add a new user account directly inside the dashboard.</p>
+                                    </div>
+                                    <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#addUserPanel" aria-expanded="true" aria-controls="addUserPanel">Close</button>
+                                </div>
+
+                                {% if messages %}
+                                    {% for message in messages %}
+                                        <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                                            {{ message }}
+                                            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                                        </div>
+                                    {% endfor %}
+                                {% endif %}
+
+                                <form method="POST" class="row g-3 needs-validation" novalidate>
+                                    {% csrf_token %}
+                                    <input type="hidden" name="form_type" value="add_user">
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_username" class="form-label">Username <span class="text-danger">*</span></label>
+                                        {{ user_form.username }}
+                                        {% if user_form.username.errors %}
+                                            <div class="invalid-feedback d-block">{{ user_form.username.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_email" class="form-label">Email <span class="text-danger">*</span></label>
+                                        {{ user_form.email }}
+                                        {% if user_form.email.errors %}
+                                            <div class="invalid-feedback d-block">{{ user_form.email.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_first_name" class="form-label">First Name</label>
+                                        {{ user_form.first_name }}
+                                        {% if user_form.first_name.errors %}
+                                            <div class="invalid-feedback d-block">{{ user_form.first_name.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_last_name" class="form-label">Last Name</label>
+                                        {{ user_form.last_name }}
+                                        {% if user_form.last_name.errors %}
+                                            <div class="invalid-feedback d-block">{{ user_form.last_name.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_role" class="form-label">Role</label>
+                                        {{ user_form.role }}
+                                        {% if user_form.role.errors %}
+                                            <div class="invalid-feedback d-block">{{ user_form.role.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_password1" class="form-label">Password <span class="text-danger">*</span></label>
+                                        {{ user_form.password1 }}
+                                        {% if user_form.password1.errors %}
+                                            <div class="invalid-feedback d-block">{{ user_form.password1.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_password2" class="form-label">Confirm Password <span class="text-danger">*</span></label>
+                                        {{ user_form.password2 }}
+                                        {% if user_form.password2.errors %}
+                                            <div class="invalid-feedback d-block">{{ user_form.password2.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 d-flex flex-column flex-sm-row justify-content-end gap-2 pt-3">
+                                        <button type="submit" class="btn btn-primary">
+                                            <i class="bi bi-save me-1"></i> Save User
+                                        </button>
+                                        <button type="reset" class="btn btn-secondary">
+                                            <i class="bi bi-arrow-clockwise me-1"></i> Reset Form
+                                        </button>
+                                        <button class="btn btn-danger btn-cancel" type="button" data-bs-toggle="collapse" data-bs-target="#addUserPanel" aria-expanded="false" aria-controls="addUserPanel">
+                                            <i class="bi bi-x-circle me-1"></i> Cancel
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+
+                        {% if edit_user_form %}
+                        <div class="collapse show mb-4" id="editUserPanel">
+                            <div class="card shadow-sm section-card p-4">
+                                <div class="d-flex justify-content-between align-items-start mb-3">
+                                    <div>
+                                        <h5 class="mb-1">Edit User</h5>
+                                        <p class="text-muted mb-0">Update user account details and role assignment.</p>
+                                    </div>
+                                    <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#editUserPanel" aria-expanded="true" aria-controls="editUserPanel">Close</button>
+                                </div>
+
+                                <form method="POST" class="row g-3 needs-validation" novalidate>
+                                    {% csrf_token %}
+                                    <input type="hidden" name="form_type" value="edit_user">
+                                    <input type="hidden" name="user_id" value="{{ edit_user.id }}">
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_username" class="form-label">Username <span class="text-danger">*</span></label>
+                                        {{ edit_user_form.username }}
+                                        {% if edit_user_form.username.errors %}
+                                            <div class="invalid-feedback d-block">{{ edit_user_form.username.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_email" class="form-label">Email <span class="text-danger">*</span></label>
+                                        {{ edit_user_form.email }}
+                                        {% if edit_user_form.email.errors %}
+                                            <div class="invalid-feedback d-block">{{ edit_user_form.email.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_first_name" class="form-label">First Name</label>
+                                        {{ edit_user_form.first_name }}
+                                        {% if edit_user_form.first_name.errors %}
+                                            <div class="invalid-feedback d-block">{{ edit_user_form.first_name.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_last_name" class="form-label">Last Name</label>
+                                        {{ edit_user_form.last_name }}
+                                        {% if edit_user_form.last_name.errors %}
+                                            <div class="invalid-feedback d-block">{{ edit_user_form.last_name.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_role" class="form-label">Role</label>
+                                        {{ edit_user_form.role }}
+                                        {% if edit_user_form.role.errors %}
+                                            <div class="invalid-feedback d-block">{{ edit_user_form.role.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <div class="form-check mt-4">
+                                            {{ edit_user_form.is_active }}
+                                            <label class="form-check-label" for="id_is_active">Active</label>
+                                        </div>
+                                        {% if edit_user_form.is_active.errors %}
+                                            <div class="invalid-feedback d-block">{{ edit_user_form.is_active.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 d-flex flex-column flex-sm-row justify-content-end gap-2 pt-3">
+                                        <button type="submit" class="btn btn-primary">
+                                            <i class="bi bi-save me-1"></i> Save Changes
+                                        </button>
+                                        <a href="?" class="btn btn-secondary">
+                                            <i class="bi bi-arrow-clockwise me-1"></i> Cancel
+                                        </a>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                        {% endif %}
+
+                        <div class="card shadow-sm section-card">
+                            <div class="card-body">
+                                <div class="table-responsive">
+                                    <table class="table table-hover table-sm mb-0">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>Username</th>
+                                                <th>Role</th>
+                                                <th>Status</th>
+                                                <th>Last Login</th>
+                                                <th>Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for user in users %}
+                                            <tr>
+                                                <td>{{ user.username }}</td>
+                                                <td>
+                                                    {% if user.groups.all %}
+                                                        {{ user.groups.all|join:", " }}
+                                                    {% else %}
+                                                        No role
+                                                    {% endif %}
+                                                </td>
+                                                <td>
+                                                    {% if user.is_active %}
+                                                        <span class="badge bg-success">Active</span>
+                                                    {% else %}
+                                                        <span class="badge bg-secondary">Inactive</span>
+                                                    {% endif %}
+                                                </td>
+                                                <td>{{ user.last_login|default_if_none:"Never"|date:"M d, Y H:i" }}</td>
+                                                <td>
+                                                    <div class="btn-group" role="group">
+                                                        <a href="?edit_user={{ user.id }}#users" class="btn btn-sm btn-outline-primary">Edit</a>
+                                                        {% if user.groups.all|length > 0 %}
+                                                            
+                                                        {% endif %}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            {% empty %}
+                                            <tr>
+                                                <td colspan="5" class="text-center text-muted">No users found.</td>
+                                            </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="tab-pane fade" id="roles" role="tabpanel" aria-labelledby="tab-roles">
+                        <div class="row mb-4">
+                            <div class="col-12 d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h2 class="mb-1">Roles</h2>
+                                    <p class="text-muted mb-0">Create users, have the Backup Administrator verify them, then assign roles here.</p>
+                                </div>
+                                <div class="btn-group">
+                                    <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#addUserRolePanel" aria-expanded="false" aria-controls="addUserRolePanel">Create Role</button>
+                                    <button class="btn btn-outline-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#assignRolePanel" aria-expanded="false" aria-controls="assignRolePanel">Assign Role</button>
+                                    <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#editRoleFeaturesPanel" aria-expanded="false" aria-controls="editRoleFeaturesPanel">Edit Role Features</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="collapse mb-4" id="addUserRolePanel">
+                            <div class="card shadow-sm section-card p-4">
+                                <div class="d-flex justify-content-between align-items-start mb-3">
+                                    <div>
+                                        <h5 class="mb-1">Create New Role</h5>
+                                        <p class="text-muted mb-0">Define a role name and choose which dashboard features it can access.</p>
+                                    </div>
+                                    <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#addUserRolePanel" aria-expanded="true" aria-controls="#addUserRolePanel">Close</button>
+                                </div>
+
+                                {% if messages %}
+                                    {% for message in messages %}
+                                        <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                                            {{ message }}
+                                            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                                        </div>
+                                    {% endfor %}
+                                {% endif %}
+
+                                <form method="POST" class="row g-3 needs-validation" novalidate>
+                                    {% csrf_token %}
+                                    <input type="hidden" name="form_type" value="create_role">
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_role_name" class="form-label">Role Name <span class="text-danger">*</span></label>
+                                        {{ role_creation_form.role_name }}
+                                        {% if role_creation_form.role_name.errors %}
+                                            <div class="invalid-feedback d-block">{{ role_creation_form.role_name.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12">
+                                        <label class="form-label">Feature Access</label>
+                                        <div class="border rounded p-3">
+                                            {% for checkbox in role_creation_form.features %}
+                                                <div class="form-check mb-2">
+                                                    {{ checkbox.tag }}
+                                                    <label class="form-check-label" for="{{ checkbox.id_for_label }}">{{ checkbox.choice_label }}</label>
+                                                </div>
+                                            {% endfor %}
+                                        </div>
+                                        {% if role_creation_form.features.errors %}
+                                            <div class="invalid-feedback d-block">{{ role_creation_form.features.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 d-flex flex-column flex-sm-row justify-content-end gap-2 pt-3">
+                                        <button type="submit" class="btn btn-primary">
+                                            <i class="bi bi-save me-1"></i> Create Role
+                                        </button>
+                                        <button type="reset" class="btn btn-secondary">
+                                            <i class="bi bi-arrow-clockwise me-1"></i> Reset
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+
+                        <div class="collapse mb-4" id="assignRolePanel">
+                            <div class="card shadow-sm section-card p-4">
+                                <div class="d-flex justify-content-between align-items-start mb-3">
+                                    <div>
+                                        <h5 class="mb-1">Assign Role</h5>
+                                        <p class="text-muted mb-0">Select a user and update their role instantly.</p>
+                                    </div>
+                                    <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#assignRolePanel" aria-expanded="true" aria-controls="assignRolePanel">Close</button>
+                                </div>
+
+                                <form method="POST" class="row g-3 needs-validation" novalidate>
+                                    {% csrf_token %}
+                                    <input type="hidden" name="form_type" value="assign_role">
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_user" class="form-label">User</label>
+                                        {{ role_form.user }}
+                                        {% if role_form.user.errors %}
+                                            <div class="invalid-feedback d-block">{{ role_form.user.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_group" class="form-label">Role</label>
+                                        {{ role_form.group }}
+                                        {% if role_form.group.errors %}
+                                            <div class="invalid-feedback d-block">{{ role_form.group.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 d-flex flex-column flex-sm-row justify-content-end gap-2 pt-3">
+                                        <button type="submit" class="btn btn-primary">
+                                            <i class="bi bi-save me-1"></i> Assign Role
+                                        </button>
+                                        <button type="reset" class="btn btn-secondary">
+                                            <i class="bi bi-arrow-clockwise me-1"></i> Reset
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+
+                        <div class="collapse mb-4" id="editRoleFeaturesPanel">
+                            <div class="card shadow-sm section-card p-4">
+                                <div class="d-flex justify-content-between align-items-start mb-3">
+                                    <div>
+                                        <h5 class="mb-1">Edit Role Features</h5>
+                                        <p class="text-muted mb-0">Select a role and update its checklist of enabled dashboard features.</p>
+                                    </div>
+                                    <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#editRoleFeaturesPanel" aria-expanded="true" aria-controls="editRoleFeaturesPanel">Close</button>
+                                </div>
+
+                                <form method="POST" class="row g-3 needs-validation" novalidate>
+                                    {% csrf_token %}
+                                    <input type="hidden" name="form_type" value="update_role_features">
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_group" class="form-label">Role</label>
+                                        {{ role_feature_form.group }}
+                                        {% if role_feature_form.group.errors %}
+                                            <div class="invalid-feedback d-block">{{ role_feature_form.group.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12">
+                                        <label class="form-label">Features</label>
+                                        <div class="border rounded p-3">
+                                            {% for checkbox in role_feature_form.features %}
+                                                <div class="form-check mb-2">
+                                                    {{ checkbox.tag }}
+                                                    <label class="form-check-label" for="{{ checkbox.id_for_label }}">{{ checkbox.choice_label }}</label>
+                                                </div>
+                                            {% endfor %}
+                                        </div>
+                                        {% if role_feature_form.features.errors %}
+                                            <div class="invalid-feedback d-block">{{ role_feature_form.features.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 d-flex flex-column flex-sm-row justify-content-end gap-2 pt-3">
+                                        <button type="submit" class="btn btn-primary">
+                                            <i class="bi bi-save me-1"></i> Save Features
+                                        </button>
+                                        <button type="reset" class="btn btn-secondary">
+                                            <i class="bi bi-arrow-clockwise me-1"></i> Reset
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+
+                        <div class="row gy-3">
+                            {% load role_template_tags %}
+                            {% for group in groups %}
+                                <div class="col-lg-4">
+                                    <div class="card shadow-sm section-card p-3">
+                                        <h5>{{ group.name }}</h5>
+                                        <p class="small-text text-muted mb-2">Group membership and permissions are managed in admin.</p>
+                                        {% with template=role_templates_by_group|get_group_template:group %}
+                                            {% if template and template.features %}
+                                                <div class="small-text mb-2">Features:</div>
+                                                <ul class="small text-dark mb-0">
+                                                    {% for feature in template.features %}
+                                                        <li>{{ feature }}</li>
+                                                    {% endfor %}
+                                                </ul>
+                                            {% else %}
+                                                <div class="small-text text-muted">No feature checklist defined yet.</div>
+                                            {% endif %}
+                                        {% endwith %}
+                                    </div>
+                                </div>
+                            {% empty %}
+                                <div class="col-12">
+                                    <div class="alert alert-secondary">No roles available.</div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </section>
+
+                    <section class="tab-pane fade" id="inventory" role="tabpanel" aria-labelledby="tab-inventory">
+                        <div class="row mb-4">
+                            <div class="col-12 d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h2 class="mb-1">Tape Inventory</h2>
+                                    <p class="text-muted mb-0">Track counts, retention, and availability.</p>
+                                </div>
+                                <div class="btn-group">
+                                    <button class="btn btn-outline-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#listTapesPanel" aria-expanded="false" aria-controls="listTapesPanel">
+                                        <i class="bi bi-list-ul me-1"></i> List Tapes
+                                    </button>
+                                    <button class="btn btn-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#addTapePanel" aria-expanded="false" aria-controls="addTapePanel">
+                                        <i class="bi bi-plus-circle me-1"></i> Add Tape
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="collapse mb-4" id="addTapePanel">
+                            <div class="card shadow-sm section-card p-4">
+                                <div class="d-flex justify-content-between align-items-start mb-3">
+                                    <div>
+                                        <h5 class="mb-1">Register New Tape</h5>
+                                        <p class="text-muted mb-0">Add a new tape record directly inside the dashboard.</p>
+                                    </div>
+                                    <button class="btn btn-outline-secondary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#addTapePanel" aria-expanded="true" aria-controls="addTapePanel">Close</button>
+                                </div>
+
+                                {% if messages %}
+                                    {% for message in messages %}
+                                        <div class="alert alert-{{ message.tags }} alert-dismissible fade show" role="alert">
+                                            {{ message }}
+                                            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                                        </div>
+                                    {% endfor %}
+                                {% endif %}
+
+                                <form method="POST" class="row g-3 needs-validation" novalidate>
+                                    {% csrf_token %}
+                                    <input type="hidden" name="form_type" value="add_tape">
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_volser" class="form-label">VolSER <span class="text-danger">*</span></label>
+                                        {{ tape_form.volser }}
+                                        {% if tape_form.volser.errors %}
+                                            <div class="invalid-feedback d-block">{{ tape_form.volser.errors.0 }}</div>
+                                        {% else %}
+                                            <div class="form-text">Unique tape volume serial.</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_barcode" class="form-label">Barcode <span class="text-danger">*</span></label>
+                                        {{ tape_form.barcode }}
+                                        {% if tape_form.barcode.errors %}
+                                            <div class="invalid-feedback d-block">{{ tape_form.barcode.errors.0 }}</div>
+                                        {% else %}
+                                            <div class="form-text">Unique barcode identifier.</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_rfid_tag" class="form-label">RFID Tag</label>
+                                        {{ tape_form.rfid_tag }}
+                                        {% if tape_form.rfid_tag.errors %}
+                                            <div class="invalid-feedback d-block">{{ tape_form.rfid_tag.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_tape_type" class="form-label">Tape Type</label>
+                                        {{ tape_form.tape_type }}
+                                        {% if tape_form.tape_type.errors %}
+                                            <div class="invalid-feedback d-block">{{ tape_form.tape_type.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_manufacturer" class="form-label">Manufacturer</label>
+                                        {{ tape_form.manufacturer }}
+                                        {% if tape_form.manufacturer.errors %}
+                                            <div class="invalid-feedback d-block">{{ tape_form.manufacturer.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_status" class="form-label">Status</label>
+                                        {{ tape_form.status }}
+                                        {% if tape_form.status.errors %}
+                                            <div class="invalid-feedback d-block">{{ tape_form.status.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_current_location" class="form-label">Current Location</label>
+                                        {{ tape_form.current_location }}
+                                        {% if tape_form.current_location.errors %}
+                                            <div class="invalid-feedback d-block">{{ tape_form.current_location.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <label for="id_retention_end_date" class="form-label">Retention End Date <span class="text-danger">*</span></label>
+                                        {{ tape_form.retention_end_date }}
+                                        {% if tape_form.retention_end_date.errors %}
+                                            <div class="invalid-feedback d-block">{{ tape_form.retention_end_date.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 col-md-6">
+                                        <div class="form-check mt-4">
+                                            {{ tape_form.legal_hold }}
+                                            <label class="form-check-label" for="id_legal_hold">Legal Hold</label>
+                                        </div>
+                                        <div class="form-check mt-2">
+                                            {{ tape_form.audit_hold }}
+                                            <label class="form-check-label" for="id_audit_hold">Audit Hold</label>
+                                        </div>
+                                    </div>
+
+                                    <div class="col-12">
+                                        <label for="id_remarks" class="form-label">Remarks</label>
+                                        {{ tape_form.remarks }}
+                                        {% if tape_form.remarks.errors %}
+                                            <div class="invalid-feedback d-block">{{ tape_form.remarks.errors.0 }}</div>
+                                        {% endif %}
+                                    </div>
+
+                                    <div class="col-12 d-flex flex-column flex-sm-row justify-content-end gap-2 pt-3">
+                                        <button type="submit" class="btn btn-primary">
+                                            <i class="bi bi-save me-1"></i> Save Tape
+                                        </button>
+                                        <button type="reset" class="btn btn-secondary">
+                                            <i class="bi bi-arrow-clockwise me-1"></i> Reset Form
+                                        </button>
+                                        <button class="btn btn-danger btn-cancel" type="button" data-bs-toggle="collapse" data-bs-target="#addTapePanel" aria-expanded="false" aria-controls="addTapePanel">
+                                            <i class="bi bi-x-circle me-1"></i> Cancel
+                                        </button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+
+                        <div class="collapse mb-4" id="listTapesPanel">
+                            <div class="card shadow-sm section-card">
+                                <div class="card-header">
+                                    <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-3">
+                                        <div>
+                                            <h5 class="mb-0">Tape List</h5>
+                                            <small class="text-muted">Showing all registered tapes with status and location.</small>
+                                        </div>
+                                        <form method="get" class="d-flex gap-2 align-items-center mb-0">
+                                            <input type="search" name="tape_search" class="form-control form-control-sm" placeholder="Search by any tape field" value="{{ tape_search|default_if_none:'' }}">
+                                            <button class="btn btn-sm btn-primary" type="submit">Search</button>
+                                        </form>
+                                        <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#listTapesPanel" aria-expanded="true" aria-controls="listTapesPanel">Hide</button>
+                                    </div>
+                                </div>
+                                <div class="card-body p-0">
+                                    <div class="table-responsive">
+                                        <table class="table table-hover table-sm mb-0">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th>VolSER</th>
+                                                    <th>Barcode</th>
+                                                    <th>Status</th>
+                                                    <th>Location</th>
+                                                    <th>Retention Due</th>
+                                                    <th>Registered</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {% for tape in tapes %}
+                                                    <tr>
+                                                        <td>{{ tape.volser }}</td>
+                                                        <td>{{ tape.barcode }}</td>
+                                                        <td><span class="badge bg-secondary">{{ tape.status }}</span></td>
+                                                        <td>{{ tape.current_location|default:'Unknown' }}</td>
+                                                        <td>{{ tape.retention_end_date|date:'M d, Y' }}</td>
+                                                        <td>{{ tape.date_registered|date:'M d, Y' }}</td>
+                                                    </tr>
+                                                {% empty %}
+                                                    <tr>
+                                                        <td colspan="6" class="text-center text-muted">No tapes registered yet.</td>
+                                                    </tr>
+                                                {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="row gy-3">
+                            <div class="col-md-4">
+                                <div class="card shadow-sm section-card p-3 text-center">
+                                    <p class="text-muted small-text mb-1">Active Tapes</p>
+                                    <h4 class="mb-0">{{ active_tapes }}</h4>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card shadow-sm section-card p-3 text-center">
+                                    <p class="text-muted small-text mb-1">Archived Tapes</p>
+                                    <h4 class="mb-0">{{ archived_tapes }}</h4>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card shadow-sm section-card p-3 text-center">
+                                    <p class="text-muted small-text mb-1">Retention Due</p>
+                                    <h4 class="mb-0">{{ retention_due }}</h4>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="tab-pane fade" id="shipments" role="tabpanel" aria-labelledby="tab-shipments">
+                        <div class="row mb-4">
+                            <div class="col-12 d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h2 class="mb-1">Shipments</h2>
+                                    <p class="text-muted mb-0">Monitor recent deliveries and approvals.</p>
+                                </div>
+                                <button class="btn btn-outline-secondary btn-sm">New Shipment</button>
+                            </div>
+                        </div>
+                        <div class="card shadow-sm section-card">
+                            <div class="card-body p-0">
+                                <table class="table table-hover table-sm mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Shipment</th>
+                                            <th>Status</th>
+                                            <th>ETA</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for shipment in shipments %}
+                                        <tr>
+                                            <td>{{ shipment.shipment_id }}</td>
+                                            <td><span class="badge bg-{{ shipment.status|lower|slugify }}">{{ shipment.status }}</span></td>
+                                            <td>{{ shipment.eta }}</td>
+                                        </tr>
+                                        {% empty %}
+                                        <tr>
+                                            <td colspan="3" class="text-center text-muted">No shipments found.</td>
+                                        </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="tab-pane fade" id="reports" role="tabpanel" aria-labelledby="tab-reports">
+                        <div class="row mb-4">
+                            <div class="col-12">
+                                <h2 class="mb-1">Reports</h2>
+                                <p class="text-muted mb-0">Generate inventory, audit, and retention reports.</p>
+                            </div>
+                        </div>
+                        <div class="card shadow-sm section-card">
+                            <div class="card-body">
+                                <div class="list-group list-group-flush">
+                                    {% for report in reports %}
+                                        <a href="#" class="list-group-item list-group-item-action">{{ report.name }}</a>
+                                    {% empty %}
+                                        <div class="list-group-item text-center text-muted">No reports available.</div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="tab-pane fade" id="audit" role="tabpanel" aria-labelledby="tab-audit">
+                        <div class="row mb-4">
+                            <div class="col-12">
+                                <h2 class="mb-1">Audit Logs</h2>
+                                <p class="text-muted mb-0">Review security events and system activity.</p>
+                            </div>
+                        </div>
+                        <div class="card shadow-sm section-card">
+                            <div class="card-body p-0">
+                                <div class="table-responsive">
+                                    <table class="table table-hover table-sm align-middle mb-0">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th scope="col">Event</th>
+                                                <th scope="col">Details</th>
+                                                <th scope="col">User</th>
+                                                <th scope="col">Severity</th>
+                                                <th scope="col">Timestamp</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {% for audit in audit_logs %}
+                                                <tr>
+                                                    <td class="fw-semibold">{{ audit.name }}</td>
+                                                    <td class="small text-muted">{{ audit.action }}</td>
+                                                    <td>{% if audit.user %}{{ audit.user.username }}{% else %}<span class="text-muted">system</span>{% endif %}</td>
+                                                    <td>
+                                                        {% if audit.severity == 'error' %}
+                                                            <span class="badge bg-danger text-uppercase">{{ audit.severity|title }}</span>
+                                                        {% elif audit.severity == 'warning' %}
+                                                            <span class="badge bg-warning text-dark text-uppercase">{{ audit.severity|title }}</span>
+                                                        {% elif audit.severity == 'success' %}
+                                                            <span class="badge bg-success text-uppercase">{{ audit.severity|title }}</span>
+                                                        {% else %}
+                                                            <span class="badge bg-secondary text-uppercase">{{ audit.severity|title }}</span>
+                                                        {% endif %}
+                                                    </td>
+                                                    <td class="small text-muted">{{ audit.timestamp|date:"Y-m-d H:i" }}</td>
+                                                </tr>
+                                            {% empty %}
+                                                <tr>
+                                                    <td colspan="5" class="text-center text-muted">No audit logs found.</td>
+                                                </tr>
+                                            {% endfor %}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="tab-pane fade" id="approvals" role="tabpanel" aria-labelledby="tab-approvals">
+                        <div class="row mb-4">
+                            <div class="col-12 d-flex justify-content-between align-items-center">
+                                <div>
+                                    <h2 class="mb-1">Approvals</h2>
+                                    <p class="text-muted mb-0">Review newly created user accounts requiring verification.</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="card shadow-sm section-card p-4">
+                            <div class="table-responsive">
+                                <table class="table table-hover table-sm mb-0">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Username</th>
+                                            <th>Email</th>
+                                            <th>Role</th>
+                                            <th>Requested</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {% for user in pending_users %}
+                                            <tr>
+                                                <td>{{ user.username }}</td>
+                                                <td>{{ user.email }}</td>
+                                                <td>{{ user.get_role_display }}</td>
+                                                <td>{{ user.date_joined|date:'Y-m-d H:i' }}</td>
+                                            </tr>
+                                        {% empty %}
+                                            <tr>
+                                                <td colspan="4" class="text-center text-muted">No pending approvals.</td>
+                                            </tr>
+                                        {% endfor %}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="tab-pane fade" id="logout" role="tabpanel" aria-labelledby="tab-logout">
+                        <div class="row mb-4">
+                            <div class="col-12">
+                                <h2 class="mb-1 text-danger">Logout</h2>
+                                <p class="text-muted mb-0">Sign out and return to the sign-in screen.</p>
+                            </div>
+                        </div>
+                        <div class="card shadow-sm section-card p-4 text-center">
+                            <p class="mb-3">Click below to sign out.</p>
+                            <a href="/signin/" class="btn btn-danger">Sign Out</a>
+                        </div>
+                    </section>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const searchValue = '{{ tape_search|default_if_none:""|escapejs }}';
+            if (searchValue) {
+                const inventoryTabEl = document.querySelector('#tab-inventory');
+                if (inventoryTabEl && window.bootstrap) {
+                    const inventoryTab = new bootstrap.Tab(inventoryTabEl);
+                    inventoryTab.show();
+                }
+                const listPanel = document.querySelector('#listTapesPanel');
+                if (listPanel && !listPanel.classList.contains('show') && window.bootstrap) {
+                    new bootstrap.Collapse(listPanel, { toggle: true });
+                }
+            }
+
+            const params = new URLSearchParams(window.location.search);
+            const activeTab = params.get('active_tab');
+            const activePanel = params.get('active_panel');
+            if (activeTab && window.bootstrap) {
+                const tabEl = document.querySelector('#tab-' + activeTab);
+                if (tabEl) {
+                    new bootstrap.Tab(tabEl).show();
+                }
+            }
+            if (activePanel) {
+                const panelEl = document.querySelector('#' + activePanel.replace('#', ''));
+                if (panelEl && window.bootstrap) {
+                    new bootstrap.Collapse(panelEl, { toggle: true });
+                }
+            }
+            if (!activeTab && window.bootstrap) {
+                const firstVisibleTab = document.querySelector('.nav-link[role="tab"]:not(.d-none)');
+                if (firstVisibleTab) {
+                    new bootstrap.Tab(firstVisibleTab).show();
+                }
+            }
+
+            const featureGroupSelect = document.querySelector('#id_role_feature_group');
+            if (featureGroupSelect) {
+                featureGroupSelect.addEventListener('change', function () {
+                    const selectedGroup = this.value;
+                    const params = new URLSearchParams(window.location.search);
+                    params.set('active_tab', 'roles');
+                    params.set('active_panel', 'editRoleFeaturesPanel');
+                    if (selectedGroup) {
+                        params.set('selected_group', selectedGroup);
+                    } else {
+                        params.delete('selected_group');
+                    }
+                    window.location.search = params.toString();
+                });
+            }
+
+            if (!window.bootstrap) {
+                document.querySelectorAll('[data-bs-toggle="collapse"]').forEach(function (toggle) {
+                    toggle.addEventListener('click', function () {
+                        const targetSelector = toggle.dataset.bsTarget;
+                        const target = document.querySelector(targetSelector);
+                        if (target) {
+                            target.classList.toggle('show');
+                            toggle.setAttribute('aria-expanded', target.classList.contains('show'));
+                        }
+                    });
+                });
+            }
+        });
+    </script>
+</body>
+</html>
