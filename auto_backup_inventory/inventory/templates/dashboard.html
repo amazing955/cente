@@ -537,34 +537,7 @@
                             </div>
                         </div>
 
-                        <div class="row gy-3">
-                            {% load role_template_tags %}
-                            {% for group in groups %}
-                                <div class="col-lg-4">
-                                    <div class="card shadow-sm section-card p-3">
-                                        <h5>{{ group.name }}</h5>
-                                        <p class="small-text text-muted mb-2">Group membership and permissions are managed in admin.</p>
-                                        {% with template=role_templates_by_group|get_group_template:group %}
-                                            {% if template and template.features %}
-                                                <div class="small-text mb-2">Features:</div>
-                                                <ul class="small text-dark mb-0">
-                                                    {% for feature in template.features %}
-                                                        <li>{{ feature }}</li>
-                                                    {% endfor %}
-                                                </ul>
-                                            {% else %}
-                                                <div class="small-text text-muted">No feature checklist defined yet.</div>
-                                            {% endif %}
-                                        {% endwith %}
-                                    </div>
-                                </div>
-                            {% empty %}
-                                <div class="col-12">
-                                    <div class="alert alert-secondary">No roles available.</div>
-                                </div>
-                            {% endfor %}
-                        </div>
-                    </section>
+                       
 
                     <section class="tab-pane fade" id="inventory" role="tabpanel" aria-labelledby="tab-inventory">
                         <div class="row mb-4">

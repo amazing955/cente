@@ -31,8 +31,19 @@ class TapeAdmin(admin.ModelAdmin):
 
 @admin.register(Shipment)
 class ShipmentAdmin(admin.ModelAdmin):
-    list_display = ('shipment_id', 'status', 'eta')
-    list_filter = ('status',)
+    list_display = (
+        'shipment_id',
+        'shipment_date',
+        'shipment_type',
+        'status',
+        'priority_level',
+        'number_of_tapes',
+        'destination_location',
+        'expected_delivery_date',
+        'created_at',
+    )
+    list_filter = ('status', 'shipment_type', 'priority_level')
+    search_fields = ('shipment_id', 'source_location', 'destination_location', 'courier_name', 'tracking_number')
 
 
 @admin.register(ReportTemplate)
