@@ -101,6 +101,9 @@ body {
 .btn-outline-primary {
     border-color: rgba(5, 72, 173, 0.15);
 }
+.profile-widget {
+    cursor: pointer;
+}
 </style>
 </head>
 <body>
@@ -111,37 +114,38 @@ body {
         <p class="small text-white-50 mb-0">Backup Tape Governance</p>
     </div>
     <nav class="nav flex-column gap-2">
-        <a class="nav-link active" href="#dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a>
-        <a class="nav-link" href="#shipment_approvals"><i class="bi bi-check2-square"></i> Shipment Approvals</a>
+        <a class="nav-link active" href="#dashboard" id="dashboardNavLink"><i class="bi bi-speedometer2"></i> Dashboard</a>
+        <a class="nav-link partial-load" href="#shipment_approvals" data-url="{% url 'shipment-approvals' %}"><i class="bi bi-check2-square"></i> Shipment Approvals</a>
+        <a class="nav-link analytics-toggle" href="#analytics"><i class="bi bi-graph-up"></i> Analytics</a>
         <a class="nav-link" href="#shipment_monitoring"><i class="bi bi-truck"></i> Shipment Monitoring</a>
         <a class="nav-link" href="#exception_management"><i class="bi bi-exclamation-triangle"></i> Exception Management</a>
         <a class="nav-link" href="#custody_governance"><i class="bi bi-shield-lock"></i> Custody Governance</a>
         <a class="nav-link" href="#reconciliation_review"><i class="bi bi-arrow-repeat"></i> Reconciliation Review</a>
         <a class="nav-link" href="#compliance_monitoring"><i class="bi bi-file-earmark-check"></i> Compliance Monitoring</a>
         <a class="nav-link" href="#reports"><i class="bi bi-bar-chart-line"></i> Reports</a>
-        <a class="nav-link" href="#analytics"><i class="bi bi-graph-up"></i> Analytics</a>
-        <a class="nav-link" href="#notifications"><i class="bi bi-bell"></i> Notifications</a>
-        <a class="nav-link" href="#settings"><i class="bi bi-gear"></i> Settings</a>
         <a class="nav-link text-danger mt-3" href="{% url 'signout' %}"><i class="bi bi-box-arrow-right"></i> Logout</a>
     </nav>
 </div>
-<div class="main-content">
-    <div class="top-navbar d-flex align-items-center justify-content-between mb-4">
-        <div>
-            <h1 class="h4 dashboard-title mb-1">Operations Manager Dashboard</h1>
-            <p class="small-note mb-0">Automated Backup Tape Inventory Management System — Banking Operations Command Center</p>
-        </div>
+<div class="main-content" id="dashboard">
+    <div id="embeddedContent" class="d-none"></div>
+    <div id="dashboardBody">
+        <div class="top-navbar d-flex align-items-center justify-content-between mb-4">
+            <div>
+                <h1 class="h4 dashboard-title mb-1">Operations Manager Dashboard</h1>
+                <p class="small-note mb-0">Automated Backup Tape Inventory Management System — Banking Operations Command Center</p>
+            </div>
         <div class="d-flex align-items-center gap-3">
             <button class="btn btn-outline-secondary btn-sm position-relative">
                 <i class="bi bi-bell"></i>
                 <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">{{ alert_items|length }}</span>
             </button>
-            <div class="d-flex align-items-center gap-2">
+            <button class="btn btn-outline-secondary btn-sm" id="settingsNavBtn" title="Settings"><i class="bi bi-gear"></i></button>
+            <div class="d-flex align-items-center gap-2 profile-widget" id="profileWidget" role="button" tabindex="0" title="View profile">
                 <div class="text-end">
                     <div class="fw-semibold">{{ request.user.username }}</div>
                     <div class="small-note">Operations Manager</div>
                 </div>
-                <img src="https://via.placeholder.com/44/0d6efd/ffffff?text=OM" class="rounded-circle" alt="Profile">
+              
             </div>
             <div class="text-end d-none d-md-block">
                 <div class="small-note">Current Date</div>
@@ -237,139 +241,7 @@ body {
     </div>
 
     <div class="row g-3 mb-4">
-        <div class="col-12 col-xl-8">
-            <div class="alert-card p-4">
-                <div class="d-flex justify-content-between align-items-center mb-4">
-                    <div>
-                        <h4 class="mb-1">Alerts & Exceptions</h4>
-                        <p class="small-note mb-0">Priority incidents requiring operational attention.</p>
-                    </div>
-                    <button class="btn btn-outline-primary btn-sm"><i class="bi bi-funnel-fill me-1"></i> Filter</button>
-                </div>
-                <div class="row g-3">
-                    {% for alert in alert_items %}
-                    <div class="col-12">
-                        <div class="p-3 rounded-4 border border-1 border-secondary-subtle d-flex align-items-center justify-content-between gap-3">
-                            <div>
-                                {% if alert.severity == 'Error' %}
-                                    <span class="badge bg-danger text-uppercase">{{ alert.severity }}</span>
-                                {% elif alert.severity == 'Warning' %}
-                                    <span class="badge bg-warning text-uppercase">{{ alert.severity }}</span>
-                                {% else %}
-                                    <span class="badge bg-info text-uppercase">{{ alert.severity }}</span>
-                                {% endif %}
-                                <div class="fw-semibold mt-2">{{ alert.description }}</div>
-                                <div class="small-note text-muted">{{ alert.date|date:'M d, Y H:i' }}</div>
-                            </div>
-                            <button class="btn btn-outline-dark btn-sm">{{ alert.action }}</button>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-        <div class="col-12 col-xl-4">
-            <div class="section-card p-4 h-100">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <div>
-                        <h5 class="mb-1">Pending Approvals</h5>
-                        <p class="small-note mb-0">High-risk shipments awaiting review.</p>
-                    </div>
-                    <span class="badge bg-primary rounded-pill">{{ pending_approvals }}</span>
-                </div>
-                <div class="list-group">
-                    {% for shipment in pending_shipments %}
-                    <div class="list-group-item border-0 rounded-4 mb-2 shadow-sm">
-                        <div class="d-flex align-items-start justify-content-between gap-3">
-                            <div>
-                                <div class="fw-semibold">{{ shipment.shipment_id }} • {{ shipment.shipment_type }}</div>
-                                {% if shipment.created_by %}
-                                    <div class="small-note text-muted">Submitted by {{ shipment.created_by.username }} on {{ shipment.shipment_date|date:'M d' }}</div>
-                                {% else %}
-                                    <div class="small-note text-muted">Submitted by Unknown on {{ shipment.shipment_date|date:'M d' }}</div>
-                                {% endif %}
-                            </div>
-                            <span class="badge bg-warning text-dark">{{ shipment.priority_level }}</span>
-                        </div>
-                        <div class="mt-3 d-flex flex-wrap gap-2">
-                            <button class="btn btn-outline-success btn-sm">Approve</button>
-                            <button class="btn btn-outline-danger btn-sm">Reject</button>
-                            <button class="btn btn-outline-secondary btn-sm">View Evidence</button>
-                            <button class="btn btn-outline-secondary btn-sm">View Manifest</button>
-                        </div>
-                    </div>
-                    {% empty %}
-                    <div class="text-center text-muted py-4">No approvals pending.</div>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <div class="row g-3 mb-4">
-        <div class="col-12 col-xl-8">
-            <div class="section-card p-4">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <div>
-                        <h5 class="mb-1">Shipment Monitoring</h5>
-                        <p class="small-note mb-0">Track mission-critical data movement activities.</p>
-                    </div>
-                    <button class="btn btn-outline-primary btn-sm">Export</button>
-                </div>
-                <div class="table-responsive">
-                    <table class="table align-middle">
-                        <thead>
-                            <tr>
-                                <th>Shipment ID</th>
-                                <th>Source</th>
-                                <th>Destination</th>
-                                <th>Courier</th>
-                                <th>Status</th>
-                                <th>Expected Delivery</th>
-                                <th>SLA</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for shipment in monitoring_shipments %}
-                            <tr>
-                                <td class="fw-semibold">{{ shipment.shipment_id }}</td>
-                                <td>{{ shipment.source_location|default:'Unknown' }}</td>
-                                <td>{{ shipment.destination_location|default:'Unknown' }}</td>
-                                <td>{{ shipment.courier_name|default:'N/A' }}</td>
-                                <td>
-                                    {% if shipment.status == 'Delivered' %}
-                                        <span class="badge badge-status bg-success">{{ shipment.status }}</span>
-                                    {% elif shipment.status == 'In Transit' or shipment.status == 'Dispatched' %}
-                                        <span class="badge badge-status bg-warning">{{ shipment.status }}</span>
-                                    {% else %}
-                                        <span class="badge badge-status bg-secondary">{{ shipment.status }}</span>
-                                    {% endif %}
-                                </td>
-                                <td>{{ shipment.expected_delivery_date|date:'M d'|default:'TBD' }}</td>
-                                <td>
-                                    {% if shipment.expected_delivery_date and shipment.expected_delivery_date >= today %}
-                                        <span class="small-note">On Track</span>
-                                    {% else %}
-                                        <span class="small-note">Delayed</span>
-                                    {% endif %}
-                                </td>
-                                <td>
-                                    <button class="btn btn-outline-primary btn-sm">View Details</button>
-                                    <button class="btn btn-outline-secondary btn-sm">Track</button>
-                                </td>
-                            </tr>
-                            {% empty %}
-                            <tr>
-                                <td colspan="8" class="text-center text-muted py-4">No shipment monitoring records available.</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-        <div class="col-12 col-xl-4">
+        <div class="col-12">
             <div class="section-card p-4 h-100">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <div>
@@ -378,7 +250,7 @@ body {
                     </div>
                 </div>
                 <div class="row g-3">
-                    <div class="col-12">
+                    <div class="col-12 col-md-6 col-lg-4">
                         <div class="border rounded-4 p-3">
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 <span class="small-note">Open Transfers</span>
@@ -387,7 +259,7 @@ body {
                             <div class="progress" style="height: 8px;"><div class="progress-bar bg-primary" style="width: 76%"></div></div>
                         </div>
                     </div>
-                    <div class="col-12">
+                    <div class="col-12 col-md-6 col-lg-4">
                         <div class="border rounded-4 p-3">
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 <span class="small-note">Completed Transfers</span>
@@ -396,7 +268,7 @@ body {
                             <div class="progress" style="height: 8px;"><div class="progress-bar bg-success" style="width: 88%"></div></div>
                         </div>
                     </div>
-                    <div class="col-12">
+                    <div class="col-12 col-md-6 col-lg-4">
                         <div class="border rounded-4 p-3">
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 <span class="small-note">Missing Handoffs</span>
@@ -405,7 +277,7 @@ body {
                             <div class="progress" style="height: 8px;"><div class="progress-bar bg-warning" style="width: 42%"></div></div>
                         </div>
                     </div>
-                    <div class="col-12">
+                    <div class="col-12 col-md-6 col-lg-4">
                         <div class="border rounded-4 p-3">
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 <span class="small-note">Unverified Deliveries</span>
@@ -414,7 +286,7 @@ body {
                             <div class="progress" style="height: 8px;"><div class="progress-bar bg-danger" style="width: 33%"></div></div>
                         </div>
                     </div>
-                    <div class="col-12">
+                    <div class="col-12 col-md-6 col-lg-4">
                         <div class="border rounded-4 p-3">
                             <div class="d-flex justify-content-between align-items-center mb-2">
                                 <span class="small-note">Chain of Custody Compliance</span>
@@ -427,212 +299,1144 @@ body {
             </div>
         </div>
     </div>
+    </div>
 
-    <div class="row g-3 mb-4">
-        <div class="col-12 col-xl-6">
-            <div class="section-card p-4">
-                <div class="d-flex justify-content-between align-items-center mb-3">
+    <div id="analyticsPanel" class="d-none">
+    <div class="row g-3 mb-4" id="analytics">
+        <div class="col-12">
+            <div class="section-card p-4 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-4">
                     <div>
-                        <h5 class="mb-1">Shipment Status Distribution</h5>
-                        <p class="small-note mb-0">Live distribution of shipment statuses.</p>
+                        <h5 class="mb-1">Analytics</h5>
+                        <p class="small-note mb-0">Operational analytics for tapes, shipments, compliance, and exceptions.</p>
+                    </div>
+                    <button class="btn btn-outline-secondary btn-sm back-to-dashboard-btn">Back to Dashboard</button>
+                </div>
+                <div class="row g-3 mb-4">
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Shipment Velocity</span>
+                                <span class="fw-semibold">{{ monthly_labels|length }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Months displayed in the shipment analytics trend.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Current Compliance</span>
+                                <span class="fw-semibold">{{ compliance_rate }}%</span>
+                            </div>
+                            <p class="mb-0 small-note">Current compliance score across custody policies.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Exception Trend</span>
+                                <span class="fw-semibold">{{ open_exceptions }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Open exception records in the last period.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Pending Review</span>
+                                <span class="fw-semibold">{{ pending_approvals }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Shipments awaiting approval that impact analytics.</p>
+                        </div>
                     </div>
                 </div>
-                <canvas id="statusChart" height="220"></canvas>
-            </div>
-        </div>
-        <div class="col-12 col-xl-6">
-            <div class="section-card p-4">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <div>
-                        <h5 class="mb-1">Monthly Shipment Trends</h5>
-                        <p class="small-note mb-0">Volume of shipments over the last six months.</p>
+                <div class="row g-3">
+                    <div class="col-12 col-lg-6">
+                        <div class="border rounded-4 p-3 h-100">
+                            <h6 class="mb-3">Shipment Status Distribution</h6>
+                            <canvas id="statusChart" height="260"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-12 col-lg-6">
+                        <div class="border rounded-4 p-3 h-100">
+                            <h6 class="mb-3">Monthly Shipment Trend</h6>
+                            <canvas id="monthlyTrendChart" height="260"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-12 col-lg-6">
+                        <div class="border rounded-4 p-3 h-100">
+                            <h6 class="mb-3">Compliance Performance</h6>
+                            <canvas id="complianceChart" height="240"></canvas>
+                        </div>
+                    </div>
+                    <div class="col-12 col-lg-6">
+                        <div class="border rounded-4 p-3 h-100">
+                            <h6 class="mb-3">Exception Volume</h6>
+                            <canvas id="exceptionChart" height="240"></canvas>
+                        </div>
                     </div>
                 </div>
-                <canvas id="monthlyTrendChart" height="220"></canvas>
             </div>
         </div>
     </div>
-
-    <div class="row g-3 mb-4">
-        <div class="col-12 col-xl-6">
-            <div class="section-card p-4">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <div>
-                        <h5 class="mb-1">Compliance Performance</h5>
-                        <p class="small-note mb-0">Policy compliance and governance coverage.</p>
-                    </div>
-                </div>
-                <canvas id="complianceChart" height="220"></canvas>
-            </div>
-        </div>
-        <div class="col-12 col-xl-6">
-            <div class="section-card p-4">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <div>
-                        <h5 class="mb-1">Exception Trends</h5>
-                        <p class="small-note mb-0">Exception volume over recent months.</p>
-                    </div>
-                </div>
-                <canvas id="exceptionChart" height="220"></canvas>
-            </div>
-        </div>
     </div>
 
-    <div class="row g-3 mb-4">
-        <div class="col-12 col-xl-6">
-            <div class="section-card p-4">
-                <div class="d-flex justify-content-between align-items-center mb-3">
+    <div id="monitoringPanel" class="d-none">
+    <div class="row g-3 mb-4" id="shipment_monitoring">
+        <div class="col-12">
+            <div class="section-card p-4 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-4">
                     <div>
-                        <h5 class="mb-1">Reconciliation Review</h5>
-                        <p class="small-note mb-0">Latest reconciliation outcomes and discrepancies.</p>
+                        <h5 class="mb-1">Shipment Monitoring</h5>
+                        <p class="small-note mb-0">Live shipment tracking, custody status, and exception indicators.</p>
+                    </div>
+                    <button class="btn btn-outline-secondary btn-sm back-to-dashboard-btn">Back to Dashboard</button>
+                </div>
+                <div class="row g-3 mb-4">
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Total Monitored</span>
+                                <span class="fw-semibold">{{ monitoring_shipments|length }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Recently updated shipments by shipment date.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Open Discrepancies</span>
+                                <span class="fw-semibold">{{ open_discrepancies|length }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Discrepancies requiring shipment investigation.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Unverified Deliveries</span>
+                                <span class="fw-semibold">{{ unverified_deliveries }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Delivered shipments still awaiting confirmation.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Custody Compliance</span>
+                                <span class="fw-semibold">{{ chain_of_custody_compliance }}%</span>
+                            </div>
+                            <p class="mb-0 small-note">Chain of custody compliance across active shipments.</p>
+                        </div>
                     </div>
                 </div>
                 <div class="table-responsive">
-                    <table class="table align-middle mb-0">
-                        <thead>
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
                             <tr>
-                                <th>ID</th>
-                                <th>Date</th>
+                                <th>Shipment ID</th>
                                 <th>Status</th>
-                                <th>Discrepancies</th>
-                                <th>Accuracy</th>
+                                <th>Source</th>
+                                <th>Destination</th>
+                                <th>Shipment Date</th>
+                                <th>Expected Delivery</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {% for reconciliation in latest_reconciliations %}
+                            {% for shipment in monitoring_shipments %}
                             <tr>
-                                <td class="fw-semibold">{{ reconciliation.reconciliation_id }}</td>
-                                <td>{{ reconciliation.reconciliation_date|date:'M d, Y' }}</td>
-                                <td>{{ reconciliation.status }}</td>
-                                <td>{{ reconciliation.results.count }}</td>
-                                <td>{{ reconciliation_accuracy }}%</td>
+                                <td>{{ shipment.shipment_id }}</td>
+                                <td>{{ shipment.status }}</td>
+                                <td>{{ shipment.source_location }}</td>
+                                <td>{{ shipment.destination_location }}</td>
+                                <td>{{ shipment.shipment_date|date:'M d, Y' }}</td>
+                                <td>{{ shipment.expected_delivery_date|date:'M d, Y' }}</td>
                             </tr>
                             {% empty %}
-                            <tr>
-                                <td colspan="5" class="text-center text-muted py-4">No reconciliations available.</td>
-                            </tr>
+                            <tr><td colspan="6" class="text-center">No shipments available for monitoring.</td></tr>
                             {% endfor %}
                         </tbody>
                     </table>
                 </div>
             </div>
         </div>
-        <div class="col-12 col-xl-6">
-            <div class="section-card p-4 h-100">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <div>
-                        <h5 class="mb-1">Management Reports</h5>
-                        <p class="small-note mb-0">Export operational reports for audit and oversight.</p>
-                    </div>
-                </div>
-                <div class="row g-3">
-                    <div class="col-12">
-                        <div class="d-grid gap-2">
-                            <button class="btn btn-outline-primary btn-lg">Inventory Report</button>
-                            <button class="btn btn-outline-primary btn-lg">Shipment Report</button>
-                            <button class="btn btn-outline-primary btn-lg">Reconciliation Report</button>
-                            <button class="btn btn-outline-primary btn-lg">Audit Report</button>
-                            <button class="btn btn-outline-primary btn-lg">Compliance Report</button>
-                            <button class="btn btn-outline-primary btn-lg">KPI Report</button>
-                        </div>
-                    </div>
-                    <div class="col-12 d-flex gap-2 flex-wrap">
-                        <button class="btn btn-secondary btn-sm flex-fill">PDF</button>
-                        <button class="btn btn-secondary btn-sm flex-fill">Excel</button>
-                        <button class="btn btn-secondary btn-sm flex-fill">Print</button>
-                    </div>
-                </div>
-            </div>
-        </div>
+    </div>
     </div>
 
-    <div class="row g-3">
-        <div class="col-12 col-xl-6">
-            <div class="section-card p-4">
-                <div class="d-flex justify-content-between align-items-center mb-3">
+    <div id="exceptionPanel" class="d-none">
+    <div class="row g-3 mb-4" id="exception_management">
+        <div class="col-12">
+            <div class="section-card p-4 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-4">
                     <div>
-                        <h5 class="mb-1">Recent Activity Feed</h5>
-                        <p class="small-note mb-0">Operational actions and event history.</p>
+                        <h5 class="mb-1">Exception Management</h5>
+                        <p class="small-note mb-0">Manage open exception trends, investigation queues, and reconciliation issue details.</p>
                     </div>
+                    <button class="btn btn-outline-secondary btn-sm back-to-dashboard-btn">Back to Dashboard</button>
                 </div>
-                <div class="list-group">
-                    {% for activity in recent_activity %}
-                    <div class="list-group-item border-0 px-0 py-3">
-                        <div class="d-flex justify-content-between align-items-start gap-3">
-                            <div>
-                                {% if activity.user %}
-                                    <div class="fw-semibold">{{ activity.user.username }}</div>
-                                {% else %}
-                                    <div class="fw-semibold">System</div>
-                                {% endif %}
-                                {% if activity.action %}
-                                    <div class="small-note text-muted">{{ activity.action }}</div>
-                                {% else %}
-                                    <div class="small-note text-muted">{{ activity.name }}</div>
-                                {% endif %}
+                <div class="row g-3 mb-4">
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Open Exceptions</span>
+                                <span class="fw-semibold">{{ open_exceptions }}</span>
                             </div>
-                            <span class="small-note text-muted">{{ activity.timestamp|date:'M d, H:i' }}</span>
-                        </div>
-                        <div class="mt-2">
-                            {% if activity.severity == 'error' %}
-                                <span class="badge bg-danger">{{ activity.severity|title }}</span>
-                            {% elif activity.severity == 'warning' %}
-                                <span class="badge bg-warning">{{ activity.severity|title }}</span>
-                            {% elif activity.severity == 'success' %}
-                                <span class="badge bg-success">{{ activity.severity|title }}</span>
-                            {% else %}
-                                <span class="badge bg-secondary">{{ activity.severity|title }}</span>
-                            {% endif %}
+                            <p class="mb-0 small-note">Active issues requiring reconciliation review.</p>
                         </div>
                     </div>
-                    {% empty %}
-                    <div class="text-center text-muted py-4">No recent activity recorded.</div>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-        <div class="col-12 col-xl-6">
-            <div class="section-card p-4">
-                <div class="d-flex justify-content-between align-items-center mb-3">
-                    <div>
-                        <h5 class="mb-1">Notifications</h5>
-                        <p class="small-note mb-0">Alerts from compliance, custody, and shipment operations.</p>
-                    </div>
-                </div>
-                <div class="row g-3">
-                    {% for alert in alert_items|slice:":4" %}
-                    <div class="col-12">
-                        <div class="notification-card p-3">
-                            <div class="d-flex justify-content-between align-items-start gap-2">
-                                <div>
-                                    <div class="fw-semibold">{{ alert.description }}</div>
-                                    <div class="small-note text-muted">{{ alert.date|date:'M d, H:i' }}</div>
-                                </div>
-                                {% if alert.severity == 'Error' %}
-                                    <span class="badge bg-danger">{{ alert.severity }}</span>
-                                {% elif alert.severity == 'Warning' %}
-                                    <span class="badge bg-warning">{{ alert.severity }}</span>
-                                {% else %}
-                                    <span class="badge bg-info">{{ alert.severity }}</span>
-                                {% endif %}
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Recent Exceptions</span>
+                                <span class="fw-semibold">{{ latest_reconciliations|length }}</span>
                             </div>
-                            <div class="mt-3 d-flex gap-2 flex-wrap">
-                                <button class="btn btn-outline-primary btn-sm">Action</button>
-                                <button class="btn btn-outline-secondary btn-sm">Dismiss</button>
-                            </div>
+                            <p class="mb-0 small-note">Latest reconciliation runs for exception review.</p>
                         </div>
                     </div>
-                    {% empty %}
-                    <div class="text-center text-muted py-4">No active notifications.</div>
-                    {% endfor %}
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Compliance Risk</span>
+                                <span class="fw-semibold">{{ compliance_rate }}%</span>
+                            </div>
+                            <p class="mb-0 small-note">Current risk from unresolved exception volume.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Reconciliation Accuracy</span>
+                                <span class="fw-semibold">{{ reconciliation_accuracy }}%</span>
+                            </div>
+                            <p class="mb-0 small-note">Current reconciliation accuracy rate.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Reconciliation ID</th>
+                                <th>Issue Type</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th>Last Updated</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for reconciliation in latest_reconciliations %}
+                            <tr>
+                                <td>{{ reconciliation.reconciliation_id }}</td>
+                                <td>{{ reconciliation.issue_type }}</td>
+                                <td>{{ reconciliation.resolution_status }}</td>
+                                <td>{{ reconciliation.created_at|date:'M d, Y' }}</td>
+                                <td>{{ reconciliation.updated_at|date:'M d, Y' }}</td>
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="5" class="text-center">No exception reconciliations available.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
                 </div>
             </div>
         </div>
     </div>
-</div>
+    </div>
+
+    <div id="custodyPanel" class="d-none">
+    <div class="row g-3 mb-4" id="custody_governance">
+        <div class="col-12">
+            <div class="section-card p-4 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <div>
+                        <h5 class="mb-1">Custody Governance</h5>
+                        <p class="small-note mb-0">Manage custody handoffs, transfer authorizations, and compliance status.</p>
+                    </div>
+                    <button class="btn btn-outline-secondary btn-sm back-to-dashboard-btn">Back to Dashboard</button>
+                </div>
+                <div class="row g-3 mb-4">
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Open Transfers</span>
+                                <span class="fw-semibold">{{ custody_transfers_open }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Transfers currently in-progress across custody points.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Completed Transfers</span>
+                                <span class="fw-semibold">{{ custody_transfers_completed }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Transfers successfully closed and verified.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Missing Handoffs</span>
+                                <span class="fw-semibold">{{ missing_handoffs }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Records flagged for incomplete custody chain documentation.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Compliance Score</span>
+                                <span class="fw-semibold">{{ chain_of_custody_compliance }}%</span>
+                            </div>
+                            <p class="mb-0 small-note">Chain of custody compliance level for active shipments.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Shipment ID</th>
+                                <th>Custody Status</th>
+                                <th>Current Holder</th>
+                                <th>Destination</th>
+                                <th>Estimated Handoff</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for shipment in monitoring_shipments %}
+                            <tr>
+                                <td>{{ shipment.shipment_id }}</td>
+                                <td>{{ shipment.custody_status|default:'N/A' }}</td>
+                                <td>{{ shipment.current_holder|default:'Unknown' }}</td>
+                                <td>{{ shipment.destination_location }}</td>
+                                <td>{{ shipment.expected_delivery_date|date:'M d, Y' }}</td>
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="5" class="text-center">No custody governance records available.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    </div>
+
+    <div id="reconciliationPanel" class="d-none">
+    <div class="row g-3 mb-4" id="reconciliation_review">
+        <div class="col-12">
+            <div class="section-card p-4 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <div>
+                        <h5 class="mb-1">Reconciliation Review</h5>
+                        <p class="small-note mb-0">Review recent reconciliations, issue status, and control checks.</p>
+                    </div>
+                    <button class="btn btn-outline-secondary btn-sm back-to-dashboard-btn">Back to Dashboard</button>
+                </div>
+                <div class="row g-3 mb-4">
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Recent Sessions</span>
+                                <span class="fw-semibold">{{ latest_reconciliations|length }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Reconciliations conducted in the latest review window.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Open Issues</span>
+                                <span class="fw-semibold">{{ open_exceptions }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Open issues requiring reconciliation closure.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Accuracy Rate</span>
+                                <span class="fw-semibold">{{ reconciliation_accuracy }}%</span>
+                            </div>
+                            <p class="mb-0 small-note">Estimated reconciliation accuracy for active sessions.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Compliance Rate</span>
+                                <span class="fw-semibold">{{ compliance_rate }}%</span>
+                            </div>
+                            <p class="mb-0 small-note">Overall governance compliance for reconciliation.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Reconciliation ID</th>
+                                <th>Location</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th>Last Updated</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for reconciliation in latest_reconciliations %}
+                            <tr>
+                                <td>{{ reconciliation.reconciliation_id }}</td>
+                                <td>{{ reconciliation.location|default:'N/A' }}</td>
+                                <td>{{ reconciliation.status|default:reconciliation.resolution_status }}</td>
+                                <td>{{ reconciliation.created_at|date:'M d, Y' }}</td>
+                                <td>{{ reconciliation.updated_at|date:'M d, Y' }}</td>
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="5" class="text-center">No reconciliation review items available.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    </div>
+
+    <div id="compliancePanel" class="d-none">
+    <div class="row g-3 mb-4" id="compliance_monitoring">
+        <div class="col-12">
+            <div class="section-card p-4 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <div>
+                        <h5 class="mb-1">Compliance Monitoring</h5>
+                        <p class="small-note mb-0">Track policy adherence, audit findings, and remediation activity.</p>
+                    </div>
+                    <button class="btn btn-outline-secondary btn-sm back-to-dashboard-btn">Back to Dashboard</button>
+                </div>
+                <div class="row g-3 mb-4">
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Compliance Rate</span>
+                                <span class="fw-semibold">{{ compliance_rate }}%</span>
+                            </div>
+                            <p class="mb-0 small-note">Current policy adherence score across the operation.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Reconciliation Accuracy</span>
+                                <span class="fw-semibold">{{ reconciliation_accuracy }}%</span>
+                            </div>
+                            <p class="mb-0 small-note">Accuracy of reconciliation checks impacting compliance.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Open Issues</span>
+                                <span class="fw-semibold">{{ open_exceptions }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Open exceptions that may impact audit readiness.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Alerts</span>
+                                <span class="fw-semibold">{{ alert_items|length }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Pending alerts requiring compliance review.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Alert</th>
+                                <th>Severity</th>
+                                <th>Date</th>
+                                <th>Description</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for alert in alert_items %}
+                            <tr>
+                                <td>{{ alert.severity }}</td>
+                                <td>{{ alert.severity }}</td>
+                                <td>{{ alert.date|date:'M d, Y' }}</td>
+                                <td>{{ alert.description }}</td>
+                                <td>{{ alert.action }}</td>
+                            </tr>
+                            {% empty %}
+                            <tr><td colspan="5" class="text-center">No compliance alerts at this time.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    </div>
+
+    <div id="reportsPanel" class="d-none">
+    <div class="row g-3 mb-4" id="reports">
+        <div class="col-12">
+            <div class="section-card p-4 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <div>
+                        <h5 class="mb-1">Reports</h5>
+                        <p class="small-note mb-0">Generate operational reports and review audit-ready summaries.</p>
+                    </div>
+                    <button class="btn btn-outline-secondary btn-sm back-to-dashboard-btn">Back to Dashboard</button>
+                </div>
+                <div class="row g-3 mb-4">
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Audit Readiness</span>
+                                <span class="fw-semibold">{{ compliance_rate }}%</span>
+                            </div>
+                            <p class="mb-0 small-note">Current readiness for compliance reporting.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Exception Reports</span>
+                                <span class="fw-semibold">{{ open_exceptions }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Open exception items included in the report queue.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Shipment Insights</span>
+                                <span class="fw-semibold">{{ monitoring_shipments|length }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Shipments currently available for reporting analysis.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Alerts</span>
+                                <span class="fw-semibold">{{ alert_items|length }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Pending alerts available for compliance and audit reporting.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Report Name</th>
+                                <th>Type</th>
+                                <th>Status</th>
+                                <th>Generated</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Compliance Summary</td>
+                                <td>Audit</td>
+                                <td>Ready</td>
+                                <td>{{ current_datetime|date:'M d, Y' }}</td>
+                                <td><button class="btn btn-sm btn-primary">Download</button></td>
+                            </tr>
+                            <tr>
+                                <td>Shipment Exception Log</td>
+                                <td>Exception</td>
+                                <td>Pending</td>
+                                <td>{{ current_datetime|date:'M d, Y' }}</td>
+                                <td><button class="btn btn-sm btn-outline-primary">View</button></td>
+                            </tr>
+                            <tr>
+                                <td>Custody Transfer Audit</td>
+                                <td>Governance</td>
+                                <td>Ready</td>
+                                <td>{{ current_datetime|date:'M d, Y' }}</td>
+                                <td><button class="btn btn-sm btn-primary">Download</button></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    </div>
+
+    <div id="settingsPanel" class="d-none">
+    <div class="row g-3 mb-4" id="settings">
+        <div class="col-12">
+            <div class="section-card p-4 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <div>
+                        <h5 class="mb-1">Settings</h5>
+                        <p class="small-note mb-0">Configure account preferences, notification settings, and dashboard defaults.</p>
+                    </div>
+                    <button class="btn btn-outline-secondary btn-sm back-to-dashboard-btn">Back to Dashboard</button>
+                </div>
+                <div class="row g-3 mb-4">
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Username</span>
+                                <span class="fw-semibold">{{ request.user.username }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Your logged-in identity for operations management.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Email</span>
+                                <span class="fw-semibold">{{ request.user.email|default:'not set' }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Update this in your account profile.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Notification Mode</span>
+                                <span class="fw-semibold">Alerts On</span>
+                            </div>
+                            <p class="mb-0 small-note">Manage email and system notifications here.</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Dashboard Theme</span>
+                                <span class="fw-semibold">Dark Mode</span>
+                            </div>
+                            <p class="mb-0 small-note">Switch dashboard themes and display preferences.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="row g-3">
+                    <div class="col-12 col-md-6">
+                        <div class="border rounded-4 p-3 h-100">
+                            <h6 class="mb-3">Profile Settings</h6>
+                            <p class="small-note">Manage your profile details, password, and account security settings.</p>
+                            <button class="btn btn-sm btn-primary">Edit Profile</button>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-6">
+                        <div class="border rounded-4 p-3 h-100">
+                            <h6 class="mb-3">Notification Settings</h6>
+                            <p class="small-note">Control how audit alerts and shipment notifications are delivered.</p>
+                            <button class="btn btn-sm btn-outline-primary">Review Preferences</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    </div>
+
+    <div id="profilePanel" class="d-none">
+    <div class="row g-3 mb-4" id="profile_view">
+        <div class="col-12">
+            <div class="section-card p-4 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <div>
+                        <h5 class="mb-1">Profile</h5>
+                        <p class="small-note mb-0">View your account details and recent activity.</p>
+                    </div>
+                    <button class="btn btn-outline-secondary btn-sm back-to-dashboard-btn">Back to Dashboard</button>
+                </div>
+                <div class="row g-3 mb-4">
+                    <div class="col-12 col-md-4">
+                        <div class="border rounded-4 p-3 text-center h-100">
+                            <img src="https://via.placeholder.com/72/0d6efd/ffffff?text=OM" class="rounded-circle mb-3" alt="Profile Large">
+                            <h6 class="mb-1">{{ request.user.username }}</h6>
+                            <p class="small-note mb-0">Operations Manager</p>
+                        </div>
+                    </div>
+                    <div class="col-12 col-md-8">
+                        <div class="border rounded-4 p-3 h-100">
+                            <h6 class="mb-3">Account Details</h6>
+                            <ul class="list-unstyled small-note mb-0">
+                                <li><strong>Email:</strong> {{ request.user.email|default:'Not provided' }}</li>
+                                <li><strong>Role:</strong> Operations Manager</li>
+                                <li><strong>Member since:</strong> {{ request.user.date_joined|date:'M d, Y' }}</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                <div class="border rounded-4 p-3">
+                    <h6 class="mb-3">Recent Activity</h6>
+                    <ul class="list-unstyled small-note mb-0">
+                        <li>Viewed Dashboard settings</li>
+                        <li>Opened Reports panel</li>
+                        <li>Checked compliance status</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+    </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+function updateSidebarActiveLink(targetHref) {
+    document.querySelectorAll('.sidebar .nav-link').forEach(link => {
+        link.classList.toggle('active', link.getAttribute('href') === targetHref);
+    });
+}
+
+function loadApprovalFragment(url) {
+    const targetUrl = url.includes('?') ? `${url}&partial=1` : `${url}?partial=1`;
+    fetch(targetUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+        .then(response => response.text())
+        .then(html => {
+            const embedded = document.getElementById('embeddedContent');
+            const body = document.getElementById('dashboardBody');
+            const analytics = document.getElementById('analyticsPanel');
+            const monitoring = document.getElementById('monitoringPanel');
+            const exception = document.getElementById('exceptionPanel');
+            const custody = document.getElementById('custodyPanel');
+            const reconciliation = document.getElementById('reconciliationPanel');
+            const compliance = document.getElementById('compliancePanel');
+            const reports = document.getElementById('reportsPanel');
+            const settings = document.getElementById('settingsPanel');
+            const profile = document.getElementById('profilePanel');
+            if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+                embedded.innerHTML = html;
+                embedded.classList.remove('d-none');
+                body.classList.add('d-none');
+                analytics.classList.add('d-none');
+                monitoring.classList.add('d-none');
+                exception.classList.add('d-none');
+                custody.classList.add('d-none');
+                reconciliation.classList.add('d-none');
+                compliance.classList.add('d-none');
+                reports.classList.add('d-none');
+                settings.classList.add('d-none');
+                profile.classList.add('d-none');
+                updateSidebarActiveLink('#shipment_approvals');
+            }
+        })
+        .catch(() => {
+            window.location.href = url;
+        });
+}
+
+function showAnalyticsPanel() {
+    const embedded = document.getElementById('embeddedContent');
+    const body = document.getElementById('dashboardBody');
+    const analytics = document.getElementById('analyticsPanel');
+    const monitoring = document.getElementById('monitoringPanel');
+    const exception = document.getElementById('exceptionPanel');
+    const custody = document.getElementById('custodyPanel');
+    const reconciliation = document.getElementById('reconciliationPanel');
+    const compliance = document.getElementById('compliancePanel');
+    const reports = document.getElementById('reportsPanel');
+    const settings = document.getElementById('settingsPanel');
+    const profile = document.getElementById('profilePanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+        embedded.innerHTML = '';
+        embedded.classList.add('d-none');
+        body.classList.add('d-none');
+        analytics.classList.remove('d-none');
+        monitoring.classList.add('d-none');
+        exception.classList.add('d-none');
+        custody.classList.add('d-none');
+        reconciliation.classList.add('d-none');
+        compliance.classList.add('d-none');
+        reports.classList.add('d-none');
+        settings.classList.add('d-none');
+        profile.classList.add('d-none');
+        updateSidebarActiveLink('#analytics');
+    }
+}
+
+function showMonitoringPanel() {
+    const embedded = document.getElementById('embeddedContent');
+    const body = document.getElementById('dashboardBody');
+    const analytics = document.getElementById('analyticsPanel');
+    const monitoring = document.getElementById('monitoringPanel');
+    const exception = document.getElementById('exceptionPanel');
+    const custody = document.getElementById('custodyPanel');
+    const reconciliation = document.getElementById('reconciliationPanel');
+    const compliance = document.getElementById('compliancePanel');
+    const reports = document.getElementById('reportsPanel');
+    const settings = document.getElementById('settingsPanel');
+    const profile = document.getElementById('profilePanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+        embedded.innerHTML = '';
+        embedded.classList.add('d-none');
+        body.classList.add('d-none');
+        analytics.classList.add('d-none');
+        monitoring.classList.remove('d-none');
+        exception.classList.add('d-none');
+        custody.classList.add('d-none');
+        reconciliation.classList.add('d-none');
+        compliance.classList.add('d-none');
+        reports.classList.add('d-none');
+        settings.classList.add('d-none');
+        profile.classList.add('d-none');
+        updateSidebarActiveLink('#shipment_monitoring');
+    }
+}
+
+function showExceptionPanel() {
+    const embedded = document.getElementById('embeddedContent');
+    const body = document.getElementById('dashboardBody');
+    const analytics = document.getElementById('analyticsPanel');
+    const monitoring = document.getElementById('monitoringPanel');
+    const exception = document.getElementById('exceptionPanel');
+    const custody = document.getElementById('custodyPanel');
+    const reconciliation = document.getElementById('reconciliationPanel');
+    const compliance = document.getElementById('compliancePanel');
+    const reports = document.getElementById('reportsPanel');
+    const settings = document.getElementById('settingsPanel');
+    const profile = document.getElementById('profilePanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+        embedded.innerHTML = '';
+        embedded.classList.add('d-none');
+        body.classList.add('d-none');
+        analytics.classList.add('d-none');
+        monitoring.classList.add('d-none');
+        exception.classList.remove('d-none');
+        custody.classList.add('d-none');
+        reconciliation.classList.add('d-none');
+        compliance.classList.add('d-none');
+        reports.classList.add('d-none');
+        settings.classList.add('d-none');
+        profile.classList.add('d-none');
+        updateSidebarActiveLink('#exception_management');
+    }
+}
+
+function showCustodyPanel() {
+    const embedded = document.getElementById('embeddedContent');
+    const body = document.getElementById('dashboardBody');
+    const analytics = document.getElementById('analyticsPanel');
+    const monitoring = document.getElementById('monitoringPanel');
+    const exception = document.getElementById('exceptionPanel');
+    const custody = document.getElementById('custodyPanel');
+    const reconciliation = document.getElementById('reconciliationPanel');
+    const compliance = document.getElementById('compliancePanel');
+    const reports = document.getElementById('reportsPanel');
+    const settings = document.getElementById('settingsPanel');
+    const profile = document.getElementById('profilePanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+        embedded.innerHTML = '';
+        embedded.classList.add('d-none');
+        body.classList.add('d-none');
+        analytics.classList.add('d-none');
+        monitoring.classList.add('d-none');
+        exception.classList.add('d-none');
+        custody.classList.remove('d-none');
+        reconciliation.classList.add('d-none');
+        compliance.classList.add('d-none');
+        reports.classList.add('d-none');
+        settings.classList.add('d-none');
+        profile.classList.add('d-none');
+        updateSidebarActiveLink('#custody_governance');
+    }
+}
+
+function showReconciliationPanel() {
+    const embedded = document.getElementById('embeddedContent');
+    const body = document.getElementById('dashboardBody');
+    const analytics = document.getElementById('analyticsPanel');
+    const monitoring = document.getElementById('monitoringPanel');
+    const exception = document.getElementById('exceptionPanel');
+    const custody = document.getElementById('custodyPanel');
+    const reconciliation = document.getElementById('reconciliationPanel');
+    const compliance = document.getElementById('compliancePanel');
+    const reports = document.getElementById('reportsPanel');
+    const settings = document.getElementById('settingsPanel');
+    const profile = document.getElementById('profilePanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+        embedded.innerHTML = '';
+        embedded.classList.add('d-none');
+        body.classList.add('d-none');
+        analytics.classList.add('d-none');
+        monitoring.classList.add('d-none');
+        exception.classList.add('d-none');
+        custody.classList.add('d-none');
+        compliance.classList.add('d-none');
+        reports.classList.add('d-none');
+        settings.classList.add('d-none');
+        profile.classList.add('d-none');
+        reconciliation.classList.remove('d-none');
+        updateSidebarActiveLink('#reconciliation_review');
+    }
+}
+
+function showCompliancePanel() {
+    const embedded = document.getElementById('embeddedContent');
+    const body = document.getElementById('dashboardBody');
+    const analytics = document.getElementById('analyticsPanel');
+    const monitoring = document.getElementById('monitoringPanel');
+    const exception = document.getElementById('exceptionPanel');
+    const custody = document.getElementById('custodyPanel');
+    const reconciliation = document.getElementById('reconciliationPanel');
+    const compliance = document.getElementById('compliancePanel');
+    const reports = document.getElementById('reportsPanel');
+    const settings = document.getElementById('settingsPanel');
+    const profile = document.getElementById('profilePanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+        embedded.innerHTML = '';
+        embedded.classList.add('d-none');
+        body.classList.add('d-none');
+        analytics.classList.add('d-none');
+        monitoring.classList.add('d-none');
+        exception.classList.add('d-none');
+        custody.classList.add('d-none');
+        reconciliation.classList.add('d-none');
+        reports.classList.add('d-none');
+        settings.classList.add('d-none');
+        profile.classList.add('d-none');
+        compliance.classList.remove('d-none');
+        updateSidebarActiveLink('#compliance_monitoring');
+    }
+}
+
+function showReportsPanel() {
+    const embedded = document.getElementById('embeddedContent');
+    const body = document.getElementById('dashboardBody');
+    const analytics = document.getElementById('analyticsPanel');
+    const monitoring = document.getElementById('monitoringPanel');
+    const exception = document.getElementById('exceptionPanel');
+    const custody = document.getElementById('custodyPanel');
+    const reconciliation = document.getElementById('reconciliationPanel');
+    const compliance = document.getElementById('compliancePanel');
+    const reports = document.getElementById('reportsPanel');
+    const settings = document.getElementById('settingsPanel');
+    const profile = document.getElementById('profilePanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+        embedded.innerHTML = '';
+        embedded.classList.add('d-none');
+        body.classList.add('d-none');
+        analytics.classList.add('d-none');
+        monitoring.classList.add('d-none');
+        exception.classList.add('d-none');
+        custody.classList.add('d-none');
+        reconciliation.classList.add('d-none');
+        compliance.classList.add('d-none');
+        settings.classList.add('d-none');
+        profile.classList.add('d-none');
+        reports.classList.remove('d-none');
+        updateSidebarActiveLink('#reports');
+    }
+}
+
+function showSettingsPanel() {
+    const embedded = document.getElementById('embeddedContent');
+    const body = document.getElementById('dashboardBody');
+    const analytics = document.getElementById('analyticsPanel');
+    const monitoring = document.getElementById('monitoringPanel');
+    const exception = document.getElementById('exceptionPanel');
+    const custody = document.getElementById('custodyPanel');
+    const reconciliation = document.getElementById('reconciliationPanel');
+    const compliance = document.getElementById('compliancePanel');
+    const reports = document.getElementById('reportsPanel');
+    const settings = document.getElementById('settingsPanel');
+    const profile = document.getElementById('profilePanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+        embedded.innerHTML = '';
+        embedded.classList.add('d-none');
+        body.classList.add('d-none');
+        analytics.classList.add('d-none');
+        monitoring.classList.add('d-none');
+        exception.classList.add('d-none');
+        custody.classList.add('d-none');
+        reconciliation.classList.add('d-none');
+        compliance.classList.add('d-none');
+        reports.classList.add('d-none');
+        profile.classList.add('d-none');
+        settings.classList.remove('d-none');
+        updateSidebarActiveLink('#settings');
+    }
+}
+
+function showProfilePanel() {
+    const embedded = document.getElementById('embeddedContent');
+    const body = document.getElementById('dashboardBody');
+    const analytics = document.getElementById('analyticsPanel');
+    const monitoring = document.getElementById('monitoringPanel');
+    const exception = document.getElementById('exceptionPanel');
+    const custody = document.getElementById('custodyPanel');
+    const reconciliation = document.getElementById('reconciliationPanel');
+    const compliance = document.getElementById('compliancePanel');
+    const reports = document.getElementById('reportsPanel');
+    const settings = document.getElementById('settingsPanel');
+    const profile = document.getElementById('profilePanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+        embedded.innerHTML = '';
+        embedded.classList.add('d-none');
+        body.classList.add('d-none');
+        analytics.classList.add('d-none');
+        monitoring.classList.add('d-none');
+        exception.classList.add('d-none');
+        custody.classList.add('d-none');
+        reconciliation.classList.add('d-none');
+        compliance.classList.add('d-none');
+        reports.classList.add('d-none');
+        settings.classList.add('d-none');
+        profile.classList.remove('d-none');
+        updateSidebarActiveLink('#dashboard');
+    }
+}
+
+function showDashboardBody() {
+    const embedded = document.getElementById('embeddedContent');
+    const body = document.getElementById('dashboardBody');
+    const analytics = document.getElementById('analyticsPanel');
+    const monitoring = document.getElementById('monitoringPanel');
+    const exception = document.getElementById('exceptionPanel');
+    const custody = document.getElementById('custodyPanel');
+    const reconciliation = document.getElementById('reconciliationPanel');
+    const compliance = document.getElementById('compliancePanel');
+    const reports = document.getElementById('reportsPanel');
+    const settings = document.getElementById('settingsPanel');
+    const profile = document.getElementById('profilePanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+        embedded.innerHTML = '';
+        embedded.classList.add('d-none');
+        body.classList.remove('d-none');
+        analytics.classList.add('d-none');
+        monitoring.classList.add('d-none');
+        exception.classList.add('d-none');
+        custody.classList.add('d-none');
+        reconciliation.classList.add('d-none');
+        compliance.classList.add('d-none');
+        reports.classList.add('d-none');
+        settings.classList.add('d-none');
+        profile.classList.add('d-none');
+        updateSidebarActiveLink('#dashboard');
+    }
+}
+
+document.querySelectorAll('a.analytics-toggle').forEach(link => {
+    link.addEventListener('click', event => {
+        event.preventDefault();
+        showAnalyticsPanel();
+    });
+});
+
+document.querySelectorAll('a.nav-link[href="#dashboard"]').forEach(link => {
+    link.addEventListener('click', event => {
+        event.preventDefault();
+        showDashboardBody();
+    });
+});
+
+document.querySelectorAll('a.nav-link[href="#shipment_monitoring"]').forEach(link => {
+    link.addEventListener('click', event => {
+        event.preventDefault();
+        showMonitoringPanel();
+    });
+});
+
+document.querySelectorAll('a.nav-link[href="#exception_management"]').forEach(link => {
+    link.addEventListener('click', event => {
+        event.preventDefault();
+        showExceptionPanel();
+    });
+});
+
+document.querySelectorAll('a.nav-link[href="#custody_governance"]').forEach(link => {
+    link.addEventListener('click', event => {
+        event.preventDefault();
+        showCustodyPanel();
+    });
+});
+
+document.querySelectorAll('a.nav-link[href="#reconciliation_review"]').forEach(link => {
+    link.addEventListener('click', event => {
+        event.preventDefault();
+        showReconciliationPanel();
+    });
+});
+
+document.querySelectorAll('a.nav-link[href="#compliance_monitoring"]').forEach(link => {
+    link.addEventListener('click', event => {
+        event.preventDefault();
+        showCompliancePanel();
+    });
+});
+
+document.querySelectorAll('a.nav-link[href="#reports"]').forEach(link => {
+    link.addEventListener('click', event => {
+        event.preventDefault();
+        showReportsPanel();
+    });
+});
+
+document.getElementById('settingsNavBtn')?.addEventListener('click', event => {
+    event.preventDefault();
+    showSettingsPanel();
+});
+
+document.getElementById('profileWidget')?.addEventListener('click', event => {
+    event.preventDefault();
+    showProfilePanel();
+});
+
+document.getElementById('profileWidget')?.addEventListener('keydown', event => {
+    if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        showProfilePanel();
+    }
+});
+
+document.querySelectorAll('a.partial-load').forEach(link => {
+    link.addEventListener('click', event => {
+        event.preventDefault();
+        const url = event.currentTarget.dataset.url;
+        if (url) {
+            loadApprovalFragment(url);
+        }
+    });
+});
+
+document.addEventListener('click', event => {
+    const backButton = event.target.closest('.back-to-dashboard-btn');
+    if (backButton) {
+        event.preventDefault();
+        const embedded = document.getElementById('embeddedContent');
+        const body = document.getElementById('dashboardBody');
+        const analytics = document.getElementById('analyticsPanel');
+        const monitoring = document.getElementById('monitoringPanel');
+        const exception = document.getElementById('exceptionPanel');
+        const custody = document.getElementById('custodyPanel');
+        const reconciliation = document.getElementById('reconciliationPanel');
+        const compliance = document.getElementById('compliancePanel');
+        const reports = document.getElementById('reportsPanel');
+        const settings = document.getElementById('settingsPanel');
+        const profile = document.getElementById('profilePanel');
+        if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+            embedded.innerHTML = '';
+            embedded.classList.add('d-none');
+            body.classList.remove('d-none');
+            analytics.classList.add('d-none');
+            monitoring.classList.add('d-none');
+            exception.classList.add('d-none');
+            custody.classList.add('d-none');
+            reconciliation.classList.add('d-none');
+            compliance.classList.add('d-none');
+            reports.classList.add('d-none');
+            settings.classList.add('d-none');
+            profile.classList.add('d-none');
+            updateSidebarActiveLink('#dashboard');
+        }
+    }
+});
+
 const statusChartCtx = document.getElementById('statusChart');
 if (statusChartCtx) {
     new Chart(statusChartCtx, {

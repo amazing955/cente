@@ -1,0 +1,207 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Shipment Approvals | Operations Manager{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h2 class="mb-2">Shipment Approvals</h2>
+        <p class="text-muted">Review pending shipment requests, validate manifest compliance and approve dispatch for secure tape transfers.</p>
+    </div>
+    <div class="col-md-4 text-md-end align-self-center">
+        <a class="btn btn-primary" href="{% url 'operations-dashboard' %}"><i class="bi bi-speedometer2 me-1"></i> Operations Dashboard</a>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-sm-6 col-xl-3">
+        <div class="card shadow-sm border-0">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div>
+                        <h6 class="text-uppercase text-muted mb-1">Total Shipments</h6>
+                        <h3 class="mb-0">{{ total_shipments }}</h3>
+                    </div>
+                    <i class="bi bi-box-seam fs-2 text-primary"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="card shadow-sm border-0">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div>
+                        <h6 class="text-uppercase text-muted mb-1">Pending</h6>
+                        <h3 class="mb-0">{{ pending_count }}</h3>
+                    </div>
+                    <i class="bi bi-clock-history fs-2 text-warning"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="card shadow-sm border-0">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div>
+                        <h6 class="text-uppercase text-muted mb-1">Non-Compliant</h6>
+                        <h3 class="mb-0">{{ non_compliant_count }}</h3>
+                    </div>
+                    <i class="bi bi-shield-exclamation fs-2 text-danger"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="card shadow-sm border-0">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div>
+                        <h6 class="text-uppercase text-muted mb-1">Critical Priority</h6>
+                        <h3 class="mb-0">{{ critical_count }}</h3>
+                    </div>
+                    <i class="bi bi-exclamation-triangle-fill fs-2 text-danger"></i>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4 shadow-sm border-0">
+    <div class="card-body">
+        <form method="get" class="row g-3 align-items-end">
+            <div class="col-md-3">
+                {{ filter_form.search.label_tag }}
+                {{ filter_form.search }}
+            </div>
+            <div class="col-md-2">
+                {{ filter_form.status.label_tag }}
+                {{ filter_form.status }}
+            </div>
+            <div class="col-md-2">
+                {{ filter_form.priority.label_tag }}
+                {{ filter_form.priority }}
+            </div>
+            <div class="col-md-2">
+                {{ filter_form.risk_level.label_tag }}
+                {{ filter_form.risk_level }}
+            </div>
+            <div class="col-md-1">
+                {{ filter_form.date_from.label_tag }}
+                {{ filter_form.date_from }}
+            </div>
+            <div class="col-md-1">
+                {{ filter_form.date_to.label_tag }}
+                {{ filter_form.date_to }}
+            </div>
+            <div class="col-md-1 text-end">
+                <button type="submit" class="btn btn-primary w-100">Filter</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card mb-4 shadow-sm border-0">
+    <div class="card-body">
+        <form method="get" class="row g-3 align-items-end">
+            <div class="col-md-10">
+                {{ manifest_form.query.label_tag }}
+                {{ manifest_form.query }}
+            </div>
+            <div class="col-md-2 text-end">
+                <button type="submit" class="btn btn-outline-secondary w-100">Search Manifest</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if has_results %}
+<div class="card shadow-sm border-0">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Shipment ID</th>
+                        <th>Date</th>
+                        <th>Source / Destination</th>
+                        <th>Status</th>
+                        <th>Risk</th>
+                        <th>Compliance</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for shipment in shipments %}
+                    <tr>
+                        <td><a href="{% url 'shipment-detail' shipment.pk %}">{{ shipment.shipment_id }}</a></td>
+                        <td>{{ shipment.shipment_date|date:'M d, Y' }}</td>
+                        <td>
+                            <div class="fw-semibold">{{ shipment.source_location|default:'N/A' }}</div>
+                            <div class="text-muted small">→ {{ shipment.destination_location|default:'N/A' }}</div>
+                        </td>
+                        <td>
+                            {% if shipment.status == 'Pending' %}
+                                <span class="badge bg-warning">{{ shipment.status }}</span>
+                            {% elif shipment.status == 'More Info Requested' %}
+                                <span class="badge bg-secondary">{{ shipment.status }}</span>
+                            {% elif shipment.status == 'Approved' %}
+                                <span class="badge bg-success">{{ shipment.status }}</span>
+                            {% elif shipment.status == 'Rejected' %}
+                                <span class="badge bg-danger">{{ shipment.status }}</span>
+                            {% else %}
+                                <span class="badge bg-info">{{ shipment.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ shipment.risk_level }}</td>
+                        <td>
+                            {% if shipment.compliance_passed %}
+                                <span class="badge bg-success">Pass</span>
+                            {% else %}
+                                <span class="badge bg-danger">Fail</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a class="btn btn-sm btn-outline-primary" href="{% url 'shipment-detail' shipment.pk %}">Review</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<nav class="d-flex justify-content-between align-items-center mt-3">
+    <div class="text-muted">Showing {{ shipments.start_index }}–{{ shipments.end_index }} of {{ shipments.paginator.count }}</div>
+    <ul class="pagination mb-0">
+        {% if shipments.has_previous %}
+        <li class="page-item"><a class="page-link" href="?page={{ shipments.previous_page_number }}">Previous</a></li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">Previous</span></li>
+        {% endif %}
+        {% for num in shipments.paginator.page_range %}
+            {% if num == shipments.number %}
+                <li class="page-item active"><span class="page-link">{{ num }}</span></li>
+            {% elif num >= shipments.number|add:'-2' and num <= shipments.number|add:'2' %}
+                <li class="page-item"><a class="page-link" href="?page={{ num }}">{{ num }}</a></li>
+            {% endif %}
+        {% endfor %}
+        {% if shipments.has_next %}
+        <li class="page-item"><a class="page-link" href="?page={{ shipments.next_page_number }}">Next</a></li>
+        {% else %}
+        <li class="page-item disabled"><span class="page-link">Next</span></li>
+        {% endif %}
+    </ul>
+</nav>
+{% else %}
+<div class="card shadow-sm border-0">
+    <div class="card-body text-center py-5">
+        <h5 class="mb-3">No shipments matched your criteria.</h5>
+        <p class="text-muted">Adjust filters or search terms to locate approvals awaiting review.</p>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

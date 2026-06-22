@@ -1,10 +1,11 @@
 import uuid
-from datetime import time
+from datetime import time, timedelta
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.core.mail import send_mail
 from django.db import models
+from django.db.models import Count
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils import timezone
@@ -244,7 +245,9 @@ class Shipment(models.Model):
 
     SHIPMENT_STATUS_CHOICES = [
         ('Pending', 'Pending'),
+        ('More Info Requested', 'More Info Requested'),
         ('Approved', 'Approved'),
+        ('Rejected', 'Rejected'),
         ('Dispatched', 'Dispatched'),
         ('In Transit', 'In Transit'),
         ('Delivered', 'Delivered'),
@@ -331,6 +334,103 @@ class Shipment(models.Model):
 
     def __str__(self):
         return self.shipment_id
+
+    def has_dual_custody(self):
+        return bool(self.releasing_custodian and self.receiving_custodian)
+
+    def manifest_count(self):
+        return self.tapes.count()
+
+    def is_manifest_complete(self):
+        return self.number_of_tapes > 0 and self.tapes.exists() and self.number_of_tapes == self.tapes.count()
+
+    def is_awaiting_evidence(self):
+        return self.status in ['Pending', 'More Info Requested'] and (
+            not self.courier_name or not self.vehicle_number or not self.tracking_number
+        )
+
+    def is_overdue_for_approval(self):
+        if not self.shipment_date:
+            return False
+        return self.status in ['Pending', 'More Info Requested'] and self.shipment_date < (timezone.localdate() - timedelta(days=2))
+
+    def compliance_checks(self):
+        checks = {
+            'tape_exists': self.tapes.exists(),
+            'duplicate_tapes': not self.tapes.values('id').annotate(count=Count('id')).filter(count__gt=1).exists(),
+            'manifest_complete': self.is_manifest_complete(),
+            'retention_compliance': not self.tapes.filter(retention_end_date__lt=(self.expected_delivery_date or timezone.localdate())).exists(),
+            'legal_hold': not self.tapes.filter(legal_hold=True).exists(),
+            'audit_hold': not self.tapes.filter(audit_hold=True).exists(),
+            'damage_status': not self.tapes.filter(status='Damaged').exists(),
+            'missing_tape_status': not self.tapes.filter(status='Missing').exists(),
+            'dual_custody': self.has_dual_custody(),
+        }
+        return checks
+
+    def compliance_passed(self):
+        return all(self.compliance_checks().values())
+
+    def risk_score(self):
+        score = 0
+        if self.tapes.filter(status='Missing').exists():
+            score += 30
+        if self.tapes.filter(status='Damaged').exists():
+            score += 25
+        if self.tapes.filter(legal_hold=True).exists():
+            score += 20
+        if self.tapes.filter(audit_hold=True).exists():
+            score += 20
+        if not self.is_manifest_complete():
+            score += 15
+        if self.priority_level == 'Critical':
+            score += 15
+        elif self.priority_level == 'High':
+            score += 8
+        return min(score, 100)
+
+    def risk_level(self):
+        score = self.risk_score()
+        if score >= 70:
+            return 'Critical'
+        if score >= 45:
+            return 'High'
+        if score >= 20:
+            return 'Medium'
+        return 'Low'
+
+    def risk_recommendation(self):
+        level = self.risk_level()
+        if level == 'Critical':
+            return 'Do not approve until all risks are addressed and tape status is reconciled.'
+        if level == 'High':
+            return 'Review manifest and custody details before approval.'
+        if level == 'Medium':
+            return 'Confirm documentation and custody handover before approval.'
+        return 'Proceed with standard approval workflows.'
+
+
+class ShipmentApprovalHistory(models.Model):
+    ACTION_CHOICES = [
+        ('Approved', 'Approved'),
+        ('Rejected', 'Rejected'),
+        ('Requested More Information', 'Requested More Information'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    shipment = models.ForeignKey('Shipment', on_delete=models.CASCADE, related_name='approval_history')
+    action = models.CharField(max_length=50, choices=ACTION_CHOICES)
+    comments = models.TextField(blank=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Shipment Approval History'
+        verbose_name_plural = 'Shipment Approval History'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.shipment.shipment_id} - {self.action} by {self.user.username if self.user else "System"}'
 
 
 class ReportTemplate(models.Model):

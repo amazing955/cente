@@ -1,0 +1,196 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Shipment {{ shipment.shipment_id }} | Approval Review{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h2 class="mb-2">Shipment {{ shipment.shipment_id }}</h2>
+        <p class="text-muted">Review approval evidence, compliance controls, and manifest details before finalizing the shipment.</p>
+    </div>
+    <div class="col-md-4 text-md-end align-self-center">
+        <a class="btn btn-outline-secondary me-2" href="{% url 'shipment-approvals' %}"><i class="bi bi-arrow-left me-1"></i> Back to Approvals</a>
+        <a class="btn btn-primary" href="{% url 'approval-history' shipment.pk %}"><i class="bi bi-clock-history me-1"></i> View History</a>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-lg-8">
+        <div class="card shadow-sm border-0">
+            <div class="card-body">
+                <h5 class="mb-3">Shipment Summary</h5>
+                <div class="row">
+                    <div class="col-sm-6 mb-3">
+                        <strong>Type:</strong> {{ shipment.shipment_type }}<br>
+                        <strong>Priority:</strong> {{ shipment.priority_level }}<br>
+                        <strong>Status:</strong>
+                        {% if shipment.status == 'Pending' %}
+                            <span class="badge bg-warning">{{ shipment.status }}</span>
+                        {% elif shipment.status == 'More Info Requested' %}
+                            <span class="badge bg-secondary">{{ shipment.status }}</span>
+                        {% elif shipment.status == 'Approved' %}
+                            <span class="badge bg-success">{{ shipment.status }}</span>
+                        {% elif shipment.status == 'Rejected' %}
+                            <span class="badge bg-danger">{{ shipment.status }}</span>
+                        {% else %}
+                            <span class="badge bg-info">{{ shipment.status }}</span>
+                        {% endif %}
+                    </div>
+                    <div class="col-sm-6 mb-3">
+                        <strong>Source:</strong> {{ shipment.source_location|default:'N/A' }}<br>
+                        <strong>Destination:</strong> {{ shipment.destination_location|default:'N/A' }}<br>
+                        <strong>Expected Delivery:</strong> {{ shipment.expected_delivery_date|date:'M d, Y'|default:'N/A' }}
+                    </div>
+                </div>
+                <hr>
+                <div class="row">
+                    <div class="col-sm-6 mb-3">
+                        <strong>Custodian Release:</strong> {{ shipment.releasing_custodian|default:'N/A' }}
+                    </div>
+                    <div class="col-sm-6 mb-3">
+                        <strong>Receiving Organization:</strong> {{ shipment.receiving_organization|default:'N/A' }}
+                    </div>
+                    <div class="col-sm-6 mb-3">
+                        <strong>Courier:</strong> {{ shipment.courier_name|default:'N/A' }}
+                    </div>
+                    <div class="col-sm-6 mb-3">
+                        <strong>Tracking #:</strong> {{ shipment.tracking_number|default:'N/A' }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm border-0 mt-3">
+            <div class="card-body">
+                <h5 class="mb-3">Manifest</h5>
+                <form id="manifest-search" method="get">
+                    <div class="row mb-3">
+                        <div class="col-md-9">
+                            {{ manifest_search_form.query.label_tag }}
+                            {{ manifest_search_form.query }}
+                        </div>
+                        <div class="col-md-3 align-self-end text-end">
+                            <button type="submit" class="btn btn-outline-primary">Filter Manifest</button>
+                        </div>
+                    </div>
+                </form>
+                <table class="table table-sm table-hover">
+                    <thead class="table-light">
+                        <tr>
+                            <th>VolSER</th>
+                            <th>Barcode</th>
+                            <th>RFID</th>
+                            <th>Status</th>
+                            <th>Legal / Audit Hold</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for tape in manifest_tapes %}
+                        <tr>
+                            <td>{{ tape.volser }}</td>
+                            <td>{{ tape.barcode }}</td>
+                            <td>{{ tape.rfid_tag|default:'-' }}</td>
+                            <td>{{ tape.status }}</td>
+                            <td>
+                                {% if tape.legal_hold or tape.audit_hold %}
+                                <span class="badge bg-danger">Requires Review</span>
+                                {% else %}
+                                <span class="badge bg-success">Clear</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% empty %}
+                        <tr>
+                            <td colspan="5" class="text-center text-muted">No tapes found in the manifest.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card shadow-sm border-0 mb-3">
+            <div class="card-body">
+                <h5 class="mb-3">Compliance & Risk</h5>
+                <div class="mb-3">
+                    <h6 class="mb-1">Risk Level</h6>
+                    <span class="badge bg-{{ 'danger' if risk_level == 'Critical' else 'warning' if risk_level == 'High' else 'info' if risk_level == 'Medium' else 'success' }}">{{ risk_level }}</span>
+                </div>
+                <div class="mb-3">
+                    <h6 class="mb-1">Risk Score</h6>
+                    <div class="progress" style="height: 12px;">
+                        <div class="progress-bar bg-{{ 'danger' if risk_score >= 70 else 'warning' if risk_score >= 45 else 'info' if risk_score >= 20 else 'success' }}" role="progressbar" style="width: {{ risk_score }}%;"></div>
+                    </div>
+                    <div class="small text-muted mt-1">{{ risk_score }} / 100</div>
+                </div>
+                <div class="mb-3">
+                    <h6 class="mb-1">Recommendation</h6>
+                    <p class="small text-muted mb-0">{{ risk_recommendation }}</p>
+                </div>
+                <div class="mb-3">
+                    <h6 class="mb-1">Compliance Status</h6>
+                    {% if compliance_passed %}
+                    <span class="badge bg-success">Passed</span>
+                    {% else %}
+                    <span class="badge bg-danger">Failed</span>
+                    {% endif %}
+                </div>
+                <div class="list-group list-group-flush">
+                    {% for key, value in compliance_checks.items %}
+                    <div class="list-group-item d-flex justify-content-between align-items-center px-0 border-0 py-2">
+                        <span class="small text-muted">{{ key|replace:'_',' '|title }}</span>
+                        {% if value %}
+                        <span class="badge bg-success">Yes</span>
+                        {% else %}
+                        <span class="badge bg-danger">No</span>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm border-0 mb-3">
+            <div class="card-body">
+                <h5 class="mb-3">Approval Decision</h5>
+                <form method="post">
+                    {% csrf_token %}
+                    {{ approval_form.shipment_pk }}
+                    <div class="mb-3">
+                        {{ approval_form.decision.label_tag }}
+                        {{ approval_form.decision }}
+                    </div>
+                    <div class="mb-3">
+                        {{ approval_form.comments.label_tag }}
+                        {{ approval_form.comments }}
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">Submit Decision</button>
+                </form>
+            </div>
+        </div>
+
+        <div class="card shadow-sm border-0">
+            <div class="card-body">
+                <h5 class="mb-3">Approval History</h5>
+                <ul class="list-group list-group-flush">
+                    {% for item in history|slice:':5' %}
+                    <li class="list-group-item d-flex justify-content-between align-items-start">
+                        <div>
+                            <div class="fw-semibold">{{ item.action }}</div>
+                            <div class="small text-muted">{{ item.user.username if item.user else 'System' }} · {{ item.created_at|date:'M d, Y H:i' }}</div>
+                            <div class="small">{{ item.comments|default:'No comments provided.' }}</div>
+                        </div>
+                    </li>
+                    {% empty %}
+                    <li class="list-group-item text-muted">No approval history available.</li>
+                    {% endfor %}
+                </ul>
+                <a href="{% url 'approval-history' shipment.pk %}" class="btn btn-link btn-sm mt-3">View full history</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

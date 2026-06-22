@@ -247,6 +247,83 @@ class ShipmentForm(forms.ModelForm):
         self.fields['delivery_notes'].required = False
 
 
+class ShipmentApprovalDecisionForm(forms.Form):
+    shipment_pk = forms.UUIDField(widget=forms.HiddenInput())
+    decision = forms.ChoiceField(
+        choices=[
+            ('approve', 'Approve Shipment'),
+            ('reject', 'Reject Shipment'),
+            ('more_info', 'Request More Information'),
+        ],
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        label='Decision',
+        required=True,
+    )
+    comments = forms.CharField(
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Add comments or rationale for this decision'}),
+        label='Comments',
+        required=False,
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        decision = cleaned_data.get('decision')
+        comments = cleaned_data.get('comments')
+        if decision == 'reject' and not comments:
+            raise forms.ValidationError('Comments are required when rejecting a shipment.')
+        return cleaned_data
+
+
+class ShipmentApprovalFilterForm(forms.Form):
+    search = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Search by shipment ID, source, destination, user'}),
+        label='Search',
+    )
+    status = forms.ChoiceField(
+        required=False,
+        choices=[('', 'All Statuses')] + Shipment.SHIPMENT_STATUS_CHOICES,
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        label='Status',
+    )
+    priority = forms.ChoiceField(
+        required=False,
+        choices=[('', 'All Priorities')] + Shipment.PRIORITY_LEVEL_CHOICES,
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        label='Priority',
+    )
+    risk_level = forms.ChoiceField(
+        required=False,
+        choices=[('', 'All Risk Levels'), ('Low', 'Low'), ('Medium', 'Medium'), ('High', 'High'), ('Critical', 'Critical')],
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        label='Risk Level',
+    )
+    date_from = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+        label='Date From',
+    )
+    date_to = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+        label='Date To',
+    )
+
+
+class ManifestSearchForm(forms.Form):
+    query = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Search manifest by VolSER, barcode or RFID'}),
+        label='Search Manifest',
+    )
+    tape_status = forms.ChoiceField(
+        required=False,
+        choices=[('', 'All Tape Statuses')] + Tape.STATUS_CHOICES,
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        label='Tape Status',
+    )
+
+
 class ReconciliationForm(forms.ModelForm):
     class Meta:
         model = Reconciliation

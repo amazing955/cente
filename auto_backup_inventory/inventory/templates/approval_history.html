@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Approval History | Shipment {{ shipment.shipment_id }}{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h2 class="mb-2">Approval History</h2>
+        <p class="text-muted">All actions taken on shipment {{ shipment.shipment_id }} since creation.</p>
+    </div>
+    <div class="col-md-4 text-md-end align-self-center">
+        <a class="btn btn-outline-secondary" href="{% url 'shipment-detail' shipment.pk %}"><i class="bi bi-arrow-left me-1"></i> Back to Shipment</a>
+    </div>
+</div>
+
+<div class="card shadow-sm border-0">
+    <div class="card-body">
+        <div class="list-group">
+            {% for entry in history_entries %}
+            <div class="list-group-item mb-3 rounded-4 border-0 shadow-sm">
+                <div class="d-flex justify-content-between align-items-start">
+                    <div>
+                        <h6 class="mb-1">{{ entry.action }}</h6>
+                        <p class="mb-1 text-muted">{{ entry.comments|default:'No comments provided.' }}</p>
+                        <div class="small text-muted">By {{ entry.user.username if entry.user else 'System' }} · {{ entry.created_at|date:'M d, Y H:i' }}</div>
+                    </div>
+                    <span class="badge bg-{{ 'success' if entry.action == 'Approved' else 'warning' if entry.action == 'Requested More Information' else 'danger' }} align-self-start">{{ entry.action }}</span>
+                </div>
+            </div>
+            {% empty %}
+            <div class="text-center py-5 text-muted">
+                <p class="mb-0">There is no approval history for this shipment yet.</p>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}

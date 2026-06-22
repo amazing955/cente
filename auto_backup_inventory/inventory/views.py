@@ -17,8 +17,8 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 
-from .forms import CustomUserCreationForm, CustomUserEditForm, UserProfileForm, TapeForm, ShipmentForm, ReconciliationForm, ReconciliationResultForm, UserRoleAssignmentForm, RoleCreationForm, RoleFeatureUpdateForm, ReportEmailForm, SystemSettingsForm, FEATURE_CHOICES
-from .models import AuditLog, ApplicationSetting, MonthlyReport, ReportTemplate, Reconciliation, ReconciliationResult, Shipment, Tape, RoleTemplate
+from .forms import CustomUserCreationForm, CustomUserEditForm, UserProfileForm, TapeForm, ShipmentForm, ShipmentApprovalDecisionForm, ShipmentApprovalFilterForm, ManifestSearchForm, ReconciliationForm, ReconciliationResultForm, UserRoleAssignmentForm, RoleCreationForm, RoleFeatureUpdateForm, ReportEmailForm, SystemSettingsForm, FEATURE_CHOICES
+from .models import AuditLog, ApplicationSetting, MonthlyReport, ReportTemplate, Reconciliation, ReconciliationResult, Shipment, ShipmentApprovalHistory, Tape, RoleTemplate
 
 
 def is_valid_uuid(value):
@@ -1217,6 +1217,70 @@ def operations_dashboard(request):
     open_discrepancies = reconciliation_results.filter(resolution_status__in=['Open', 'Under Investigation']).order_by('-created_at')[:6]
     recent_activity = audit_logs
 
+    filter_form = ShipmentApprovalFilterForm(request.GET or None)
+    manifest_form = ManifestSearchForm(request.GET or None)
+    approval_shipments = shipments.select_related('approved_by', 'created_by', 'last_updated_by').prefetch_related('tapes')
+
+    risk_level_filter = None
+    if filter_form.is_valid():
+        search = filter_form.cleaned_data.get('search')
+        if search:
+            approval_shipments = approval_shipments.filter(
+                Q(shipment_id__icontains=search) |
+                Q(source_location__icontains=search) |
+                Q(destination_location__icontains=search) |
+                Q(created_by__username__icontains=search) |
+                Q(receiving_organization__icontains=search)
+            )
+
+        status = filter_form.cleaned_data.get('status')
+        if status:
+            approval_shipments = approval_shipments.filter(status=status)
+
+        priority = filter_form.cleaned_data.get('priority')
+        if priority:
+            approval_shipments = approval_shipments.filter(priority_level=priority)
+
+        date_from = filter_form.cleaned_data.get('date_from')
+        if date_from:
+            approval_shipments = approval_shipments.filter(shipment_date__gte=date_from)
+
+        date_to = filter_form.cleaned_data.get('date_to')
+        if date_to:
+            approval_shipments = approval_shipments.filter(shipment_date__lte=date_to)
+
+        risk_level = filter_form.cleaned_data.get('risk_level')
+        if risk_level:
+            risk_level_filter = risk_level
+
+    if manifest_form.is_valid():
+        manifest_query = manifest_form.cleaned_data.get('query')
+        if manifest_query:
+            approval_shipments = approval_shipments.filter(
+                Q(tapes__volser__icontains=manifest_query) |
+                Q(tapes__barcode__icontains=manifest_query) |
+                Q(tapes__rfid_tag__icontains=manifest_query)
+            ).distinct()
+
+    if risk_level_filter:
+        approval_shipments = [shipment for shipment in approval_shipments if shipment.risk_level() == risk_level_filter]
+
+    if not isinstance(approval_shipments, list):
+        approval_shipments = list(approval_shipments)
+
+    total_shipments = len(approval_shipments)
+    pending_count = sum(1 for shipment in approval_shipments if shipment.status == 'Pending')
+    more_info_count = sum(1 for shipment in approval_shipments if shipment.status == 'More Info Requested')
+    approved_count = sum(1 for shipment in approval_shipments if shipment.status == 'Approved')
+    rejected_count = sum(1 for shipment in approval_shipments if shipment.status == 'Rejected')
+    critical_count = sum(1 for shipment in approval_shipments if shipment.priority_level == 'Critical')
+    non_compliant_count = sum(1 for shipment in approval_shipments if not shipment.compliance_passed())
+    overdue_count = sum(1 for shipment in approval_shipments if shipment.is_overdue_for_approval())
+
+    page_number = request.GET.get('page', 1)
+    paginator = Paginator(approval_shipments, 10)
+    shipment_page = paginator.get_page(page_number)
+
     custody_transfers_open = shipments.filter(status__in=['Dispatched', 'In Transit']).count()
     custody_transfers_completed = shipments.filter(status__iexact='Delivered').count()
     missing_handoffs = AuditLog.objects.filter(action__icontains='handoff').count()
@@ -1272,6 +1336,9 @@ def operations_dashboard(request):
     context = {
         'dashboard_tabs': OPERATIONS_FEATURE_TABS,
         'current_datetime': timezone.localtime(),
+        'today': today,
+        'monthly_labels': monthly_labels,
+        'monthly_shipments': monthly_shipments,
         'total_tapes': total_tapes,
         'tapes_in_transit': tapes_in_transit,
         'overdue_shipments': overdue_shipments,
@@ -1291,9 +1358,199 @@ def operations_dashboard(request):
         'missing_handoffs': missing_handoffs,
         'unverified_deliveries': unverified_deliveries,
         'chain_of_custody_compliance': chain_of_custody_compliance,
+        'filter_form': filter_form,
+        'manifest_form': manifest_form,
+        'shipments': shipment_page,
+        'total_shipments': total_shipments,
+        'pending_count': pending_count,
+        'more_info_count': more_info_count,
+        'approved_count': approved_count,
+        'rejected_count': rejected_count,
+        'critical_count': critical_count,
+        'non_compliant_count': non_compliant_count,
+        'overdue_count': overdue_count,
+        'has_results': total_shipments > 0,
         **chart_data,
     }
     return render(request, 'operations_dashboard.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_operations_manager(u), login_url='signin')
+@login_required(login_url='signin')
+def shipment_approvals(request):
+    filter_form = ShipmentApprovalFilterForm(request.GET or None)
+    manifest_form = ManifestSearchForm(request.GET or None)
+    shipments = Shipment.objects.select_related('approved_by', 'created_by', 'last_updated_by').prefetch_related('tapes').order_by('-shipment_date')
+
+    risk_level_filter = None
+    if filter_form.is_valid():
+        search = filter_form.cleaned_data.get('search')
+        if search:
+            shipments = shipments.filter(
+                Q(shipment_id__icontains=search) |
+                Q(source_location__icontains=search) |
+                Q(destination_location__icontains=search) |
+                Q(created_by__username__icontains=search) |
+                Q(receiving_organization__icontains=search)
+            )
+
+        status = filter_form.cleaned_data.get('status')
+        if status:
+            shipments = shipments.filter(status=status)
+
+        priority = filter_form.cleaned_data.get('priority')
+        if priority:
+            shipments = shipments.filter(priority_level=priority)
+
+        date_from = filter_form.cleaned_data.get('date_from')
+        if date_from:
+            shipments = shipments.filter(shipment_date__gte=date_from)
+
+        date_to = filter_form.cleaned_data.get('date_to')
+        if date_to:
+            shipments = shipments.filter(shipment_date__lte=date_to)
+
+        risk_level = filter_form.cleaned_data.get('risk_level')
+        if risk_level:
+            risk_level_filter = risk_level
+
+    if manifest_form.is_valid():
+        manifest_query = manifest_form.cleaned_data.get('query')
+        if manifest_query:
+            shipments = shipments.filter(
+                Q(tapes__volser__icontains=manifest_query) |
+                Q(tapes__barcode__icontains=manifest_query) |
+                Q(tapes__rfid_tag__icontains=manifest_query)
+            ).distinct()
+
+    if risk_level_filter:
+        shipments = [shipment for shipment in shipments if shipment.risk_level() == risk_level_filter]
+
+    if not isinstance(shipments, list):
+        shipments = list(shipments)
+
+    total_shipments = len(shipments)
+    pending_count = sum(1 for shipment in shipments if shipment.status == 'Pending')
+    more_info_count = sum(1 for shipment in shipments if shipment.status == 'More Info Requested')
+    approved_count = sum(1 for shipment in shipments if shipment.status == 'Approved')
+    rejected_count = sum(1 for shipment in shipments if shipment.status == 'Rejected')
+    critical_count = sum(1 for shipment in shipments if shipment.priority_level == 'Critical')
+    non_compliant_count = sum(1 for shipment in shipments if not shipment.compliance_passed())
+    overdue_count = sum(1 for shipment in shipments if shipment.is_overdue_for_approval())
+
+    page_number = request.GET.get('page', 1)
+    paginator = Paginator(shipments, 10)
+    shipment_page = paginator.get_page(page_number)
+
+    context = {
+        'dashboard_tabs': OPERATIONS_FEATURE_TABS,
+        'filter_form': filter_form,
+        'manifest_form': manifest_form,
+        'shipments': shipment_page,
+        'total_shipments': total_shipments,
+        'pending_count': pending_count,
+        'more_info_count': more_info_count,
+        'approved_count': approved_count,
+        'rejected_count': rejected_count,
+        'critical_count': critical_count,
+        'non_compliant_count': non_compliant_count,
+        'overdue_count': overdue_count,
+        'has_results': total_shipments > 0,
+    }
+    if request.GET.get('partial'):
+        return render(request, 'shipment_approvals_fragment.html', context)
+    return render(request, 'shipment_approvals.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_operations_manager(u), login_url='signin')
+@login_required(login_url='signin')
+def shipment_detail(request, shipment_pk):
+    shipment = get_object_or_404(Shipment.objects.prefetch_related('tapes', 'approval_history'), pk=shipment_pk)
+    approval_form = ShipmentApprovalDecisionForm(request.POST or None, initial={'shipment_pk': shipment.pk})
+    manifest_search_form = ManifestSearchForm(request.GET or None)
+    manifest_tapes = shipment.tapes.all()
+
+    if manifest_search_form.is_valid():
+        manifest_query = manifest_search_form.cleaned_data.get('query')
+        if manifest_query:
+            manifest_tapes = manifest_tapes.filter(
+                Q(volser__icontains=manifest_query) |
+                Q(barcode__icontains=manifest_query) |
+                Q(rfid_tag__icontains=manifest_query)
+            )
+
+    if request.method == 'POST':
+        if approval_form.is_valid():
+            decision = approval_form.cleaned_data.get('decision')
+            comments = approval_form.cleaned_data.get('comments', '').strip()
+            action_map = {
+                'approve': 'Approved',
+                'reject': 'Rejected',
+                'more_info': 'Requested More Information',
+            }
+            action = action_map.get(decision, 'Updated')
+
+            if decision == 'approve' and not shipment.compliance_passed():
+                messages.warning(request, 'Shipment cannot be approved until all compliance checks pass.')
+            else:
+                if decision == 'approve':
+                    shipment.status = 'Approved'
+                elif decision == 'reject':
+                    shipment.status = 'Rejected'
+                else:
+                    shipment.status = 'More Info Requested'
+
+                shipment.approved_by = request.user
+                shipment.approval_date = timezone.localtime()
+                shipment.approval_remarks = comments
+                shipment.last_updated_by = request.user
+                shipment.save()
+
+                ShipmentApprovalHistory.objects.create(
+                    shipment=shipment,
+                    action=action,
+                    comments=comments,
+                    user=request.user,
+                )
+
+                AuditLog.objects.create(
+                    name='Shipment Approval Decision',
+                    action=f'{action} for shipment {shipment.shipment_id}',
+                    user=request.user,
+                    severity='success' if decision == 'approve' else 'warning',
+                )
+
+                messages.success(request, f'Shipment has been marked as {shipment.status}.')
+                return redirect('shipment-detail', shipment_pk=shipment.pk)
+
+    compliance_checks = shipment.compliance_checks()
+    context = {
+        'dashboard_tabs': OPERATIONS_FEATURE_TABS,
+        'shipment': shipment,
+        'approval_form': approval_form,
+        'manifest_search_form': manifest_search_form,
+        'manifest_tapes': manifest_tapes,
+        'compliance_checks': compliance_checks,
+        'compliance_passed': shipment.compliance_passed(),
+        'risk_score': shipment.risk_score(),
+        'risk_level': shipment.risk_level(),
+        'risk_recommendation': shipment.risk_recommendation(),
+        'history': shipment.approval_history.all(),
+    }
+    return render(request, 'shipment_detail.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_operations_manager(u), login_url='signin')
+@login_required(login_url='signin')
+def approval_history(request, shipment_pk):
+    shipment = get_object_or_404(Shipment, pk=shipment_pk)
+    history_entries = shipment.approval_history.all()
+    context = {
+        'dashboard_tabs': OPERATIONS_FEATURE_TABS,
+        'shipment': shipment,
+        'history_entries': history_entries,
+    }
+    return render(request, 'approval_history.html', context)
 
 
 @user_passes_test(lambda u: u.is_superuser or is_backup_administrator(u), login_url='signin')
