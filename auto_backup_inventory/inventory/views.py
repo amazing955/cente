@@ -155,6 +155,53 @@ BACKUP_FEATURE_TABS = [
     },
 ]
 
+OPERATIONS_FEATURE_TABS = [
+    {
+        'tab_id': 'dashboard',
+        'label': 'Dashboard',
+    },
+    {
+        'tab_id': 'shipment_approvals',
+        'label': 'Shipment Approvals',
+    },
+    {
+        'tab_id': 'shipment_monitoring',
+        'label': 'Shipment Monitoring',
+    },
+    {
+        'tab_id': 'exception_management',
+        'label': 'Exception Management',
+    },
+    {
+        'tab_id': 'custody_governance',
+        'label': 'Custody Governance',
+    },
+    {
+        'tab_id': 'reconciliation_review',
+        'label': 'Reconciliation Review',
+    },
+    {
+        'tab_id': 'compliance_monitoring',
+        'label': 'Compliance Monitoring',
+    },
+    {
+        'tab_id': 'reports',
+        'label': 'Reports',
+    },
+    {
+        'tab_id': 'analytics',
+        'label': 'Analytics',
+    },
+    {
+        'tab_id': 'notifications',
+        'label': 'Notifications',
+    },
+    {
+        'tab_id': 'settings',
+        'label': 'Settings',
+    },
+]
+
 
 def unique_features(features):
     seen = set()
@@ -357,6 +404,10 @@ def is_backup_administrator(user):
     return user.is_authenticated and user.groups.filter(name='Backup Administrator').exists()
 
 
+def is_operations_manager(user):
+    return user.is_authenticated and user.groups.filter(name='Operations Manager').exists()
+
+
 def signin(request):
 
     if request.method == "POST":
@@ -388,6 +439,14 @@ def signin(request):
                     severity='success',
                 )
                 return redirect("backup-dashboard")
+            if is_operations_manager(user):
+                AuditLog.objects.create(
+                    name='Operations Manager Login',
+                    action=f'User {user.username} signed in as Operations Manager',
+                    user=user,
+                    severity='success',
+                )
+                return redirect("operations-dashboard")
             AuditLog.objects.create(
                 name='Unauthorized Dashboard Login',
                 action=f'User {user.username} attempted dashboard login without appropriate role',
@@ -895,19 +954,19 @@ def backup_dashboard(request):
 
     if request.GET.get('open_panel') == 'tapeActionsPanel':
         show_tape_actions_panel = True
-    if request.GET.get('show_tape_actions') == '1':
+    if request.GET.get('show_tape_actions') == '1' or 'show_tape_actions' in request.GET:
         show_tape_actions_panel = True
-    if request.GET.get('show_tape_inventory') == '1':
+    if 'show_tape_inventory' in request.GET:
         show_tape_inventory_panel = True
-    if request.GET.get('show_profile') == '1':
+    if 'show_profile' in request.GET:
         show_profile_panel = True
-    if request.GET.get('show_settings') == '1':
+    if 'show_settings' in request.GET:
         show_settings_panel = True
-    if request.GET.get('show_add_tape') == '1':
+    if 'show_add_tape' in request.GET:
         show_add_tape_panel = True
-    if request.GET.get('show_audit') == '1':
+    if 'show_audit' in request.GET:
         show_audit_panel = True
-    if request.GET.get('show_alerts') == '1':
+    if 'show_alerts' in request.GET:
         show_alerts_panel = True
         AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).update(
             is_read=True,
@@ -923,18 +982,18 @@ def backup_dashboard(request):
     reconciliation_report_summary = None
     export_reconciliation_csv = request.GET.get('export_reconciliation_csv') == '1'
 
-    if request.GET.get('show_reports') == '1':
+    if 'show_reports' in request.GET:
         show_reports_panel = True
-    if request.GET.get('show_shipments') == '1':
+    if 'show_shipments' in request.GET:
         show_shipments_panel = True
-    if request.GET.get('show_reconciliation_reports') == '1':
+    if 'show_reconciliation_reports' in request.GET:
         show_reconciliation_reports_panel = True
-    if request.GET.get('show_add_shipment') == '1':
+    if 'show_add_shipment' in request.GET:
         show_shipments_panel = True
         show_add_shipment_panel = True
-    if request.GET.get('show_reconciliation') == '1':
+    if 'show_reconciliation' in request.GET:
         show_reconciliation_panel = True
-    if request.GET.get('show_add_reconciliation') == '1':
+    if 'show_add_reconciliation' in request.GET:
         show_reconciliation_panel = True
         show_add_reconciliation_panel = True
     reconciliation_pk = request.GET.get('reconciliation_pk')
@@ -1130,6 +1189,111 @@ def backup_dashboard(request):
         'monthly_counts_json': json.dumps(monthly_counts),
     }
     return render(request, 'backup_dashboard.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_operations_manager(u), login_url='signin')
+@login_required(login_url='signin')
+def operations_dashboard(request):
+    shipments = Shipment.objects.all().order_by('-shipment_date')
+    tapes = Tape.objects.all()
+    reconciliations = Reconciliation.objects.order_by('-reconciliation_date')[:5]
+    reconciliation_results = ReconciliationResult.objects.order_by('-created_at')
+    audit_logs = AuditLog.objects.order_by('-timestamp')[:12]
+
+    total_tapes = tapes.count()
+    tapes_in_transit = tapes.filter(status='In Transit').count()
+    missing_tapes = tapes.filter(status='Missing').count()
+    overdue_shipments = shipments.filter(
+        expected_delivery_date__lt=timezone.localdate()
+    ).exclude(status__in=['Delivered', 'Cancelled']).count()
+    open_exceptions = reconciliation_results.filter(resolution_status__in=['Open', 'Under Investigation']).count()
+    pending_approvals = shipments.filter(status__iexact='Pending').count()
+    compliance_rate = int(max(0, min(100, 100 - ((missing_tapes + open_exceptions) * 1.5))))
+    reconciliation_accuracy = int(max(0, min(100, 100 - (open_exceptions * 1.2))))
+
+    pending_shipments = shipments.filter(status__iexact='Pending').order_by('-shipment_date')[:6]
+    monitoring_shipments = shipments.order_by('-shipment_date')[:12]
+    latest_reconciliations = reconciliations
+    open_discrepancies = reconciliation_results.filter(resolution_status__in=['Open', 'Under Investigation']).order_by('-created_at')[:6]
+    recent_activity = audit_logs
+
+    custody_transfers_open = shipments.filter(status__in=['Dispatched', 'In Transit']).count()
+    custody_transfers_completed = shipments.filter(status__iexact='Delivered').count()
+    missing_handoffs = AuditLog.objects.filter(action__icontains='handoff').count()
+    unverified_deliveries = shipments.filter(status__iexact='Delivered', delivery_status__in=['', 'Partially Delivered']).count()
+    chain_of_custody_compliance = int(max(0, min(100, 100 - (missing_handoffs * 2))))
+
+    status_labels = ['Pending', 'Approved', 'Dispatched', 'In Transit', 'Delivered', 'Cancelled']
+    status_counts = [shipments.filter(status=status).count() for status in status_labels]
+
+    monthly_labels = []
+    monthly_shipments = []
+    monthly_compliance = []
+    monthly_exceptions = []
+    today = timezone.localdate()
+    for offset in range(5, -1, -1):
+        month = (today.replace(day=1) - timezone.timedelta(days=offset * 30)).strftime('%b %Y')
+        monthly_labels.append(month)
+        monthly_shipments.append(
+            shipments.filter(shipment_date__year=today.year, shipment_date__month=(today.month - offset - 1) % 12 + 1).count()
+        )
+        monthly_compliance.append(max(75, min(100, 100 - missing_tapes)))
+        monthly_exceptions.append(
+            reconciliation_results.filter(created_at__year=today.year, created_at__month=(today.month - offset - 1) % 12 + 1).count()
+        )
+
+    alert_items = []
+    recent_alerts = AuditLog.objects.filter(severity__in=['warning', 'error']).order_by('-timestamp')[:5]
+    for item in recent_alerts:
+        alert_items.append({
+            'severity': item.severity.title(),
+            'date': item.timestamp,
+            'description': item.action or item.name or item.message,
+            'action': 'Review',
+        })
+    reconciliation_alerts = reconciliation_results.filter(issue_type__in=['Missing', 'Damaged', 'Unexpected']).order_by('-created_at')[:3]
+    for result in reconciliation_alerts:
+        alert_items.append({
+            'severity': 'Warning',
+            'date': result.created_at,
+            'description': f'{result.issue_type} tape detected for reconciliation {result.reconciliation.reconciliation_id}',
+            'action': 'Investigate',
+        })
+
+    chart_data = {
+        'status_labels_json': json.dumps(status_labels),
+        'status_counts_json': json.dumps(status_counts),
+        'monthly_labels_json': json.dumps(monthly_labels),
+        'monthly_shipments_json': json.dumps(monthly_shipments),
+        'monthly_compliance_json': json.dumps(monthly_compliance),
+        'monthly_exceptions_json': json.dumps(monthly_exceptions),
+    }
+
+    context = {
+        'dashboard_tabs': OPERATIONS_FEATURE_TABS,
+        'current_datetime': timezone.localtime(),
+        'total_tapes': total_tapes,
+        'tapes_in_transit': tapes_in_transit,
+        'overdue_shipments': overdue_shipments,
+        'missing_tapes': missing_tapes,
+        'open_exceptions': open_exceptions,
+        'pending_approvals': pending_approvals,
+        'compliance_rate': compliance_rate,
+        'reconciliation_accuracy': reconciliation_accuracy,
+        'alert_items': alert_items,
+        'pending_shipments': pending_shipments,
+        'monitoring_shipments': monitoring_shipments,
+        'latest_reconciliations': latest_reconciliations,
+        'open_discrepancies': open_discrepancies,
+        'recent_activity': recent_activity,
+        'custody_transfers_open': custody_transfers_open,
+        'custody_transfers_completed': custody_transfers_completed,
+        'missing_handoffs': missing_handoffs,
+        'unverified_deliveries': unverified_deliveries,
+        'chain_of_custody_compliance': chain_of_custody_compliance,
+        **chart_data,
+    }
+    return render(request, 'operations_dashboard.html', context)
 
 
 @user_passes_test(lambda u: u.is_superuser or is_backup_administrator(u), login_url='signin')

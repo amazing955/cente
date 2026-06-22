@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Operations Manager Dashboard</title>
+{% load static %}
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+body {
+    background: #eef2f7;
+    overflow-x: hidden;
+    font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 260px;
+    height: 100vh;
+    background: linear-gradient(180deg, #02234f 0%, #0c3a80 100%);
+    color: #ffffff;
+    padding: 2rem 1.25rem;
+    z-index: 10;
+}
+.sidebar h3 {
+    font-weight: 700;
+    letter-spacing: .02em;
+}
+.sidebar .nav-link {
+    color: rgba(255,255,255,.85);
+    border-radius: 1rem;
+}
+.sidebar .nav-link:hover,
+.sidebar .nav-link.active {
+    background: rgba(255,255,255,.12);
+    color: #ffffff;
+}
+.sidebar .nav-link i {
+    width: 1.25rem;
+}
+.main-content {
+    margin-left: 260px;
+    padding: 1.5rem 2rem 2.5rem;
+}
+.top-navbar {
+    background: #ffffff;
+    border-bottom: 1px solid #e8ecf3;
+    padding: 1rem 1.5rem;
+    border-radius: 1rem;
+    box-shadow: 0 10px 30px rgba(7, 20, 66, 0.06);
+}
+.kpi-card {
+    border: none;
+    border-radius: 1.25rem;
+    background: #ffffff;
+    box-shadow: 0 15px 40px rgba(32, 47, 97, 0.08);
+}
+.kpi-card .card-body {
+    padding: 1.45rem 1.35rem;
+}
+.alert-card, .section-card {
+    border-radius: 1.25rem;
+    background: #ffffff;
+    box-shadow: 0 18px 45px rgba(32, 47, 97, 0.06);
+    border: none;
+}
+.section-card {
+    padding: 1.5rem;
+}
+.notification-card {
+    border-radius: 1rem;
+    background: #ffffff;
+    border: 1px solid rgba(15, 36, 75, 0.08);
+}
+.dashboard-title {
+    letter-spacing: -.02em;
+}
+.table thead {
+    background: #f7f9ff;
+    border-bottom: 2px solid #eff2f8;
+}
+.table tbody tr:hover {
+    background: #f8fbff;
+}
+.badge-status {
+    padding: .45em .75em;
+    border-radius: 999px;
+    font-size: .78rem;
+}
+.small-note {
+    font-size: .88rem;
+    color: #6c7a96;
+}
+.card-footer {
+    background: transparent;
+    border-top: 1px solid rgba(15, 36, 75, 0.08);
+}
+.btn-outline-primary {
+    border-color: rgba(5, 72, 173, 0.15);
+}
+</style>
+</head>
+<body>
+<div class="sidebar">
+    <div class="mb-5 text-center">
+        <img src="{% static 'inventory/round.jpg' %}" alt="Banking Logo" width="72" height="72" class="rounded-circle mb-3 border border-white border-2 shadow-sm">
+        <h3 class="mb-1">Ops Manager</h3>
+        <p class="small text-white-50 mb-0">Backup Tape Governance</p>
+    </div>
+    <nav class="nav flex-column gap-2">
+        <a class="nav-link active" href="#dashboard"><i class="bi bi-speedometer2"></i> Dashboard</a>
+        <a class="nav-link" href="#shipment_approvals"><i class="bi bi-check2-square"></i> Shipment Approvals</a>
+        <a class="nav-link" href="#shipment_monitoring"><i class="bi bi-truck"></i> Shipment Monitoring</a>
+        <a class="nav-link" href="#exception_management"><i class="bi bi-exclamation-triangle"></i> Exception Management</a>
+        <a class="nav-link" href="#custody_governance"><i class="bi bi-shield-lock"></i> Custody Governance</a>
+        <a class="nav-link" href="#reconciliation_review"><i class="bi bi-arrow-repeat"></i> Reconciliation Review</a>
+        <a class="nav-link" href="#compliance_monitoring"><i class="bi bi-file-earmark-check"></i> Compliance Monitoring</a>
+        <a class="nav-link" href="#reports"><i class="bi bi-bar-chart-line"></i> Reports</a>
+        <a class="nav-link" href="#analytics"><i class="bi bi-graph-up"></i> Analytics</a>
+        <a class="nav-link" href="#notifications"><i class="bi bi-bell"></i> Notifications</a>
+        <a class="nav-link" href="#settings"><i class="bi bi-gear"></i> Settings</a>
+        <a class="nav-link text-danger mt-3" href="{% url 'signout' %}"><i class="bi bi-box-arrow-right"></i> Logout</a>
+    </nav>
+</div>
+<div class="main-content">
+    <div class="top-navbar d-flex align-items-center justify-content-between mb-4">
+        <div>
+            <h1 class="h4 dashboard-title mb-1">Operations Manager Dashboard</h1>
+            <p class="small-note mb-0">Automated Backup Tape Inventory Management System — Banking Operations Command Center</p>
+        </div>
+        <div class="d-flex align-items-center gap-3">
+            <button class="btn btn-outline-secondary btn-sm position-relative">
+                <i class="bi bi-bell"></i>
+                <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">{{ alert_items|length }}</span>
+            </button>
+            <div class="d-flex align-items-center gap-2">
+                <div class="text-end">
+                    <div class="fw-semibold">{{ request.user.username }}</div>
+                    <div class="small-note">Operations Manager</div>
+                </div>
+                <img src="https://via.placeholder.com/44/0d6efd/ffffff?text=OM" class="rounded-circle" alt="Profile">
+            </div>
+            <div class="text-end d-none d-md-block">
+                <div class="small-note">Current Date</div>
+                <div class="fw-semibold">{{ current_datetime|date:'M d, Y H:i' }}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-xl-3">
+            <div class="card kpi-card p-3 h-100">
+                <div class="d-flex align-items-center justify-content-between mb-3">
+                    <span class="badge bg-primary">Total Tapes</span>
+                    <i class="bi bi-archive-fill text-primary fs-3"></i>
+                </div>
+                <h2 class="fw-bold">{{ total_tapes }}</h2>
+                <p class="small-note mb-0">Complete tape inventory across banking vaults.</p>
+            </div>
+        </div>
+        <div class="col-12 col-xl-3">
+            <div class="card kpi-card p-3 h-100">
+                <div class="d-flex align-items-center justify-content-between mb-3">
+                    <span class="badge bg-info">In Transit</span>
+                    <i class="bi bi-truck-flatbed text-info fs-3"></i>
+                </div>
+                <h2 class="fw-bold">{{ tapes_in_transit }}</h2>
+                <p class="small-note mb-0">Tapes currently moving between custody points.</p>
+            </div>
+        </div>
+        <div class="col-12 col-xl-3">
+            <div class="card kpi-card p-3 h-100">
+                <div class="d-flex align-items-center justify-content-between mb-3">
+                    <span class="badge bg-danger">Overdue</span>
+                    <i class="bi bi-exclamation-circle-fill text-danger fs-3"></i>
+                </div>
+                <h2 class="fw-bold">{{ overdue_shipments }}</h2>
+                <p class="small-note mb-0">Shipments past expected delivery SLA.</p>
+            </div>
+        </div>
+        <div class="col-12 col-xl-3">
+            <div class="card kpi-card p-3 h-100">
+                <div class="d-flex align-items-center justify-content-between mb-3">
+                    <span class="badge bg-warning text-dark">Missing</span>
+                    <i class="bi bi-question-circle-fill text-warning fs-3"></i>
+                </div>
+                <h2 class="fw-bold">{{ missing_tapes }}</h2>
+                <p class="small-note mb-0">Tapes requiring immediate custody resolution.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-xl-3">
+            <div class="card kpi-card p-3 h-100">
+                <div class="d-flex align-items-center justify-content-between mb-3">
+                    <span class="badge bg-secondary">Open Exceptions</span>
+                    <i class="bi bi-flag-fill text-secondary fs-3"></i>
+                </div>
+                <h2 class="fw-bold">{{ open_exceptions }}</h2>
+                <p class="small-note mb-0">Active reconciliation or custody exceptions.</p>
+            </div>
+        </div>
+        <div class="col-12 col-xl-3">
+            <div class="card kpi-card p-3 h-100">
+                <div class="d-flex align-items-center justify-content-between mb-3">
+                    <span class="badge bg-success">Pending Approvals</span>
+                    <i class="bi bi-clock-history text-success fs-3"></i>
+                </div>
+                <h2 class="fw-bold">{{ pending_approvals }}</h2>
+                <p class="small-note mb-0">Shipments awaiting operations sign-off.</p>
+            </div>
+        </div>
+        <div class="col-12 col-xl-3">
+            <div class="card kpi-card p-3 h-100">
+                <div class="d-flex align-items-center justify-content-between mb-3">
+                    <span class="badge bg-success">Compliance Rate</span>
+                    <i class="bi bi-check2-square text-success fs-3"></i>
+                </div>
+                <h2 class="fw-bold">{{ compliance_rate }}%</h2>
+                <p class="small-note mb-0">Adherence to custody and shipment policies.</p>
+            </div>
+        </div>
+        <div class="col-12 col-xl-3">
+            <div class="card kpi-card p-3 h-100">
+                <div class="d-flex align-items-center justify-content-between mb-3">
+                    <span class="badge bg-success">Reconciliation Accuracy</span>
+                    <i class="bi bi-award-fill text-success fs-3"></i>
+                </div>
+                <h2 class="fw-bold">{{ reconciliation_accuracy }}%</h2>
+                <p class="small-note mb-0">Current reconciliation success ratio.</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-xl-8">
+            <div class="alert-card p-4">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <div>
+                        <h4 class="mb-1">Alerts & Exceptions</h4>
+                        <p class="small-note mb-0">Priority incidents requiring operational attention.</p>
+                    </div>
+                    <button class="btn btn-outline-primary btn-sm"><i class="bi bi-funnel-fill me-1"></i> Filter</button>
+                </div>
+                <div class="row g-3">
+                    {% for alert in alert_items %}
+                    <div class="col-12">
+                        <div class="p-3 rounded-4 border border-1 border-secondary-subtle d-flex align-items-center justify-content-between gap-3">
+                            <div>
+                                {% if alert.severity == 'Error' %}
+                                    <span class="badge bg-danger text-uppercase">{{ alert.severity }}</span>
+                                {% elif alert.severity == 'Warning' %}
+                                    <span class="badge bg-warning text-uppercase">{{ alert.severity }}</span>
+                                {% else %}
+                                    <span class="badge bg-info text-uppercase">{{ alert.severity }}</span>
+                                {% endif %}
+                                <div class="fw-semibold mt-2">{{ alert.description }}</div>
+                                <div class="small-note text-muted">{{ alert.date|date:'M d, Y H:i' }}</div>
+                            </div>
+                            <button class="btn btn-outline-dark btn-sm">{{ alert.action }}</button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-xl-4">
+            <div class="section-card p-4 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <h5 class="mb-1">Pending Approvals</h5>
+                        <p class="small-note mb-0">High-risk shipments awaiting review.</p>
+                    </div>
+                    <span class="badge bg-primary rounded-pill">{{ pending_approvals }}</span>
+                </div>
+                <div class="list-group">
+                    {% for shipment in pending_shipments %}
+                    <div class="list-group-item border-0 rounded-4 mb-2 shadow-sm">
+                        <div class="d-flex align-items-start justify-content-between gap-3">
+                            <div>
+                                <div class="fw-semibold">{{ shipment.shipment_id }} • {{ shipment.shipment_type }}</div>
+                                {% if shipment.created_by %}
+                                    <div class="small-note text-muted">Submitted by {{ shipment.created_by.username }} on {{ shipment.shipment_date|date:'M d' }}</div>
+                                {% else %}
+                                    <div class="small-note text-muted">Submitted by Unknown on {{ shipment.shipment_date|date:'M d' }}</div>
+                                {% endif %}
+                            </div>
+                            <span class="badge bg-warning text-dark">{{ shipment.priority_level }}</span>
+                        </div>
+                        <div class="mt-3 d-flex flex-wrap gap-2">
+                            <button class="btn btn-outline-success btn-sm">Approve</button>
+                            <button class="btn btn-outline-danger btn-sm">Reject</button>
+                            <button class="btn btn-outline-secondary btn-sm">View Evidence</button>
+                            <button class="btn btn-outline-secondary btn-sm">View Manifest</button>
+                        </div>
+                    </div>
+                    {% empty %}
+                    <div class="text-center text-muted py-4">No approvals pending.</div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-xl-8">
+            <div class="section-card p-4">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <h5 class="mb-1">Shipment Monitoring</h5>
+                        <p class="small-note mb-0">Track mission-critical data movement activities.</p>
+                    </div>
+                    <button class="btn btn-outline-primary btn-sm">Export</button>
+                </div>
+                <div class="table-responsive">
+                    <table class="table align-middle">
+                        <thead>
+                            <tr>
+                                <th>Shipment ID</th>
+                                <th>Source</th>
+                                <th>Destination</th>
+                                <th>Courier</th>
+                                <th>Status</th>
+                                <th>Expected Delivery</th>
+                                <th>SLA</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for shipment in monitoring_shipments %}
+                            <tr>
+                                <td class="fw-semibold">{{ shipment.shipment_id }}</td>
+                                <td>{{ shipment.source_location|default:'Unknown' }}</td>
+                                <td>{{ shipment.destination_location|default:'Unknown' }}</td>
+                                <td>{{ shipment.courier_name|default:'N/A' }}</td>
+                                <td>
+                                    {% if shipment.status == 'Delivered' %}
+                                        <span class="badge badge-status bg-success">{{ shipment.status }}</span>
+                                    {% elif shipment.status == 'In Transit' or shipment.status == 'Dispatched' %}
+                                        <span class="badge badge-status bg-warning">{{ shipment.status }}</span>
+                                    {% else %}
+                                        <span class="badge badge-status bg-secondary">{{ shipment.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ shipment.expected_delivery_date|date:'M d'|default:'TBD' }}</td>
+                                <td>
+                                    {% if shipment.expected_delivery_date and shipment.expected_delivery_date >= today %}
+                                        <span class="small-note">On Track</span>
+                                    {% else %}
+                                        <span class="small-note">Delayed</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <button class="btn btn-outline-primary btn-sm">View Details</button>
+                                    <button class="btn btn-outline-secondary btn-sm">Track</button>
+                                </td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="8" class="text-center text-muted py-4">No shipment monitoring records available.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-xl-4">
+            <div class="section-card p-4 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <h5 class="mb-1">Custody Governance</h5>
+                        <p class="small-note mb-0">Chain of custody and control metrics.</p>
+                    </div>
+                </div>
+                <div class="row g-3">
+                    <div class="col-12">
+                        <div class="border rounded-4 p-3">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="small-note">Open Transfers</span>
+                                <span class="fw-semibold">{{ custody_transfers_open }}</span>
+                            </div>
+                            <div class="progress" style="height: 8px;"><div class="progress-bar bg-primary" style="width: 76%"></div></div>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <div class="border rounded-4 p-3">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="small-note">Completed Transfers</span>
+                                <span class="fw-semibold">{{ custody_transfers_completed }}</span>
+                            </div>
+                            <div class="progress" style="height: 8px;"><div class="progress-bar bg-success" style="width: 88%"></div></div>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <div class="border rounded-4 p-3">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="small-note">Missing Handoffs</span>
+                                <span class="fw-semibold">{{ missing_handoffs }}</span>
+                            </div>
+                            <div class="progress" style="height: 8px;"><div class="progress-bar bg-warning" style="width: 42%"></div></div>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <div class="border rounded-4 p-3">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="small-note">Unverified Deliveries</span>
+                                <span class="fw-semibold">{{ unverified_deliveries }}</span>
+                            </div>
+                            <div class="progress" style="height: 8px;"><div class="progress-bar bg-danger" style="width: 33%"></div></div>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <div class="border rounded-4 p-3">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <span class="small-note">Chain of Custody Compliance</span>
+                                <span class="fw-semibold">{{ chain_of_custody_compliance }}%</span>
+                            </div>
+                            <div class="progress" style="height: 8px;"><div class="progress-bar bg-success" style="width: {{ chain_of_custody_compliance }}%"></div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-xl-6">
+            <div class="section-card p-4">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <h5 class="mb-1">Shipment Status Distribution</h5>
+                        <p class="small-note mb-0">Live distribution of shipment statuses.</p>
+                    </div>
+                </div>
+                <canvas id="statusChart" height="220"></canvas>
+            </div>
+        </div>
+        <div class="col-12 col-xl-6">
+            <div class="section-card p-4">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <h5 class="mb-1">Monthly Shipment Trends</h5>
+                        <p class="small-note mb-0">Volume of shipments over the last six months.</p>
+                    </div>
+                </div>
+                <canvas id="monthlyTrendChart" height="220"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-xl-6">
+            <div class="section-card p-4">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <h5 class="mb-1">Compliance Performance</h5>
+                        <p class="small-note mb-0">Policy compliance and governance coverage.</p>
+                    </div>
+                </div>
+                <canvas id="complianceChart" height="220"></canvas>
+            </div>
+        </div>
+        <div class="col-12 col-xl-6">
+            <div class="section-card p-4">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <h5 class="mb-1">Exception Trends</h5>
+                        <p class="small-note mb-0">Exception volume over recent months.</p>
+                    </div>
+                </div>
+                <canvas id="exceptionChart" height="220"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-xl-6">
+            <div class="section-card p-4">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <h5 class="mb-1">Reconciliation Review</h5>
+                        <p class="small-note mb-0">Latest reconciliation outcomes and discrepancies.</p>
+                    </div>
+                </div>
+                <div class="table-responsive">
+                    <table class="table align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Date</th>
+                                <th>Status</th>
+                                <th>Discrepancies</th>
+                                <th>Accuracy</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for reconciliation in latest_reconciliations %}
+                            <tr>
+                                <td class="fw-semibold">{{ reconciliation.reconciliation_id }}</td>
+                                <td>{{ reconciliation.reconciliation_date|date:'M d, Y' }}</td>
+                                <td>{{ reconciliation.status }}</td>
+                                <td>{{ reconciliation.results.count }}</td>
+                                <td>{{ reconciliation_accuracy }}%</td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="5" class="text-center text-muted py-4">No reconciliations available.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-xl-6">
+            <div class="section-card p-4 h-100">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <h5 class="mb-1">Management Reports</h5>
+                        <p class="small-note mb-0">Export operational reports for audit and oversight.</p>
+                    </div>
+                </div>
+                <div class="row g-3">
+                    <div class="col-12">
+                        <div class="d-grid gap-2">
+                            <button class="btn btn-outline-primary btn-lg">Inventory Report</button>
+                            <button class="btn btn-outline-primary btn-lg">Shipment Report</button>
+                            <button class="btn btn-outline-primary btn-lg">Reconciliation Report</button>
+                            <button class="btn btn-outline-primary btn-lg">Audit Report</button>
+                            <button class="btn btn-outline-primary btn-lg">Compliance Report</button>
+                            <button class="btn btn-outline-primary btn-lg">KPI Report</button>
+                        </div>
+                    </div>
+                    <div class="col-12 d-flex gap-2 flex-wrap">
+                        <button class="btn btn-secondary btn-sm flex-fill">PDF</button>
+                        <button class="btn btn-secondary btn-sm flex-fill">Excel</button>
+                        <button class="btn btn-secondary btn-sm flex-fill">Print</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-12 col-xl-6">
+            <div class="section-card p-4">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <h5 class="mb-1">Recent Activity Feed</h5>
+                        <p class="small-note mb-0">Operational actions and event history.</p>
+                    </div>
+                </div>
+                <div class="list-group">
+                    {% for activity in recent_activity %}
+                    <div class="list-group-item border-0 px-0 py-3">
+                        <div class="d-flex justify-content-between align-items-start gap-3">
+                            <div>
+                                {% if activity.user %}
+                                    <div class="fw-semibold">{{ activity.user.username }}</div>
+                                {% else %}
+                                    <div class="fw-semibold">System</div>
+                                {% endif %}
+                                {% if activity.action %}
+                                    <div class="small-note text-muted">{{ activity.action }}</div>
+                                {% else %}
+                                    <div class="small-note text-muted">{{ activity.name }}</div>
+                                {% endif %}
+                            </div>
+                            <span class="small-note text-muted">{{ activity.timestamp|date:'M d, H:i' }}</span>
+                        </div>
+                        <div class="mt-2">
+                            {% if activity.severity == 'error' %}
+                                <span class="badge bg-danger">{{ activity.severity|title }}</span>
+                            {% elif activity.severity == 'warning' %}
+                                <span class="badge bg-warning">{{ activity.severity|title }}</span>
+                            {% elif activity.severity == 'success' %}
+                                <span class="badge bg-success">{{ activity.severity|title }}</span>
+                            {% else %}
+                                <span class="badge bg-secondary">{{ activity.severity|title }}</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% empty %}
+                    <div class="text-center text-muted py-4">No recent activity recorded.</div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        <div class="col-12 col-xl-6">
+            <div class="section-card p-4">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                        <h5 class="mb-1">Notifications</h5>
+                        <p class="small-note mb-0">Alerts from compliance, custody, and shipment operations.</p>
+                    </div>
+                </div>
+                <div class="row g-3">
+                    {% for alert in alert_items|slice:":4" %}
+                    <div class="col-12">
+                        <div class="notification-card p-3">
+                            <div class="d-flex justify-content-between align-items-start gap-2">
+                                <div>
+                                    <div class="fw-semibold">{{ alert.description }}</div>
+                                    <div class="small-note text-muted">{{ alert.date|date:'M d, H:i' }}</div>
+                                </div>
+                                {% if alert.severity == 'Error' %}
+                                    <span class="badge bg-danger">{{ alert.severity }}</span>
+                                {% elif alert.severity == 'Warning' %}
+                                    <span class="badge bg-warning">{{ alert.severity }}</span>
+                                {% else %}
+                                    <span class="badge bg-info">{{ alert.severity }}</span>
+                                {% endif %}
+                            </div>
+                            <div class="mt-3 d-flex gap-2 flex-wrap">
+                                <button class="btn btn-outline-primary btn-sm">Action</button>
+                                <button class="btn btn-outline-secondary btn-sm">Dismiss</button>
+                            </div>
+                        </div>
+                    </div>
+                    {% empty %}
+                    <div class="text-center text-muted py-4">No active notifications.</div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+const statusChartCtx = document.getElementById('statusChart');
+if (statusChartCtx) {
+    new Chart(statusChartCtx, {
+        type: 'doughnut',
+        data: {
+            labels: {{ status_labels_json|safe }},
+            datasets: [{
+                data: {{ status_counts_json|safe }},
+                backgroundColor: ['#0d6efd', '#198754', '#0dcaf0', '#ffc107', '#6610f2', '#dc3545'],
+                borderWidth: 0,
+            }]
+        },
+        options: {
+            plugins: { legend: { position: 'bottom', labels: { color: '#102a43' } } },
+            cutout: '65%',
+        }
+    });
+}
+const monthlyTrendCtx = document.getElementById('monthlyTrendChart');
+if (monthlyTrendCtx) {
+    new Chart(monthlyTrendCtx, {
+        type: 'line',
+        data: {
+            labels: {{ monthly_labels_json|safe }},
+            datasets: [{
+                label: 'Shipments',
+                data: {{ monthly_shipments_json|safe }},
+                borderColor: '#0d6efd',
+                backgroundColor: 'rgba(13,110,253,0.12)',
+                fill: true,
+                tension: 0.35,
+                pointRadius: 4,
+                pointBackgroundColor: '#0d6efd'
+            }]
+        },
+        options: {
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true } }
+        }
+    });
+}
+const complianceCtx = document.getElementById('complianceChart');
+if (complianceCtx) {
+    new Chart(complianceCtx, {
+        type: 'bar',
+        data: {
+            labels: {{ monthly_labels_json|safe }},
+            datasets: [{
+                label: 'Compliance %',
+                data: {{ monthly_compliance_json|safe }},
+                backgroundColor: '#198754',
+                borderRadius: 12,
+                barThickness: 18,
+            }]
+        },
+        options: {
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true, max: 100 } }
+        }
+    });
+}
+const exceptionCtx = document.getElementById('exceptionChart');
+if (exceptionCtx) {
+    new Chart(exceptionCtx, {
+        type: 'line',
+        data: {
+            labels: {{ monthly_labels_json|safe }},
+            datasets: [{
+                label: 'Exceptions',
+                data: {{ monthly_exceptions_json|safe }},
+                borderColor: '#dc3545',
+                backgroundColor: 'rgba(220,53,69,0.12)',
+                fill: true,
+                tension: 0.35,
+                pointRadius: 4,
+                pointBackgroundColor: '#dc3545'
+            }]
+        },
+        options: {
+            plugins: { legend: { display: false } },
+            scales: { y: { beginAtZero: true } }
+        }
+    });
+}
+</script>
+</body>
+</html>
