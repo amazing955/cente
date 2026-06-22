@@ -3,7 +3,10 @@ from datetime import time
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
+from django.core.mail import send_mail
 from django.db import models
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 from django.utils import timezone
 
 
@@ -12,6 +15,7 @@ def generate_shipment_id():
 
 
 class ApplicationSetting(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     LOG_LEVEL_CHOICES = [
         ('info', 'Info'),
         ('warning', 'Warning'),
@@ -46,6 +50,7 @@ class ApplicationSetting(models.Model):
 
 
 class CustomUser(AbstractUser):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
 
     ROLE_CHOICES = [
@@ -70,6 +75,7 @@ class CustomUser(AbstractUser):
 
 
 class RoleTemplate(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     group = models.OneToOneField('auth.Group', on_delete=models.CASCADE)
     features = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -83,6 +89,7 @@ class RoleTemplate(models.Model):
 
 
 class TapeInventory(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=120)
     active_count = models.PositiveIntegerField(default=0)
     archived_count = models.PositiveIntegerField(default=0)
@@ -93,6 +100,7 @@ class TapeInventory(models.Model):
 
 
 class Tape(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     TAPE_TYPE_CHOICES = [
         ('LTO-6', 'LTO-6'),
         ('LTO-7', 'LTO-7'),
@@ -130,7 +138,103 @@ class Tape(models.Model):
         return f"{self.volser} ({self.barcode})"
 
 
+def generate_reconciliation_id():
+    return f"REC-{uuid.uuid4().hex[:10].upper()}"
+
+
+class Reconciliation(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    STATUS_CHOICES = [
+        ('Open', 'Open'),
+        ('In Progress', 'In Progress'),
+        ('Completed', 'Completed'),
+        ('Closed', 'Closed'),
+    ]
+
+    reconciliation_id = models.CharField(max_length=20, unique=True, editable=False, default=generate_reconciliation_id)
+    reconciliation_date = models.DateField(default=timezone.localdate)
+    location = models.CharField(max_length=200)
+    performed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='performed_reconciliations'
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='reviewed_reconciliations'
+    )
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='approved_reconciliations'
+    )
+    start_time = models.DateTimeField(null=True, blank=True)
+    end_time = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Open')
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Reconciliation'
+        verbose_name_plural = 'Reconciliations'
+        ordering = ['-reconciliation_date', '-created_at']
+
+    def __str__(self):
+        return f"{self.reconciliation_id} - {self.location}"
+
+
+class ReconciliationResult(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    ISSUE_TYPE_CHOICES = [
+        ('Missing', 'Missing'),
+        ('Misplaced', 'Misplaced'),
+        ('Unexpected', 'Unexpected'),
+        ('Duplicate', 'Duplicate'),
+        ('Damaged', 'Damaged'),
+        ('None', 'None'),
+    ]
+    RESOLUTION_STATUS_CHOICES = [
+        ('Open', 'Open'),
+        ('Under Investigation', 'Under Investigation'),
+        ('Resolved', 'Resolved'),
+        ('Closed', 'Closed'),
+    ]
+
+    reconciliation = models.ForeignKey('Reconciliation', on_delete=models.CASCADE, related_name='results')
+    tape = models.ForeignKey('Tape', null=True, blank=True, on_delete=models.SET_NULL, related_name='reconciliation_results')
+    barcode = models.CharField(max_length=100, blank=True)
+    issue_type = models.CharField(max_length=20, choices=ISSUE_TYPE_CHOICES, default='None')
+    expected_location = models.CharField(max_length=200, blank=True)
+    actual_location = models.CharField(max_length=200, blank=True)
+    remarks = models.TextField(blank=True)
+    resolution_status = models.CharField(max_length=20, choices=RESOLUTION_STATUS_CHOICES, default='Open')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Reconciliation Result'
+        verbose_name_plural = 'Reconciliation Results'
+        ordering = ['-created_at']
+
+    def save(self, *args, **kwargs):
+        if self.tape and not self.barcode:
+            self.barcode = self.tape.barcode
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        identifier = self.tape.volser if self.tape else 'Unknown Tape'
+        return f"{self.reconciliation.reconciliation_id} - {identifier} ({self.issue_type})"
+
+
 class Shipment(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     SHIPMENT_TYPE_CHOICES = [
         ('Off-Site Transfer', 'Off-Site Transfer'),
         ('Return', 'Return'),
@@ -230,6 +334,7 @@ class Shipment(models.Model):
 
 
 class ReportTemplate(models.Model):
+    id  = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=120)
     description = models.TextField(blank=True)
 
@@ -237,7 +342,25 @@ class ReportTemplate(models.Model):
         return self.name
 
 
+class MonthlyReport(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    report_month = models.DateField()
+    report_name = models.CharField(max_length=200)
+    generated_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    data = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Monthly Report'
+        verbose_name_plural = 'Monthly Reports'
+        ordering = ['-report_month', '-created_at']
+
+    def __str__(self):
+        return f"{self.report_name} ({self.report_month.strftime('%B %Y')})"
+
+
 class AuditLog(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     timestamp = models.DateTimeField(auto_now_add=True)
     name = models.CharField(max_length=120, blank=True)
     action = models.CharField(max_length=120, blank=True)
@@ -253,9 +376,37 @@ class AuditLog(models.Model):
         ],
         default='info'
     )
+    is_read = models.BooleanField(default=False)
+    read_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
         label = self.name or self.action or self.message or 'Audit'
         return f"[{self.severity}] {label}"
 
-    
+
+@receiver(post_save, sender=AuditLog)
+def send_auditlog_email_notification(sender, instance, created, **kwargs):
+    if not created:
+        return
+
+    if instance.severity not in ['warning', 'error']:
+        return
+
+    user = instance.user
+    if not user or not user.email:
+        return
+
+    application_settings = ApplicationSetting.objects.first() or ApplicationSetting.objects.create()
+    if not application_settings.email_alerts_enabled:
+        return
+
+    subject = f"New alert: {instance.name or instance.action or 'Audit Notification'}"
+    message = (
+        f"A new alert was generated in the system.\n\n"
+        f"Name: {instance.name}\n"
+        f"Action: {instance.action}\n"
+        f"Message: {instance.message}\n"
+        f"Severity: {instance.severity}\n"
+        f"Timestamp: {instance.timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n"
+    )
+    send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=True)

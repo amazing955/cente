@@ -1,17 +1,40 @@
 from django.contrib.auth import authenticate, login, logout, get_user_model
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.models import Group
+from django.conf import settings
+from django.core.mail import send_mail
+from django.core.paginator import Paginator
+from django.template.loader import render_to_string
+import csv
 import json
+import uuid
 from datetime import date
 from django.contrib import messages
 from django.db.models import Q
-from django.shortcuts import render, redirect
+from django.http import HttpResponse
+from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 
-from .forms import CustomUserCreationForm, CustomUserEditForm, UserProfileForm, TapeForm, ShipmentForm, UserRoleAssignmentForm, RoleCreationForm, RoleFeatureUpdateForm, SystemSettingsForm, FEATURE_CHOICES
-from .models import AuditLog, ApplicationSetting, ReportTemplate, Shipment, Tape, RoleTemplate
+from .forms import CustomUserCreationForm, CustomUserEditForm, UserProfileForm, TapeForm, ShipmentForm, ReconciliationForm, ReconciliationResultForm, UserRoleAssignmentForm, RoleCreationForm, RoleFeatureUpdateForm, ReportEmailForm, SystemSettingsForm, FEATURE_CHOICES
+from .models import AuditLog, ApplicationSetting, MonthlyReport, ReportTemplate, Reconciliation, ReconciliationResult, Shipment, Tape, RoleTemplate
+
+
+def is_valid_uuid(value):
+    if not value:
+        return False
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+def get_object_by_uuid_pk(model, pk_value):
+    if not is_valid_uuid(pk_value):
+        return None
+    return model.objects.filter(pk=pk_value).first()
 
 ADMIN_FEATURE_TABS = [
     {
@@ -177,6 +200,150 @@ def get_last_six_month_counts(tapes_queryset):
             ).count()
         )
     return labels, counts
+
+
+def get_first_day_of_month(month_string):
+    if not month_string:
+        return None
+    try:
+        year, month = [int(part) for part in month_string.split('-')]
+        return date(year, month, 1)
+    except (ValueError, TypeError):
+        return None
+
+
+def get_next_month(first_day):
+    if first_day.month == 12:
+        return date(first_day.year + 1, 1, 1)
+    return date(first_day.year, first_day.month + 1, 1)
+
+
+def generate_daily_report_data(report_date):
+    return {
+        'period': report_date.strftime('%Y-%m-%d'),
+        'tapes_registered': Tape.objects.filter(date_registered=report_date).count(),
+        'active_tapes': Tape.objects.filter(status='Active').count(),
+        'off_site_tapes': Tape.objects.filter(status='Off-Site').count(),
+        'missing_tapes': Tape.objects.filter(status='Missing').count(),
+        'retention_due_today': Tape.objects.filter(retention_end_date=report_date).count(),
+        'shipments_created': Shipment.objects.filter(shipment_date=report_date).count(),
+        'shipments_pending': Shipment.objects.filter(shipment_date=report_date, status__iexact='Pending').count(),
+        'alerts_generated': AuditLog.objects.filter(timestamp__date=report_date, severity__in=['warning', 'error']).count(),
+        'reconciliations_conducted': Reconciliation.objects.filter(reconciliation_date=report_date).count(),
+    }
+
+
+def generate_monthly_report_data(report_month):
+    start = report_month
+    end = get_next_month(report_month)
+    return {
+        'period': report_month.strftime('%Y-%m'),
+        'tapes_registered': Tape.objects.filter(date_registered__gte=start, date_registered__lt=end).count(),
+        'active_tapes': Tape.objects.filter(status='Active').count(),
+        'off_site_tapes': Tape.objects.filter(status='Off-Site').count(),
+        'missing_tapes': Tape.objects.filter(status='Missing').count(),
+        'retention_due_this_month': Tape.objects.filter(retention_end_date__gte=start, retention_end_date__lt=end).count(),
+        'shipments_created': Shipment.objects.filter(shipment_date__gte=start, shipment_date__lt=end).count(),
+        'shipments_pending': Shipment.objects.filter(shipment_date__gte=start, shipment_date__lt=end, status__iexact='Pending').count(),
+        'alerts_generated': AuditLog.objects.filter(timestamp__gte=start, timestamp__lt=end, severity__in=['warning', 'error']).count(),
+        'reconciliations_conducted': Reconciliation.objects.filter(reconciliation_date__gte=start, reconciliation_date__lt=end).count(),
+    }
+
+
+def export_report_csv(report_type, report_period, report_data):
+    response = HttpResponse(content_type='text/csv')
+    filename = f"{report_type}_report_{report_period}.csv"
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    writer = csv.writer(response)
+    writer.writerow([f'{report_type.title()} Report', report_period])
+    writer.writerow([])
+    writer.writerow(['Metric', 'Value'])
+    for key, value in report_data.items():
+        if key == 'period':
+            continue
+        writer.writerow([key.replace('_', ' ').title(), value])
+    return response
+
+
+def export_reconciliation_report_csv(reconciliations, summary=None):
+    response = HttpResponse(content_type='text/csv')
+    filename = 'reconciliation_reports_export.csv'
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    writer = csv.writer(response)
+    writer.writerow(['Reconciliation Report Export'])
+    writer.writerow([timezone.localdate().strftime('%Y-%m-%d')])
+    writer.writerow([])
+
+    if summary:
+        writer.writerow(['Summary'])
+        for key, value in summary.items():
+            writer.writerow([key.replace('_', ' ').title(), value])
+        writer.writerow([])
+
+    writer.writerow(['Reconciliation ID', 'Date', 'Location', 'Status', 'Performed By', 'Reviewed By', 'Approved By', 'Total Issues', 'Open Issues'])
+    for reconciliation in reconciliations:
+        performer = reconciliation.performed_by.username if reconciliation.performed_by else 'System'
+        reviewer = reconciliation.reviewed_by.username if reconciliation.reviewed_by else '-'
+        approver = reconciliation.approved_by.username if reconciliation.approved_by else '-'
+        total_issues = reconciliation.results.count()
+        open_issues = reconciliation.results.filter(resolution_status__in=['Open', 'Under Investigation']).count()
+        writer.writerow([
+            reconciliation.reconciliation_id,
+            reconciliation.reconciliation_date.strftime('%Y-%m-%d'),
+            reconciliation.location,
+            reconciliation.status,
+            performer,
+            reviewer,
+            approver,
+            total_issues,
+            open_issues,
+        ])
+    return response
+
+
+ALLOWED_REPORT_ROLES = [
+    'Backup Administrator',
+    'Operations Manager',
+    'Compliance Auditor',
+    'Information Security Officer',
+    'System Administrator',
+]
+
+
+def has_report_access(user):
+    return user.is_authenticated and (
+        user.is_superuser or user.groups.filter(name__in=ALLOWED_REPORT_ROLES).exists()
+    )
+
+
+def get_notification_recipients():
+    recipients = set()
+    backup_admins = User.objects.filter(is_active=True, groups__name='Backup Administrator').exclude(email='')
+    superusers = User.objects.filter(is_active=True, is_superuser=True).exclude(email='')
+    for user in backup_admins.iterator():
+        recipients.add(user.email)
+    for user in superusers.iterator():
+        recipients.add(user.email)
+    return sorted(recipients)
+
+
+def send_email_alert(subject, message, recipients):
+    if not recipients:
+        return
+    send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, recipients, fail_silently=True)
+
+
+def send_report_email(subject, message, recipients):
+    if not recipients:
+        return
+    send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, recipients, fail_silently=True)
+
+
+def notify_email_alert(application_settings, subject, message):
+    if application_settings.email_alerts_enabled:
+        recipients = get_notification_recipients()
+        send_email_alert(subject, message, recipients)
+
 
 # Create your views here.
 
@@ -366,7 +533,7 @@ def dashboard(request):
                 messages.error(request, 'Please correct the role feature form errors below and try again.')
         elif request.POST.get('form_type') == 'edit_user':
             user_id = request.POST.get('user_id')
-            edit_user = User.objects.filter(pk=user_id).first()
+            edit_user = get_object_by_uuid_pk(User, user_id)
             edit_user_form = CustomUserEditForm(request.POST, instance=edit_user)
             if edit_user_form.is_valid():
                 user = edit_user_form.save(commit=False)
@@ -386,7 +553,7 @@ def dashboard(request):
     if not edit_user_form:
         edit_user_id = request.GET.get('edit_user')
         if edit_user_id:
-            edit_user = User.objects.filter(pk=edit_user_id).first()
+            edit_user = get_object_by_uuid_pk(User, edit_user_id)
             if edit_user:
                 edit_user_form = CustomUserEditForm(instance=edit_user)
 
@@ -479,13 +646,20 @@ def backup_dashboard(request):
     show_tape_inventory_panel = False
     show_settings_panel = False
     show_audit_panel = False
+    show_alerts_panel = False
     show_reports_panel = False
     show_shipments_panel = False
     show_add_shipment_panel = False
     show_edit_shipment_panel = False
+    show_reconciliation_panel = False
+    show_reconciliation_reports_panel = False
+    show_add_reconciliation_panel = False
     selected_shipment = None
+    selected_reconciliation = None
     add_shipment_form = ShipmentForm(request.POST or None, prefix='add')
     edit_shipment_form = None
+    reconciliation_form = ReconciliationForm(request.POST or None, prefix='reconciliation')
+    reconciliation_result_form = ReconciliationResultForm(request.POST or None, prefix='result')
     application_settings = ApplicationSetting.objects.first() or ApplicationSetting.objects.create()
     settings_form = None
     profile_form = None
@@ -495,7 +669,9 @@ def backup_dashboard(request):
         form_type = request.POST.get('form_type')
         if form_type == 'verify_user':
             user_id = request.POST.get('user_id')
-            pending_user = User.objects.filter(pk=user_id, verified=False).first()
+            pending_user = None
+            if is_valid_uuid(user_id):
+                pending_user = User.objects.filter(pk=user_id, verified=False).first()
             if pending_user:
                 pending_user.is_active = True
                 pending_user.verified = True
@@ -527,7 +703,7 @@ def backup_dashboard(request):
                 messages.error(request, 'Please correct the tape form errors below and try again.')
         elif form_type == 'tape_action':
             tape_id = request.POST.get('selected_tape')
-            selected_tape = Tape.objects.filter(pk=tape_id).first()
+            selected_tape = get_object_by_uuid_pk(Tape, tape_id)
             if selected_tape:
                 tape_action_form = TapeForm(request.POST, instance=selected_tape)
                 action = request.POST.get('action')
@@ -596,6 +772,12 @@ def backup_dashboard(request):
                     user=request.user,
                     severity='success',
                 )
+                if application_settings.shipment_notification_enabled:
+                    notify_email_alert(
+                        application_settings,
+                        f'Shipment {shipment.shipment_id} Created',
+                        f'Shipment {shipment.shipment_id} was created by {request.user.username}.',
+                    )
                 messages.success(request, 'Shipment created successfully.')
                 return redirect(f'{reverse("backup-dashboard")}?show_shipments=1')
             else:
@@ -603,8 +785,8 @@ def backup_dashboard(request):
                 show_add_shipment_panel = True
                 messages.error(request, 'Please correct the shipment form errors and try again.')
         elif form_type == 'edit_shipment':
-            shipment_id = request.POST.get('shipment_id')
-            selected_shipment = Shipment.objects.filter(pk=shipment_id).first()
+            shipment_pk = request.POST.get('shipment_pk')
+            selected_shipment = get_object_by_uuid_pk(Shipment, shipment_pk)
             if selected_shipment:
                 edit_shipment_form = ShipmentForm(request.POST, instance=selected_shipment, prefix='edit')
                 if edit_shipment_form.is_valid():
@@ -619,8 +801,14 @@ def backup_dashboard(request):
                         user=request.user,
                         severity='success',
                     )
+                    if application_settings.shipment_notification_enabled:
+                        notify_email_alert(
+                            application_settings,
+                            f'Shipment {shipment.shipment_id} Updated',
+                            f'Shipment {shipment.shipment_id} was updated by {request.user.username}.',
+                        )
                     messages.success(request, 'Shipment updated successfully.')
-                    return redirect(f'{reverse("backup-dashboard")}?edit_shipment={shipment.id}&show_shipments=1')
+                    return redirect(f'{reverse("backup-dashboard")}?edit_shipment_pk={shipment.id}&show_shipments=1')
                 else:
                     show_shipments_panel = True
                     show_edit_shipment_panel = True
@@ -628,6 +816,61 @@ def backup_dashboard(request):
             else:
                 messages.error(request, 'Please select a valid shipment to update.')
                 return redirect('backup-dashboard')
+        elif form_type == 'add_reconciliation':
+            if reconciliation_form.is_valid():
+                reconciliation = reconciliation_form.save(commit=False)
+                reconciliation.performed_by = request.user
+                reconciliation.save()
+                AuditLog.objects.create(
+                    name='Reconciliation Created',
+                    action=f'Created reconciliation {reconciliation.reconciliation_id} for {reconciliation.location}',
+                    user=request.user,
+                    severity='success',
+                )
+                messages.success(request, 'Reconciliation created successfully.')
+                return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1')
+            else:
+                show_reconciliation_panel = True
+                show_add_reconciliation_panel = True
+                messages.error(request, 'Please correct the reconciliation form errors and try again.')
+        elif form_type == 'add_reconciliation_result':
+            reconciliation_pk = request.POST.get('reconciliation_pk')
+            selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
+            if selected_reconciliation:
+                reconciliation_result_form = ReconciliationResultForm(request.POST, prefix='result')
+                if reconciliation_result_form.is_valid():
+                    result = reconciliation_result_form.save(commit=False)
+                    result.reconciliation = selected_reconciliation
+                    result.save()
+                    AuditLog.objects.create(
+                        name='Reconciliation Result Added',
+                        action=f'Added reconciliation result for {selected_reconciliation.reconciliation_id}',
+                        user=request.user,
+                        severity='info',
+                    )
+                    messages.success(request, 'Reconciliation result saved successfully.')
+                    return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={selected_reconciliation.id}')
+                else:
+                    show_reconciliation_panel = True
+                    messages.error(request, 'Please correct the result form errors and try again.')
+            else:
+                messages.error(request, 'Please select a valid reconciliation session.')
+                return redirect('backup-dashboard')
+        elif form_type == 'system_settings':
+            settings_form = SystemSettingsForm(request.POST, instance=application_settings)
+            if settings_form.is_valid():
+                settings_form.save()
+                AuditLog.objects.create(
+                    name='System Settings Updated',
+                    action=f'Updated system settings by {request.user.username}',
+                    user=request.user,
+                    severity='success',
+                )
+                messages.success(request, 'System settings saved successfully.')
+                return redirect(f'{reverse("backup-dashboard")}?show_settings=1')
+            else:
+                show_settings_panel = True
+                messages.error(request, 'Please correct the settings form errors and try again.')
         elif form_type == 'edit_profile':
             profile_form = UserProfileForm(request.POST, instance=request.user)
             if profile_form.is_valid():
@@ -646,7 +889,7 @@ def backup_dashboard(request):
 
     selected_tape_id = request.GET.get('selected_tape') or request.POST.get('selected_tape')
     if selected_tape_id and not selected_tape:
-        selected_tape = Tape.objects.filter(pk=selected_tape_id).first()
+        selected_tape = get_object_by_uuid_pk(Tape, selected_tape_id)
     if selected_tape and not tape_action_form:
         tape_action_form = TapeForm(instance=selected_tape)
 
@@ -664,16 +907,44 @@ def backup_dashboard(request):
         show_add_tape_panel = True
     if request.GET.get('show_audit') == '1':
         show_audit_panel = True
+    if request.GET.get('show_alerts') == '1':
+        show_alerts_panel = True
+        AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).update(
+            is_read=True,
+            read_at=timezone.now()
+        )
+    report_type = request.GET.get('report_type')
+    report_period = request.GET.get('report_period')
+    export_csv = request.GET.get('export_csv') == '1'
+    generated_report_data = None
+    generated_report_label = None
+    generated_report_items = []
+    report_email_form = ReportEmailForm(request.POST or None)
+    reconciliation_report_summary = None
+    export_reconciliation_csv = request.GET.get('export_reconciliation_csv') == '1'
+
     if request.GET.get('show_reports') == '1':
         show_reports_panel = True
     if request.GET.get('show_shipments') == '1':
         show_shipments_panel = True
+    if request.GET.get('show_reconciliation_reports') == '1':
+        show_reconciliation_reports_panel = True
     if request.GET.get('show_add_shipment') == '1':
         show_shipments_panel = True
         show_add_shipment_panel = True
-    edit_shipment_id = request.GET.get('edit_shipment')
-    if edit_shipment_id:
-        selected_shipment = Shipment.objects.filter(pk=edit_shipment_id).first()
+    if request.GET.get('show_reconciliation') == '1':
+        show_reconciliation_panel = True
+    if request.GET.get('show_add_reconciliation') == '1':
+        show_reconciliation_panel = True
+        show_add_reconciliation_panel = True
+    reconciliation_pk = request.GET.get('reconciliation_pk')
+    if reconciliation_pk:
+        selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
+        if selected_reconciliation:
+            show_reconciliation_panel = True
+    edit_shipment_pk = request.GET.get('edit_shipment_pk')
+    if edit_shipment_pk:
+        selected_shipment = get_object_by_uuid_pk(Shipment, edit_shipment_pk)
         if selected_shipment:
             show_shipments_panel = True
             show_edit_shipment_panel = True
@@ -723,9 +994,70 @@ def backup_dashboard(request):
     shipments = Shipment.objects.all().order_by('shipment_id')
     pending_users = User.objects.filter(verified=False).order_by('date_joined')
     reports = ReportTemplate.objects.all()
+    reconciliations = Reconciliation.objects.all().order_by('-reconciliation_date', '-created_at')
+    search_query = request.GET.get('search', '').strip()
+    reconciliation_report_summary = None
+
+    if show_reconciliation_reports_panel and search_query:
+        search_q = (
+            Q(reconciliation_id__icontains=search_query) |
+            Q(location__icontains=search_query) |
+            Q(status__icontains=search_query) |
+            Q(performed_by__username__icontains=search_query)
+        )
+        reconciliations = reconciliations.filter(search_q)
+
+    if show_reconciliation_reports_panel:
+        reconciliation_count = reconciliations.count()
+        total_issues = ReconciliationResult.objects.filter(reconciliation__in=reconciliations).count()
+        open_issues = ReconciliationResult.objects.filter(
+            reconciliation__in=reconciliations,
+            resolution_status__in=['Open', 'Under Investigation']
+        ).count()
+        completed_count = reconciliations.filter(status='Completed').count()
+        open_reconciliations = reconciliations.exclude(status='Completed').count()
+
+        reconciliation_report_summary = {
+            'total_reconciliations': reconciliation_count,
+            'total_discrepancies': total_issues,
+            'open_issues': open_issues,
+            'completed_reconciliations': completed_count,
+            'open_reconciliations': open_reconciliations,
+        }
+
+    for reconciliation in reconciliations:
+        reconciliation.total_issues = reconciliation.results.count()
+        reconciliation.open_issues = reconciliation.results.filter(resolution_status__in=['Open', 'Under Investigation']).count()
+    reconciliation_results = selected_reconciliation.results.order_by('-updated_at') if selected_reconciliation else ReconciliationResult.objects.none()
     recent_activities = AuditLog.objects.order_by('-timestamp')[:6]
     recent_alerts = AuditLog.objects.filter(severity__in=['warning', 'error']).order_by('-timestamp')[:5]
     audit_logs = AuditLog.objects.order_by('-timestamp')
+
+    if show_reports_panel and report_type and report_period:
+        if report_type == 'daily':
+            report_date = parse_date(report_period)
+            if report_date:
+                generated_report_data = generate_daily_report_data(report_date)
+                generated_report_label = f"Daily Report for {report_date.strftime('%Y-%m-%d')}"
+        elif report_type == 'monthly':
+            report_month = get_first_day_of_month(report_period)
+            if report_month:
+                generated_report_data = generate_monthly_report_data(report_month)
+                generated_report_label = f"Monthly Report for {report_month.strftime('%B %Y')}"
+        if generated_report_data:
+            generated_report_items = [
+                {
+                    'label': key.replace('_', ' ').title(),
+                    'value': value
+                }
+                for key, value in generated_report_data.items()
+                if key != 'period'
+            ]
+        if export_csv and generated_report_data:
+            return export_report_csv(report_type, report_period, generated_report_data)
+
+    if show_reconciliation_reports_panel and export_reconciliation_csv:
+        return export_reconciliation_report_csv(reconciliations, summary=reconciliation_report_summary)
 
     status_labels = ['Active', 'Off-Site', 'Scratch Eligible', 'Damaged']
     status_counts = [
@@ -746,7 +1078,7 @@ def backup_dashboard(request):
         'archived_tapes': archived_tapes,
         'retention_due': retention_due,
         'pending_shipments': shipments.filter(status__iexact='Pending').count(),
-        'alert_count': AuditLog.objects.filter(severity__in=['warning', 'error']).count(),
+        'alert_count': AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).count(),
         'shipments': shipments,
         'pending_users': pending_users,
         'pending_user_count': pending_users.count(),
@@ -764,17 +1096,34 @@ def backup_dashboard(request):
         'show_profile_panel': show_profile_panel,
         'show_settings_panel': show_settings_panel,
         'show_audit_panel': show_audit_panel,
+        'show_alerts_panel': show_alerts_panel,
         'show_reports_panel': show_reports_panel,
+        'show_reconciliation_reports_panel': show_reconciliation_reports_panel,
         'show_shipments_panel': show_shipments_panel,
         'show_add_shipment_panel': show_add_shipment_panel,
         'show_edit_shipment_panel': show_edit_shipment_panel,
+        'show_reconciliation_panel': show_reconciliation_panel,
+        'show_add_reconciliation_panel': show_add_reconciliation_panel,
         'add_shipment_form': add_shipment_form,
         'edit_shipment_form': edit_shipment_form,
         'selected_shipment': selected_shipment,
+        'reconciliation_form': reconciliation_form,
+        'reconciliation_result_form': reconciliation_result_form,
+        'reconciliations': reconciliations,
+        'reconciliation_results': reconciliation_results,
+        'selected_reconciliation': selected_reconciliation,
         'settings_form': settings_form,
         'profile_form': profile_form,
         'application_settings': application_settings,
         'reports': reports,
+        'generated_report_data': generated_report_data,
+        'generated_report_label': generated_report_label,
+        'report_type': report_type,
+        'report_period': report_period,
+        'report_email_form': report_email_form,
+        'search_query': search_query,
+        'reconciliation_report_summary': reconciliation_report_summary,
+        'report_export_url': f"{reverse('backup-dashboard')}?show_reconciliation_reports=1",
         'status_labels_json': json.dumps(status_labels),
         'status_counts_json': json.dumps(status_counts),
         'monthly_labels_json': json.dumps(monthly_labels),
@@ -803,3 +1152,91 @@ def add_tape(request):
             messages.error(request, 'Please correct the errors below and try again.')
 
     return render(request, 'add_tape.html', {'form': form})
+
+
+@user_passes_test(has_report_access, login_url='signin')
+@login_required(login_url='signin')
+def reconciliation_reports(request):
+    report_email_form = ReportEmailForm(request.POST or None)
+    search_query = request.GET.get('search', '').strip()
+    reconciliations = Reconciliation.objects.select_related(
+        'performed_by', 'reviewed_by', 'approved_by'
+    ).prefetch_related('results', 'results__tape').order_by('-reconciliation_date', '-created_at')
+
+    if search_query:
+        search_q = (
+            Q(reconciliation_id__icontains=search_query) |
+            Q(location__icontains=search_query) |
+            Q(status__icontains=search_query) |
+            Q(performed_by__username__icontains=search_query)
+        )
+        reconciliations = reconciliations.filter(search_q)
+
+    reconciliation_count = reconciliations.count()
+    total_issues = ReconciliationResult.objects.filter(reconciliation__in=reconciliations).count()
+    open_issues = ReconciliationResult.objects.filter(
+        reconciliation__in=reconciliations,
+        resolution_status__in=['Open', 'Under Investigation']
+    ).count()
+    completed_count = reconciliations.filter(status='Completed').count()
+    open_reconciliations = reconciliations.exclude(status='Completed').count()
+
+    reconciliation_report_summary = {
+        'total_reconciliations': reconciliation_count,
+        'total_discrepancies': total_issues,
+        'open_issues': open_issues,
+        'completed_reconciliations': completed_count,
+        'open_reconciliations': open_reconciliations,
+    }
+
+    for reconciliation in reconciliations:
+        reconciliation.total_issues = reconciliation.results.count()
+        reconciliation.open_issues = reconciliation.results.filter(
+            resolution_status__in=['Open', 'Under Investigation']
+        ).count()
+
+    if request.GET.get('export_reconciliation_csv') == '1':
+        return export_reconciliation_report_csv(reconciliations, summary=reconciliation_report_summary)
+
+    if request.method == 'POST' and report_email_form.is_valid():
+        recipients = report_email_form.cleaned_data['recipients']
+        subject = report_email_form.cleaned_data['subject']
+        message = report_email_form.cleaned_data['message']
+        summary_lines = [f"{key.replace('_', ' ').title()}: {value}" for key, value in reconciliation_report_summary.items()]
+        report_body = message + '\n\n' + '\n'.join(summary_lines)
+        send_report_email(subject, report_body, recipients)
+        AuditLog.objects.create(
+            name='Reconciliation Report Sent',
+            action=f'Sent reconciliation report summary to {", ".join(recipients)}',
+            user=request.user,
+            severity='info',
+        )
+        messages.success(request, 'Reconciliation report summary sent successfully.')
+        return redirect('reconciliation-reports')
+
+    context = {
+        'report_email_form': report_email_form,
+        'reconciliations': reconciliations,
+        'search_query': search_query,
+        'summary': reconciliation_report_summary,
+        'selected_tab': 'reconciliation_reports',
+        'report_export_url': reverse('reconciliation-reports'),
+    }
+    return render(request, 'reconciliation_reports.html', context)
+
+
+@user_passes_test(has_report_access, login_url='signin')
+@login_required(login_url='signin')
+def reconciliation_report_detail(request, pk):
+    reconciliation = get_object_or_404(
+        Reconciliation.objects.select_related('performed_by', 'reviewed_by', 'approved_by').prefetch_related('results', 'results__tape'),
+        pk=pk
+    )
+    total_issues = reconciliation.results.count()
+    open_issues = reconciliation.results.filter(resolution_status__in=['Open', 'Under Investigation']).count()
+    context = {
+        'reconciliation': reconciliation,
+        'total_issues': total_issues,
+        'open_issues': open_issues,
+    }
+    return render(request, 'report_detail.html', context)

@@ -119,8 +119,9 @@ footer{
     <a href="{% url 'backup-dashboard' %}?show_tape_inventory=1"><i class="bi bi-hdd-stack"></i> Tape Inventory</a>
     <a href="{% url 'backup-dashboard' %}?show_shipments=1"><i class="bi bi-truck"></i> Shipments</a>
     <a href="{% url 'backup-dashboard' %}?show_settings=1"><i class="bi bi-gear"></i> Settings</a>
-    <a href="{% url 'backup-dashboard' %}"><i class="bi bi-arrow-repeat"></i> Reconciliation</a>
+    <a href="{% url 'backup-dashboard' %}?show_reconciliation=1"><i class="bi bi-arrow-repeat"></i> Reconciliation</a>
     <a href="{% url 'backup-dashboard' %}?show_reports=1"><i class="bi bi-file-earmark-bar-graph"></i> Reports</a>
+    <a href="{% url 'backup-dashboard' %}?show_reconciliation_reports=1"><i class="bi bi-bar-chart-line-fill"></i> Reconciliation Reports</a>
     <a href="{% url 'backup-dashboard' %}?show_audit=1"><i class="bi bi-shield-check"></i> Audit Logs</a>
     <a href="{% url 'signout' %}" class="btn btn-danger"><i class="bi bi-box-arrow-left"></i> Logout</a>
 
@@ -145,13 +146,13 @@ footer{
 
     <div class="ms-auto d-flex align-items-center">
 
-        <button class="btn btn-light position-relative me-3">
+        <a href="{% url 'backup-dashboard' %}?show_alerts=1" class="btn btn-light position-relative me-3 text-decoration-none text-dark">
             <i class="bi bi-bell"></i>
-
             <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">
-                3
+                {{ alert_count }}
             </span>
-        </button>
+            <span class="visually-hidden">View notifications</span>
+        </a>
 
         <div class="dropdown">
 
@@ -223,12 +224,344 @@ footer{
         </div>
     </div>
 </div>
+{% elif show_alerts_panel %}
+<div class="card shadow-sm mb-4" style="min-height:70vh;">
+    <div class="card-header">
+        Recent Alerts
+    </div>
+    <div class="card-body">
+        {% if recent_alerts %}
+            {% for alert in recent_alerts %}
+                {% if alert.severity == 'error' %}
+                    <div class="alert alert-danger">
+                {% else %}
+                    <div class="alert alert-warning">
+                {% endif %}
+                        {{ alert.action|default:alert.name }}
+                    </div>
+            {% endfor %}
+        {% else %}
+            <div class="alert alert-secondary">
+                No alerts to show.
+            </div>
+        {% endif %}
+    </div>
+</div>
+{% elif show_reconciliation_panel %}
+<div class="card shadow-sm mb-4" style="min-height:70vh;">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+            <h5 class="mb-0">Reconciliation Management</h5>
+            <small class="text-muted">Track reconciliation sessions, tape discrepancies, and resolution status.</small>
+        </div>
+        <button id="toggle-reconciliation-form" type="button" class="btn btn-sm btn-primary">
+            <i class="bi bi-plus-circle me-1"></i> New Reconciliation
+        </button>
+    </div>
+    <div class="card-body">
+        <div id="new-reconciliation-form-card" class="card mb-4" style="display: {% if show_add_reconciliation_panel %}block{% else %}none{% endif %};">
+            <div class="card-body">
+                <h6 class="fw-semibold mb-3">Start New Reconciliation</h6>
+                <form method="post" action="{% url 'backup-dashboard' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="form_type" value="add_reconciliation">
+                    {{ reconciliation_form.non_field_errors }}
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Location</label>
+                            {{ reconciliation_form.location }}
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Status</label>
+                            {{ reconciliation_form.status }}
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">Notes</label>
+                            {{ reconciliation_form.notes }}
+                        </div>
+                    </div>
+                    <div class="mt-3">
+                        <button type="submit" class="btn btn-primary">Create Reconciliation</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        {% if selected_reconciliation %}
+        <div class="card mb-4">
+            <div class="card-body">
+                <h6 class="fw-semibold mb-3">Reconciliation Details</h6>
+                <div class="row g-3 mb-3">
+                    <div class="col-md-4">
+                        <strong>ID</strong>
+                        <div>{{ selected_reconciliation.reconciliation_id }}</div>
+                    </div>
+                    <div class="col-md-4">
+                        <strong>Date</strong>
+                        <div>{{ selected_reconciliation.reconciliation_date|date:'Y-m-d' }}</div>
+                    </div>
+                    <div class="col-md-4">
+                        <strong>Status</strong>
+                        <div>{{ selected_reconciliation.status }}</div>
+                    </div>
+                </div>
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <strong>Location</strong>
+                        <div>{{ selected_reconciliation.location }}</div>
+                    </div>
+                    <div class="col-md-6">
+                        <strong>Performed By</strong>
+                        <div>{% if selected_reconciliation.performed_by %}{{ selected_reconciliation.performed_by.username }}{% else %}<span class="text-muted">Unknown</span>{% endif %}</div>
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <strong>Notes</strong>
+                    <p class="text-muted">{{ selected_reconciliation.notes|default:'No notes provided.' }}</p>
+                </div>
+                <div class="mt-4">
+                    <h6 class="fw-semibold">Report a Discrepancy</h6>
+                    <form method="post" action="{% url 'backup-dashboard' %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="form_type" value="add_reconciliation_result">
+                        <input type="hidden" name="reconciliation_pk" value="{{ selected_reconciliation.id }}">
+                        {{ reconciliation_result_form.non_field_errors }}
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <label class="form-label">Tape</label>
+                                {{ reconciliation_result_form.tape }}
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Issue Type</label>
+                                {{ reconciliation_result_form.issue_type }}
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Resolution Status</label>
+                                {{ reconciliation_result_form.resolution_status }}
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Expected Location</label>
+                                {{ reconciliation_result_form.expected_location }}
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Actual Location</label>
+                                {{ reconciliation_result_form.actual_location }}
+                            </div>
+                            <div class="col-12">
+                                <label class="form-label">Remarks</label>
+                                {{ reconciliation_result_form.remarks }}
+                            </div>
+                        </div>
+                        <div class="mt-3 text-end">
+                            <button type="submit" class="btn btn-primary">Save Discrepancy</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="table-responsive">
+            <table class="table table-hover table-sm align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th scope="col">Reconciliation ID</th>
+                        <th scope="col">Location</th>
+                        <th scope="col">Date</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Performed By</th>
+                        <th scope="col">Discrepancies</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for reconciliation in reconciliations %}
+                        <tr>
+                            <td class="fw-semibold">{{ reconciliation.reconciliation_id }}</td>
+                            <td>{{ reconciliation.location }}</td>
+                            <td>{{ reconciliation.reconciliation_date|date:'Y-m-d' }}</td>
+                            <td>{{ reconciliation.status }}</td>
+                            <td>{% if reconciliation.performed_by %}{{ reconciliation.performed_by.username }}{% else %}<span class="text-muted">Unknown</span>{% endif %}</td>
+                            <td>{{ reconciliation.total_issues }}</td>
+                            <td>
+                                <a href="{% url 'backup-dashboard' %}?show_reconciliation=1&reconciliation_pk={{ reconciliation.id }}" class="btn btn-sm btn-outline-secondary">View</a>
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr>
+                            <td colspan="7" class="text-center text-muted">No reconciliations found.</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% elif show_reconciliation_reports_panel %}
+<div class="card shadow-sm mb-4" style="min-height:70vh;">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+            <h5 class="mb-0">Reconciliation Reports</h5>
+            <small class="text-muted">Review reconciliation history, issue counts, and export session summaries.</small>
+        </div>
+        <div class="btn-toolbar gap-2">
+            <a href="{{ report_export_url }}&export_reconciliation_csv=1{% if search_query %}&search={{ search_query|urlencode }}{% endif %}" class="btn btn-outline-primary btn-sm">
+                <i class="bi bi-file-earmark-spreadsheet me-1"></i> Export CSV
+            </a>
+            <a href="{% url 'backup-dashboard' %}?show_reports=1" class="btn btn-secondary btn-sm">
+                <i class="bi bi-file-earmark-bar-graph me-1"></i> Dashboard Reports
+            </a>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="row g-3 mb-4">
+            <div class="col-12">
+                <form method="get" class="row g-2 align-items-end">
+                    <input type="hidden" name="show_reconciliation_reports" value="1">
+                    <div class="col-md-8">
+                        <label class="form-label visually-hidden" for="reconciliation-search">Search</label>
+                        <input id="reconciliation-search" type="search" name="search" class="form-control" placeholder="Search by ID, location, status, or user" value="{{ search_query|default_if_none:'' }}">
+                    </div>
+                    <div class="col-md-auto d-flex gap-2">
+                        <button type="submit" class="btn btn-primary">Search</button>
+                        <a href="{% url 'backup-dashboard' %}?show_reconciliation_reports=1" class="btn btn-link">Reset</a>
+                    </div>
+                </form>
+            </div>
+            <div class="col-lg-7">
+                <div class="row row-cols-1 row-cols-md-2 g-3">
+                    <div class="col">
+                        <div class="card border-0 shadow-sm">
+                            <div class="card-body d-flex justify-content-between align-items-center">
+                                <span>Total Reconciliations</span>
+                                <span class="badge bg-primary rounded-pill">{{ reconciliation_report_summary.total_reconciliations|default:0 }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="card border-0 shadow-sm">
+                            <div class="card-body d-flex justify-content-between align-items-center">
+                                <span>Total Discrepancies</span>
+                                <span class="badge bg-warning rounded-pill">{{ reconciliation_report_summary.total_discrepancies|default:0 }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="card border-0 shadow-sm">
+                            <div class="card-body d-flex justify-content-between align-items-center">
+                                <span>Open Issues</span>
+                                <span class="badge bg-danger rounded-pill">{{ reconciliation_report_summary.open_issues|default:0 }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="card border-0 shadow-sm">
+                            <div class="card-body d-flex justify-content-between align-items-center">
+                                <span>Open Sessions</span>
+                                <span class="badge bg-secondary rounded-pill">{{ reconciliation_report_summary.open_reconciliations|default:0 }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-hover table-sm align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th scope="col">ID</th>
+                        <th scope="col">Date</th>
+                        <th scope="col">Location</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Performed By</th>
+                        <th scope="col">Issues</th>
+                        <th scope="col">Open</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for reconciliation in reconciliations %}
+                        <tr>
+                            <td class="fw-semibold">{{ reconciliation.reconciliation_id }}</td>
+                            <td>{{ reconciliation.reconciliation_date|date:'Y-m-d' }}</td>
+                            <td>{{ reconciliation.location }}</td>
+                            <td>{{ reconciliation.status }}</td>
+                            <td>{% if reconciliation.performed_by %}{{ reconciliation.performed_by.username }}{% else %}<span class="text-muted">Unknown</span>{% endif %}</td>
+                            <td>{{ reconciliation.total_issues }}</td>
+                            <td>{{ reconciliation.open_issues }}</td>
+                            <td>
+                                <a href="{% url 'backup-dashboard' %}?show_reconciliation=1&reconciliation_pk={{ reconciliation.id }}" class="btn btn-sm btn-outline-secondary">Open</a>
+                            </td>
+                        </tr>
+                    {% empty %}
+                        <tr>
+                            <td colspan="8" class="text-center text-muted">No reconciliation sessions found.</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
 {% elif show_reports_panel %}
 <div class="card shadow-sm mb-4" style="min-height:70vh;">
     <div class="card-header">
         All Reports
     </div>
     <div class="card-body">
+        {% if generated_report_data %}
+        <div class="card mb-4">
+            <div class="card-header">
+                {{ generated_report_label }}
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-bordered table-sm mb-0">
+                        <tbody>
+                            {% for item in generated_report_items %}
+                                <tr>
+                                    <th class="text-capitalize">{{ item.label }}</th>
+                                    <td>{{ item.value }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="card mb-4">
+            <div class="card-body">
+                <form method="get" action="{% url 'backup-dashboard' %}" class="row g-3 align-items-end">
+                    <input type="hidden" name="show_reports" value="1">
+                    <div class="col-md-3">
+                        <label class="form-label">Report Type</label>
+                        <select id="report_type" class="form-select" name="report_type">
+                            <option value="daily" {% if report_type == 'daily' %}selected{% endif %}>Daily</option>
+                            <option value="monthly" {% if report_type == 'monthly' or not report_type %}selected{% endif %}>Monthly</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Report Period</label>
+                        {% if report_type == 'daily' %}
+                            <input id="report_period" type="date" class="form-control" name="report_period" value="{{ report_period|default:'' }}">
+                        {% else %}
+                            <input id="report_period" type="month" class="form-control" name="report_period" value="{{ report_period|default:'' }}">
+                        {% endif %}
+                        <div class="form-text">Select a month for monthly reports or a date for daily reports.</div>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-primary w-100" type="submit">Generate</button>
+                    </div>
+                    <div class="col-md-3">
+                        {% if generated_report_data %}
+                            <button class="btn btn-outline-secondary w-100" type="submit" name="export_csv" value="1">Export CSV</button>
+                        {% endif %}
+                    </div>
+                </form>
+            </div>
+        </div>
+
         <div class="table-responsive">
             <table class="table table-hover table-sm align-middle mb-0">
                 <thead class="table-light">
@@ -334,7 +667,7 @@ footer{
                 <form method="post" action="{% url 'backup-dashboard' %}">
                     {% csrf_token %}
                     <input type="hidden" name="form_type" value="edit_shipment">
-                    <input type="hidden" name="shipment_id" value="{{ selected_shipment.id }}">
+                    <input type="hidden" name="shipment_pk" value="{{ selected_shipment.id }}">
                     {{ edit_shipment_form.non_field_errors }}
                     <div class="row g-3">
                         <div class="col-md-4">
@@ -417,7 +750,7 @@ footer{
                             <td>{{ shipment.destination_location|default:'-' }}</td>
                             <td>{{ shipment.expected_delivery_date|date:"Y-m-d"|default:'-' }}</td>
                             <td>
-                                <a href="{% url 'backup-dashboard' %}?edit_shipment={{ shipment.id }}&show_shipments=1" class="btn btn-sm btn-outline-secondary">Edit</a>
+                                <a href="{% url 'backup-dashboard' %}?edit_shipment_pk={{ shipment.id }}&show_shipments=1" class="btn btn-sm btn-outline-secondary">Edit</a>
                             </td>
                         </tr>
                     {% empty %}
@@ -741,6 +1074,8 @@ footer{
                                 <li class="list-group-item">Backup retention: <strong>{{ application_settings.backup_retention_days }} days</strong></li>
                                 <li class="list-group-item">Audit log level: <strong>{{ application_settings.audit_logging_level|title }}</strong></li>
                                 <li class="list-group-item">Max tapes/shipment: <strong>{{ application_settings.max_tapes_per_shipment }}</strong></li>
+                                <li class="list-group-item">Shipment notifications: <strong>{{ application_settings.shipment_notification_enabled|yesno:"Enabled,Disabled" }}</strong></li>
+                                <li class="list-group-item">Email alerts: <strong>{{ application_settings.email_alerts_enabled|yesno:"Enabled,Disabled" }}</strong></li>
                                 <li class="list-group-item">Default landing panel: <strong>{{ application_settings.get_default_dashboard_section_display }}</strong></li>
                                 <li class="list-group-item">Maintenance window: <strong>{{ application_settings.maintenance_window_start }} - {{ application_settings.maintenance_window_end }}</strong></li>
                             </ul>
@@ -1036,12 +1371,13 @@ footer{
 
     </div>
 
+</div>
+
+
+
+</div>
+
 {% endif %}
-</div>
-
-
-
-</div>
 
 </div>
 
@@ -1090,6 +1426,24 @@ new Chart(document.getElementById('monthlyChart'), {
         }
     }
 });
+
+const toggleReconciliationForm = document.getElementById('toggle-reconciliation-form');
+const reconciliationFormCard = document.getElementById('new-reconciliation-form-card');
+if (toggleReconciliationForm && reconciliationFormCard) {
+    toggleReconciliationForm.addEventListener('click', () => {
+        if (reconciliationFormCard.style.display === 'none' || reconciliationFormCard.style.display === '') {
+            reconciliationFormCard.style.display = 'block';
+            toggleReconciliationForm.classList.remove('btn-primary');
+            toggleReconciliationForm.classList.add('btn-secondary');
+            toggleReconciliationForm.innerHTML = '<i class="bi bi-x-circle me-1"></i> Close Form';
+        } else {
+            reconciliationFormCard.style.display = 'none';
+            toggleReconciliationForm.classList.remove('btn-secondary');
+            toggleReconciliationForm.classList.add('btn-primary');
+            toggleReconciliationForm.innerHTML = '<i class="bi bi-plus-circle me-1"></i> New Reconciliation';
+        }
+    });
+}
 
 </script>
 

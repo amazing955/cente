@@ -1,8 +1,9 @@
 from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Group
+from django.core.validators import validate_email
 
-from .models import ApplicationSetting, CustomUser, Shipment, Tape
+from .models import ApplicationSetting, CustomUser, Reconciliation, ReconciliationResult, Shipment, Tape
 
 
 class CustomUserCreationForm(UserCreationForm):
@@ -244,6 +245,79 @@ class ShipmentForm(forms.ModelForm):
         self.fields['received_by'].required = False
         self.fields['delivery_status'].required = False
         self.fields['delivery_notes'].required = False
+
+
+class ReconciliationForm(forms.ModelForm):
+    class Meta:
+        model = Reconciliation
+        fields = [
+            'location',
+            'status',
+            'notes',
+        ]
+        widgets = {
+            'location': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter reconciliation location', 'required': True}),
+            'status': forms.Select(attrs={'class': 'form-select'}),
+            'notes': forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Add reconciliation notes'}),
+        }
+
+
+class ReconciliationResultForm(forms.ModelForm):
+    class Meta:
+        model = ReconciliationResult
+        fields = [
+            'tape',
+            'issue_type',
+            'expected_location',
+            'actual_location',
+            'remarks',
+            'resolution_status',
+        ]
+        widgets = {
+            'tape': forms.Select(attrs={'class': 'form-select'}),
+            'issue_type': forms.Select(attrs={'class': 'form-select'}),
+            'expected_location': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Expected tape location'}),
+            'actual_location': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Actual tape location'}),
+            'remarks': forms.Textarea(attrs={'class': 'form-control', 'rows': 3, 'placeholder': 'Describe any discrepancy'}),
+            'resolution_status': forms.Select(attrs={'class': 'form-select'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['tape'].queryset = Tape.objects.order_by('volser')
+        self.fields['tape'].required = False
+        self.fields['remarks'].required = False
+
+
+class ReportEmailForm(forms.Form):
+    recipients = forms.CharField(
+        widget=forms.Textarea(attrs={'class': 'form-control', 'placeholder': 'email1@example.com, email2@example.com', 'rows': 2}),
+        label='Recipients',
+        help_text='Separate multiple addresses with commas.',
+        required=True,
+    )
+    subject = forms.CharField(
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Email Subject'}),
+        label='Subject',
+        required=True,
+    )
+    message = forms.CharField(
+        widget=forms.Textarea(attrs={'class': 'form-control', 'placeholder': 'Optional message to include in the email', 'rows': 4}),
+        label='Message',
+        required=False,
+    )
+
+    def clean_recipients(self):
+        recipients_text = self.cleaned_data.get('recipients', '')
+        emails = [email.strip() for email in recipients_text.split(',') if email.strip()]
+        if not emails:
+            raise forms.ValidationError('Please enter at least one recipient email address.')
+        for email in emails:
+            try:
+                validate_email(email)
+            except forms.ValidationError:
+                raise forms.ValidationError(f'Invalid email address: {email}')
+        return emails
 
 
 class SystemSettingsForm(forms.ModelForm):

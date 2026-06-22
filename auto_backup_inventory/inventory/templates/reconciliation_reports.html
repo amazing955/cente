@@ -1,0 +1,139 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Reconciliation Reports{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="mb-1">Reconciliation Reports</h2>
+            <p class="text-muted mb-0">Comprehensive reconciliation history, discrepancy summaries, and export-ready reporting.</p>
+        </div>
+        <div class="btn-toolbar gap-2">
+            <a href="{{ report_export_url }}?export_reconciliation_csv=1{% if search_query %}&search={{ search_query|urlencode }}{% endif %}" class="btn btn-outline-primary">
+                <i class="bi bi-file-earmark-spreadsheet me-1"></i> Export CSV
+            </a>
+            <a href="{% url 'backup-dashboard' %}?show_reports=1" class="btn btn-secondary">
+                <i class="bi bi-speedometer2 me-1"></i> Dashboard Reports
+            </a>
+        </div>
+    </div>
+
+    <div class="row gy-4">
+        <div class="col-lg-4">
+            <div class="card shadow-sm mt-4">
+                <div class="card-header">
+                    Search Reconciliation Sessions
+                </div>
+                <div class="card-body">
+                    <form method="get" class="d-flex gap-2">
+                        <input type="search" name="search" class="form-control" placeholder="Search by ID, location, status, or user" value="{{ search_query|default_if_none:'' }}">
+                        <button type="submit" class="btn btn-primary">Search</button>
+                    </form>
+                </div>
+            </div>
+            <div class="card shadow-sm mt-4">
+                <div class="card-header">
+                    Report Summary
+                </div>
+                <div class="card-body">
+                    <ul class="list-group list-group-flush">
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            Total Reconciliations
+                            <span class="badge bg-primary rounded-pill">{{ summary.total_reconciliations }}</span>
+                        </li>
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            Total Discrepancies
+                            <span class="badge bg-warning rounded-pill">{{ summary.total_discrepancies }}</span>
+                        </li>
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            Open Issues
+                            <span class="badge bg-danger rounded-pill">{{ summary.open_issues }}</span>
+                        </li>
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            Completed Sessions
+                            <span class="badge bg-success rounded-pill">{{ summary.completed_reconciliations }}</span>
+                        </li>
+                        <li class="list-group-item d-flex justify-content-between align-items-center">
+                            Open Sessions
+                            <span class="badge bg-secondary rounded-pill">{{ summary.open_reconciliations }}</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="card shadow-sm mt-4">
+                <div class="card-header">
+                    Send Report Summary
+                </div>
+                <div class="card-body">
+                    <form method="post" novalidate>
+                        {% csrf_token %}
+                        {{ report_email_form.as_p }}
+                        <button type="submit" class="btn btn-outline-success">Send Email</button>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="mb-0">Recent Reconciliation Sessions</h5>
+                        <small class="text-muted">Review session metrics, status, and issue counts.</small>
+                    </div>
+                    <span class="badge bg-primary">{{ reconciliations.count }} sessions</span>
+                </div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead class="table-secondary">
+                                <tr>
+                                    <th scope="col">ID</th>
+                                    <th scope="col">Date</th>
+                                    <th scope="col">Location</th>
+                                    <th scope="col">Status</th>
+                                    <th scope="col">Performed By</th>
+                                    <th scope="col">Issues</th>
+                                    <th scope="col">Open</th>
+                                    <th scope="col">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for reconciliation in reconciliations %}
+                                    <tr>
+                                        <td class="fw-semibold">{{ reconciliation.reconciliation_id }}</td>
+                                        <td>{{ reconciliation.reconciliation_date|date:'Y-m-d' }}</td>
+                                        <td>{{ reconciliation.location }}</td>
+                                        <td>
+                                            <span class="badge bg-secondary text-uppercase">{{ reconciliation.status }}</span>
+                                        </td>
+                                        <td>
+                                            {% if reconciliation.performed_by %}
+                                                {{ reconciliation.performed_by.username }}
+                                            {% else %}
+                                                System
+                                            {% endif %}
+                                        </td>
+                                        <td>{{ reconciliation.total_issues }}</td>
+                                        <td>{{ reconciliation.open_issues }}</td>
+                                        <td>
+                                            <a href="{% url 'reconciliation-report-detail' reconciliation.pk %}" class="btn btn-sm btn-outline-primary">View</a>
+                                        </td>
+                                    </tr>
+                                {% empty %}
+                                    <tr>
+                                        <td colspan="8" class="text-center text-muted">No reconciliation sessions found.</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
