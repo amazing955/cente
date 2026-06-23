@@ -1,0 +1,90 @@
+{% extends 'courier_base.html' %}
+{% block title %}Pickup Confirmation{% endblock %}
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h1 class="h3">Pickup Confirmation</h1>
+        <p class="text-muted">Capture courier pickup details and manifest verification before leaving the banking vault.</p>
+    </div>
+    <div class="col-md-4 text-end">
+        <a href="{% url 'assigned-shipments' %}" class="btn btn-outline-secondary">Back to Assigned Shipments</a>
+    </div>
+</div>
+
+{% if messages %}
+<div class="mb-3">
+    {% for message in messages %}
+    <div class="alert alert-{{ message.tags }} py-2">{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="card shadow-sm border-0">
+    <div class="card-body">
+        <h5 class="mb-4">Shipment {{ shipment.shipment_id }}</h5>
+        <form method="post">
+            {% csrf_token %}
+            {{ form.non_field_errors }}
+            <div class="row g-3">
+                <div class="col-md-6">
+                    {{ form.manifest_reference.label_tag }}
+                    {{ form.manifest_reference }}
+                    {% if form.manifest_reference.errors %}
+                        <div class="invalid-feedback d-block">{{ form.manifest_reference.errors.0 }}</div>
+                    {% endif %}
+                </div>
+                <div class="col-md-3">
+                    {{ form.pickup_date.label_tag }}
+                    {{ form.pickup_date }}
+                </div>
+                <div class="col-md-3">
+                    {{ form.pickup_time.label_tag }}
+                    {{ form.pickup_time }}
+                </div>
+            </div>
+            <div class="row g-3 mt-3">
+                <div class="col-md-6">
+                    {{ form.pickup_location.label_tag }}
+                    {{ form.pickup_location }}
+                </div>
+                <div class="col-md-6">
+                    {{ form.notes.label_tag }}
+                    {{ form.notes }}
+                </div>
+            </div>
+            <div class="row g-3 mt-3">
+                <div class="col-md-4">
+                    <div class="form-check">
+                        {{ form.all_tapes_scanned }} {{ form.all_tapes_scanned.label_tag }}
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-check">
+                        {{ form.manifest_verified }} {{ form.manifest_verified.label_tag }}
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-check">
+                        {{ form.tape_count_matched }} {{ form.tape_count_matched.label_tag }}
+                    </div>
+                </div>
+            </div>
+            <div class="row g-3 mt-3">
+                <div class="col-md-4">
+                    <div class="form-check">
+                        {{ form.no_damaged_tapes }} {{ form.no_damaged_tapes.label_tag }}
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-check">
+                        {{ form.custody_accepted }} {{ form.custody_accepted.label_tag }}
+                    </div>
+                </div>
+            </div>
+            <div class="mt-4 text-end">
+                <button type="submit" class="btn btn-primary">Save Pickup Confirmation</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

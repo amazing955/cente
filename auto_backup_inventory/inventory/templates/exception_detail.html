@@ -1,0 +1,87 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Exception Review | {{ exception.exception_id }}{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="mb-1">{{ exception.exception_id }}</h2>
+            <p class="text-muted mb-0">Shipment {{ exception.shipment.shipment_id }} · {{ exception.exception_type }}</p>
+        </div>
+        <a href="{% url 'operations-dashboard' %}" class="btn btn-secondary">
+            <i class="bi bi-arrow-left me-1"></i> Back to Operations
+        </a>
+    </div>
+
+    <div class="row gy-4">
+        <div class="col-lg-4">
+            <div class="card shadow-sm mb-4">
+                <div class="card-header">Exception Summary</div>
+                <div class="card-body">
+                    <dl class="row mb-0">
+                        <dt class="col-5">Status</dt>
+                        <dd class="col-7">{{ exception.status }}</dd>
+                        <dt class="col-5">Severity</dt>
+                        <dd class="col-7">{{ exception.severity }}</dd>
+                        <dt class="col-5">Reported By</dt>
+                        <dd class="col-7">
+                            {% if exception.reported_by %}
+                                {{ exception.reported_by.username }}
+                            {% else %}
+                                System
+                            {% endif %}
+                        </dd>
+                        <dt class="col-5">Reported</dt>
+                        <dd class="col-7">{{ exception.reported_date|date:'M d, Y H:i' }}</dd>
+                        <dt class="col-5">Shipment</dt>
+                        <dd class="col-7">{{ exception.shipment.shipment_id }}</dd>
+                        <dt class="col-5">Tape</dt>
+                        <dd class="col-7">
+                            {% if exception.tape %}
+                                {{ exception.tape.volser }}
+                            {% else %}
+                                N/A
+                            {% endif %}
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+
+            <div class="card shadow-sm">
+                <div class="card-header">Action</div>
+                <div class="card-body">
+                    <p class="mb-3 text-muted">Use this page to review the exception details and route to the correct investigation workflow.</p>
+                    <a href="{% url 'operations-dashboard' %}#exception_management" class="btn btn-primary">Return to Exception Management</a>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-header">Description</div>
+                <div class="card-body">
+                    <p class="mb-0">{{ exception.description|linebreaksbr }}</p>
+                </div>
+            </div>
+
+            <div class="card shadow-sm mt-4">
+                <div class="card-header">Shipment Details</div>
+                <div class="card-body">
+                    <dl class="row mb-0">
+                        <dt class="col-5">Source</dt>
+                        <dd class="col-7">{{ exception.shipment.source_location }}</dd>
+                        <dt class="col-5">Destination</dt>
+                        <dd class="col-7">{{ exception.shipment.destination_location }}</dd>
+                        <dt class="col-5">Shipment Date</dt>
+                        <dd class="col-7">{{ exception.shipment.shipment_date|date:'M d, Y' }}</dd>
+                        <dt class="col-5">Expected Delivery</dt>
+                        <dd class="col-7">{{ exception.shipment.expected_delivery_date|date:'M d, Y' }}</dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

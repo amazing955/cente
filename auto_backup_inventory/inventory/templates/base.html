@@ -17,20 +17,105 @@
             margin-bottom: 1.5rem;
             padding-bottom: 1rem;
         }
+        .app-sidebar {
+            min-height: calc(100vh - 72px);
+            background: #ffffff;
+            border-right: 1px solid #e9ecef;
+            padding: 1.5rem 1rem;
+        }
+        .sidebar-logo {
+            display: flex;
+            align-items: center;
+            margin-bottom: 1.75rem;
+        }
+        .sidebar-logo .bi {
+            font-size: 1.75rem;
+            color: #0d6efd;
+            margin-right: 0.75rem;
+        }
+        .sidebar-logo h4 {
+            margin: 0;
+            font-size: 1.15rem;
+            font-weight: 700;
+        }
+        .sidebar-menu .nav-link {
+            color: #495057;
+            border-radius: 0.5rem;
+            padding: 0.75rem 1rem;
+        }
+        .sidebar-menu .nav-link:hover,
+        .sidebar-menu .nav-link.active {
+            background-color: #f8f9fa;
+            color: #0d6efd;
+        }
+        .app-sidebar-dark {
+            background: linear-gradient(135deg,#0548ad,#001f54);
+            color: #ffffff;
+            border: none;
+            padding: 0;
+        }
+        .app-sidebar-dark .sidebar-logo {
+            display: flex;
+            align-items: center;
+            flex-direction: column;
+            text-align: center;
+            padding: 2rem 1.25rem;
+            margin-bottom: 0;
+        }
+        .app-sidebar-dark .sidebar-logo img {
+            width: 72px;
+            height: 72px;
+            object-fit: cover;
+            margin-bottom: 1rem;
+            border: 2px solid rgba(255,255,255,.85);
+        }
+        .app-sidebar-dark .sidebar-logo h3,
+        .app-sidebar-dark .sidebar-logo small {
+            color: #ffffff;
+        }
+        .app-sidebar-dark .sidebar-logo h3 {
+            margin-bottom: 0.25rem;
+            font-size: 1.2rem;
+        }
+        .app-sidebar-dark .sidebar-menu .nav-link {
+            color: rgba(255,255,255,.85);
+            border-radius: 1rem;
+            padding: 0.85rem 1rem;
+        }
+        .app-sidebar-dark .sidebar-menu .nav-link:hover,
+        .app-sidebar-dark .sidebar-menu .nav-link.active {
+            background: rgba(255,255,255,.12);
+            color: #ffffff;
+        }
+        .app-sidebar-dark .sidebar-menu .nav-link.text-danger {
+            color: #ffb3b3;
+        }
+        .app-sidebar-dark .sidebar-menu .nav-link.text-danger:hover {
+            color: #ffffff;
+        }
     </style>
 </head>
 <body>
-<nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm">
-    <div class="container-fluid">
-        <a class="navbar-brand fw-bold" href="{% url 'backup-dashboard' %}">Tape Inventory</a>
-        <div class="d-flex gap-2">
-            <a class="btn btn-outline-secondary" href="{% url 'backup-dashboard' %}"><i class="bi bi-speedometer2"></i> Dashboard</a>
-            <a class="btn btn-outline-secondary" href="{% url 'reconciliation-reports' %}"><i class="bi bi-file-earmark-bar-graph"></i> Reconciliation Reports</a>
-        </div>
-    </div>
-</nav>
 <div class="container-fluid py-4">
-    {% block content %}{% endblock %}
+    <div class="row g-4">
+        <aside class="col-12 col-xl-3 col-xxl-2 d-none d-xl-block app-sidebar {% block sidebar_class %}{% endblock %}">
+            {% block sidebar %}
+            <div class="sidebar-logo">
+                <i class="bi bi-truck"></i>
+                <div>
+                    <h4>Courier Hub</h4>
+                    <small class="text-muted">Route Control</small>
+                </div>
+            </div>
+            <nav class="nav flex-column sidebar-menu">
+                <a class="nav-link active" href="#">Courier Dashboard</a>
+            </nav>
+            {% endblock %}
+        </aside>
+        <main class="col-12 col-xl-9 col-xxl-10">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>

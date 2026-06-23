@@ -1,0 +1,73 @@
+{% extends 'courier_base.html' %}
+{% block title %}Manifest Details{% endblock %}
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h1 class="h3">Manifest Details</h1>
+        <p class="text-muted">Review the shipment manifest and tape custody details for {{ shipment.shipment_id }}.</p>
+    </div>
+    <div class="col-md-4 text-end">
+        <a href="{% url 'assigned-shipments' %}" class="btn btn-outline-secondary">Back to Assigned Shipments</a>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-lg-6">
+        <div class="card shadow-sm border-0">
+            <div class="card-body">
+                <h5 class="mb-3">Shipment Summary</h5>
+                <p><strong>Type:</strong> {{ shipment.shipment_type }}</p>
+                <p><strong>Status:</strong> {{ shipment.status }}</p>
+                <p><strong>Destination:</strong> {{ shipment.destination_location|default:'N/A' }}</p>
+                <p><strong>Courier:</strong> {{ shipment.courier_name|default:'N/A' }}</p>
+                <p><strong>Tracking #:</strong> {{ shipment.tracking_number|default:'N/A' }}</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card shadow-sm border-0">
+            <div class="card-body">
+                <h5 class="mb-3">Custody Details</h5>
+                <p><strong>Source:</strong> {{ shipment.source_location|default:'N/A' }}</p>
+                <p><strong>Releasing Custodian:</strong> {{ shipment.releasing_custodian|default:'N/A' }}</p>
+                <p><strong>Receiving Organization:</strong> {{ shipment.receiving_organization|default:'N/A' }}</p>
+                <p><strong>Expected Delivery:</strong> {{ shipment.expected_delivery_date|date:'M d, Y'|default:'N/A' }}</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card shadow-sm border-0">
+    <div class="card-body">
+        <h5 class="mb-3">Manifest Tapes</h5>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>VolSER</th>
+                        <th>Barcode</th>
+                        <th>RFID</th>
+                        <th>Status</th>
+                        <th>Location</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for tape in manifest_tapes %}
+                    <tr>
+                        <td>{{ tape.volser }}</td>
+                        <td>{{ tape.barcode }}</td>
+                        <td>{{ tape.rfid_tag|default:'-' }}</td>
+                        <td>{{ tape.status }}</td>
+                        <td>{{ tape.current_location|default:'N/A' }}</td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="5" class="text-center text-muted">No tapes assigned to this shipment.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

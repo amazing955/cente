@@ -178,6 +178,14 @@ footer{
 
 <div class="container-fluid p-4">
 
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} py-2">
+                {{ message }}
+            </div>
+        {% endfor %}
+    {% endif %}
+
 {% if show_audit_panel %}
 <div class="card shadow-sm mb-4" style="min-height:70vh;">
     <div class="card-header">
@@ -1119,9 +1127,8 @@ footer{
                     <label class="form-label">VOLSER</label>
                     {{ tape_form.volser }}
                 </div>
-                <div class="col-md-6">
-                    <label class="form-label">Barcode</label>
-                    {{ tape_form.barcode }}
+                <div class="col-md-12">
+                    <div class="form-text mb-3">Barcode is generated automatically from VolSER and tape type.</div>
                 </div>
                 <div class="col-md-6">
                     <label class="form-label">RFID Tag</label>

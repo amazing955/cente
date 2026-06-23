@@ -591,21 +591,15 @@
                                     </div>
 
                                     <div class="col-12 col-md-6">
-                                        <label for="id_barcode" class="form-label">Barcode <span class="text-danger">*</span></label>
-                                        {{ tape_form.barcode }}
-                                        {% if tape_form.barcode.errors %}
-                                            <div class="invalid-feedback d-block">{{ tape_form.barcode.errors.0 }}</div>
-                                        {% else %}
-                                            <div class="form-text">Unique barcode identifier.</div>
-                                        {% endif %}
-                                    </div>
-
-                                    <div class="col-12 col-md-6">
                                         <label for="id_rfid_tag" class="form-label">RFID Tag</label>
                                         {{ tape_form.rfid_tag }}
                                         {% if tape_form.rfid_tag.errors %}
                                             <div class="invalid-feedback d-block">{{ tape_form.rfid_tag.errors.0 }}</div>
                                         {% endif %}
+                                    </div>
+
+                                    <div class="col-12">
+                                        <div class="form-text">Barcode is generated automatically from VolSER and tape type.</div>
                                     </div>
 
                                     <div class="col-12 col-md-6">

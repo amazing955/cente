@@ -2,8 +2,10 @@ from django import forms
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Group
 from django.core.validators import validate_email
+from django.db.models import Q
+from django.utils import timezone
 
-from .models import ApplicationSetting, CustomUser, Reconciliation, ReconciliationResult, Shipment, Tape
+from .models import ApplicationSetting, CustomUser, CourierProfile, Reconciliation, ReconciliationResult, Shipment, ShipmentException, ShipmentReceipt, ShipmentTransportEvent, Tape, DeliveryConfirmation
 
 
 class CustomUserCreationForm(UserCreationForm):
@@ -144,7 +146,7 @@ class TapeForm(forms.ModelForm):
         ]
         widgets = {
             'volser': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter VolSER', 'required': True}),
-            'barcode': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter Barcode', 'required': True}),
+            'barcode': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Auto-generated from VolSER', 'required': False}),
             'rfid_tag': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter RFID Tag'}),
             'tape_type': forms.Select(attrs={'class': 'form-select'}),
             'manufacturer': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter Manufacturer'}),
@@ -155,6 +157,13 @@ class TapeForm(forms.ModelForm):
             'audit_hold': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
             'remarks': forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Add remarks'}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not self.instance or not self.instance.pk:
+            self.fields['barcode'].required = False
+            self.fields['barcode'].widget.attrs['placeholder'] = 'Auto-generated from VolSER and tape type'
+            self.fields['barcode'].help_text = 'Leave blank to auto-generate barcode.'
 
     def clean_volser(self):
         volser = self.cleaned_data.get('volser')
@@ -167,6 +176,8 @@ class TapeForm(forms.ModelForm):
 
     def clean_barcode(self):
         barcode = self.cleaned_data.get('barcode')
+        if not barcode:
+            return barcode
         qs = Tape.objects.filter(barcode__iexact=barcode)
         if self.instance and self.instance.pk:
             qs = qs.exclude(pk=self.instance.pk)
@@ -500,16 +511,28 @@ class ReturnShipmentActionForm(forms.Form):
     )
 
 
-class ReportEmailForm(forms.Form):
+class ReconciliationForm(forms.ModelForm):
     class Meta:
         model = Reconciliation
         fields = [
+            'reconciliation_date',
             'location',
+            'performed_by',
+            'reviewed_by',
+            'approved_by',
+            'start_time',
+            'end_time',
             'status',
             'notes',
         ]
         widgets = {
-            'location': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter reconciliation location', 'required': True}),
+            'reconciliation_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'location': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter reconciliation location'}),
+            'performed_by': forms.Select(attrs={'class': 'form-select'}),
+            'reviewed_by': forms.Select(attrs={'class': 'form-select'}),
+            'approved_by': forms.Select(attrs={'class': 'form-select'}),
+            'start_time': forms.DateTimeInput(attrs={'class': 'form-control', 'type': 'datetime-local'}),
+            'end_time': forms.DateTimeInput(attrs={'class': 'form-control', 'type': 'datetime-local'}),
             'status': forms.Select(attrs={'class': 'form-select'}),
             'notes': forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Add reconciliation notes'}),
         }

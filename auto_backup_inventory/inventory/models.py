@@ -135,6 +135,22 @@ class Tape(models.Model):
     class Meta:
         ordering = ['-date_registered']
 
+    def generate_barcode(self):
+        barcode_base = self.volser.strip().upper().replace(' ', '').replace('-', '')
+        if self.tape_type:
+            barcode_base = f"{barcode_base}-{self.tape_type.replace(' ', '').upper()}"
+        barcode_candidate = barcode_base
+        suffix = 1
+        while Tape.objects.filter(barcode=barcode_candidate).exclude(pk=self.pk).exists():
+            barcode_candidate = f"{barcode_base}-{suffix:02d}"
+            suffix += 1
+        return barcode_candidate
+
+    def save(self, *args, **kwargs):
+        if not self.barcode:
+            self.barcode = self.generate_barcode()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.volser} ({self.barcode})"
 

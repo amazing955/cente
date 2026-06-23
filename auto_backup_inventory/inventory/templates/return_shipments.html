@@ -1,0 +1,53 @@
+{% extends 'courier_base.html' %}
+{% block title %}Return Shipments{% endblock %}
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h1 class="h3">Return Shipments</h1>
+        <p class="text-muted">Track return shipments and confirm custody acceptance for inbound transports.</p>
+    </div>
+    <div class="col-md-4 text-end">
+        <a href="{% url 'courier-dashboard' %}" class="btn btn-outline-secondary">Back to Dashboard</a>
+    </div>
+</div>
+
+<div class="card shadow-sm border-0">
+    <div class="card-body">
+        {% if shipments %}
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Shipment ID</th>
+                        <th>Date</th>
+                        <th>Status</th>
+                        <th>Destination</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for shipment in shipments %}
+                    <tr>
+                        <td>{{ shipment.shipment_id }}</td>
+                        <td>{{ shipment.shipment_date|date:'M d, Y' }}</td>
+                        <td><span class="badge bg-secondary">{{ shipment.status }}</span></td>
+                        <td>{{ shipment.destination_location|default:'N/A' }}</td>
+                        <td>
+                            <a href="{% url 'manifest-detail' shipment.pk %}" class="btn btn-sm btn-outline-primary">Manifest</a>
+                            {% if shipment.status == 'Return Accepted' %}
+                            <a href="{% url 'delivery-confirmation' shipment.pk %}" class="btn btn-sm btn-outline-info ms-1">Confirm Delivery</a>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-5">
+            <p class="mb-0 text-muted">No return shipments are currently assigned.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

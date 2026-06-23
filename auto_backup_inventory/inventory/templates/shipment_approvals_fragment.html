@@ -158,7 +158,7 @@
                             {% endif %}
                         </td>
                         <td>
-                            <a class="btn btn-sm btn-outline-primary" href="{% url 'shipment-detail' shipment.pk %}">Review</a>
+                            <a class="btn btn-sm btn-outline-primary partial-load" data-url="{% url 'shipment-detail' shipment.pk %}?partial=1" href="{% url 'shipment-detail' shipment.pk %}?partial=1">Review</a>
                             {% if shipment.status == 'Pending' %}
                             <form method="post" action="{% url 'shipment-detail' shipment.pk %}" class="d-inline-flex align-items-center ms-1">
                                 {% csrf_token %}

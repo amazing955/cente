@@ -1,0 +1,81 @@
+{% extends 'courier_base.html' %}
+{% block title %}Delivery Confirmation{% endblock %}
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h1 class="h3">Delivery Confirmation</h1>
+        <p class="text-muted">Capture receipt validation and manifest acceptance at destination.</p>
+    </div>
+    <div class="col-md-4 text-end">
+        <a href="{% url 'courier-dashboard' %}" class="btn btn-outline-secondary">Back to Dashboard</a>
+    </div>
+</div>
+
+{% if messages %}
+<div class="mb-3">
+    {% for message in messages %}
+    <div class="alert alert-{{ message.tags }} py-2">{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="card shadow-sm border-0">
+    <div class="card-body">
+        <h5 class="mb-4">Shipment {{ shipment.shipment_id }}</h5>
+        <form method="post">
+            {% csrf_token %}
+            {{ form.non_field_errors }}
+            <div class="row g-3">
+                <div class="col-md-6">
+                    {{ form.destination_location.label_tag }}
+                    {{ form.destination_location }}
+                </div>
+                <div class="col-md-6">
+                    {{ form.receiving_custodian.label_tag }}
+                    {{ form.receiving_custodian }}
+                </div>
+            </div>
+            <div class="row g-3 mt-3">
+                <div class="col-md-3">
+                    {{ form.delivery_date.label_tag }}
+                    {{ form.delivery_date }}
+                </div>
+                <div class="col-md-3">
+                    {{ form.delivery_time.label_tag }}
+                    {{ form.delivery_time }}
+                </div>
+                <div class="col-md-6">
+                    {{ form.delivery_status.label_tag }}
+                    {{ form.delivery_status }}
+                </div>
+            </div>
+            <div class="row g-3 mt-3">
+                <div class="col-md-12">
+                    {{ form.notes.label_tag }}
+                    {{ form.notes }}
+                </div>
+            </div>
+            <div class="row g-3 mt-3">
+                <div class="col-md-4">
+                    <div class="form-check">
+                        {{ form.manifest_matched }} {{ form.manifest_matched.label_tag }}
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-check">
+                        {{ form.all_tapes_delivered }} {{ form.all_tapes_delivered.label_tag }}
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-check">
+                        {{ form.discrepancies_resolved }} {{ form.discrepancies_resolved.label_tag }}
+                    </div>
+                </div>
+            </div>
+            <div class="mt-4 text-end">
+                <button type="submit" class="btn btn-primary">Save Delivery Confirmation</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

@@ -17,8 +17,8 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 
-from .forms import CustomUserCreationForm, CustomUserEditForm, UserProfileForm, TapeForm, ShipmentForm, ShipmentApprovalDecisionForm, ShipmentApprovalFilterForm, ManifestSearchForm, ReconciliationForm, ReconciliationResultForm, UserRoleAssignmentForm, RoleCreationForm, RoleFeatureUpdateForm, ReportEmailForm, SystemSettingsForm, FEATURE_CHOICES
-from .models import AuditLog, ApplicationSetting, MonthlyReport, ReportTemplate, Reconciliation, ReconciliationResult, Shipment, ShipmentApprovalHistory, Tape, RoleTemplate
+from .forms import *
+from .models import *
 
 
 def is_valid_uuid(value):
@@ -35,6 +35,18 @@ def get_object_by_uuid_pk(model, pk_value):
     if not is_valid_uuid(pk_value):
         return None
     return model.objects.filter(pk=pk_value).first()
+
+
+def is_courier(user):
+    return user.is_authenticated and (
+        user.is_superuser or
+        user.groups.filter(name='Courier').exists() or
+        getattr(user, 'courier_profile', None) is not None
+    )
+
+
+def get_courier_profile(user):
+    return getattr(user, 'courier_profile', None)
 
 ADMIN_FEATURE_TABS = [
     {
@@ -447,6 +459,14 @@ def signin(request):
                     severity='success',
                 )
                 return redirect("operations-dashboard")
+            if is_courier(user):
+                AuditLog.objects.create(
+                    name='Courier Login',
+                    action=f'User {user.username} signed in as Courier',
+                    user=user,
+                    severity='success',
+                )
+                return redirect("courier-dashboard")
             AuditLog.objects.create(
                 name='Unauthorized Dashboard Login',
                 action=f'User {user.username} attempted dashboard login without appropriate role',
@@ -762,7 +782,7 @@ def backup_dashboard(request):
                     severity='success',
                 )
                 messages.success(request, 'New tape registered successfully.')
-                return redirect('backup-dashboard')
+                return redirect(f'{reverse("backup-dashboard")}?show_add_tape=1')
             else:
                 show_add_tape_panel = True
                 messages.error(request, 'Please correct the tape form errors below and try again.')
@@ -1328,6 +1348,10 @@ def operations_dashboard(request):
     unverified_deliveries = shipments.filter(status__iexact='Delivered', delivery_status__in=['', 'Partially Delivered']).count()
     chain_of_custody_compliance = int(max(0, min(100, 100 - (missing_handoffs * 2))))
 
+    exceptions = ShipmentException.objects.order_by('-reported_date')[:6]
+    open_exceptions = ShipmentException.objects.filter(status__in=['Open', 'Investigating']).count()
+    pending_approvals = shipments.filter(status__iexact='Pending').count()
+
     status_labels = ['Pending', 'Approved', 'Dispatched', 'In Transit', 'Delivered', 'Cancelled']
     status_counts = [shipments.filter(status=status).count() for status in status_labels]
 
@@ -1392,6 +1416,7 @@ def operations_dashboard(request):
         'pending_shipments': pending_shipments,
         'monitoring_shipments': monitoring_shipments,
         'latest_reconciliations': latest_reconciliations,
+        'exceptions': exceptions,
         'open_discrepancies': open_discrepancies,
         'recent_activity': recent_activity,
         'custody_transfers_open': custody_transfers_open,
@@ -1420,6 +1445,22 @@ def operations_dashboard(request):
         **chart_data,
     }
     return render(request, 'operations_dashboard.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_operations_manager(u), login_url='signin')
+@login_required(login_url='signin')
+def exception_detail(request, pk):
+    exception = get_object_or_404(
+        ShipmentException.objects.select_related('shipment', 'tape', 'reported_by'),
+        pk=pk
+    )
+    context = {
+        'dashboard_tabs': OPERATIONS_FEATURE_TABS,
+        'exception': exception,
+    }
+    if request.GET.get('partial'):
+        return render(request, 'exception_detail_fragment.html', context)
+    return render(request, 'exception_detail.html', context)
 
 
 @user_passes_test(lambda u: u.is_superuser or is_operations_manager(u), login_url='signin')
@@ -1607,6 +1648,244 @@ def approval_history(request, shipment_pk):
         'history_entries': history_entries,
     }
     return render(request, 'approval_history.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_courier(u), login_url='signin')
+@login_required(login_url='signin')
+def courier_dashboard(request):
+    courier = get_courier_profile(request.user)
+    shipments = Shipment.objects.none()
+    if courier:
+        shipments = Shipment.objects.filter(
+            Q(courier_name__iexact=courier.full_name) |
+            Q(courier_contact__iexact=courier.phone_number) |
+            Q(receipts__courier=courier) |
+            Q(deliveries__courier=courier)
+        ).distinct().order_by('-shipment_date')
+    assigned_count = shipments.filter(status__in=['Dispatched', 'Picked Up', 'In Transit']).count()
+    pending_count = shipments.filter(status__in=['Pending', 'Approved']).count()
+    delivered_count = shipments.filter(status='Delivered').count()
+    exception_count = ShipmentException.objects.filter(shipment__in=shipments, status__in=['Open', 'Investigating']).count()
+    activity_count = ShipmentTransportEvent.objects.filter(courier=courier).count() if courier else 0
+    recent_events = ShipmentTransportEvent.objects.filter(courier=courier).order_by('-event_date', '-event_time')[:6] if courier else []
+    recent_exceptions = ShipmentException.objects.filter(shipment__in=shipments).order_by('-reported_date')[:6]
+
+    context = {
+        'courier': courier,
+        'shipments': shipments,
+        'assigned_count': assigned_count,
+        'pending_count': pending_count,
+        'delivered_count': delivered_count,
+        'exception_count': exception_count,
+        'activity_count': activity_count,
+        'recent_events': recent_events,
+        'recent_exceptions': recent_exceptions,
+    }
+    return render(request, 'courier_dashboard.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_courier(u), login_url='signin')
+@login_required(login_url='signin')
+def assigned_shipments(request):
+    courier = get_courier_profile(request.user)
+    filter_form = CourierShipmentFilterForm(request.GET or None)
+    shipments = Shipment.objects.none()
+    if courier:
+        shipments = Shipment.objects.filter(
+            Q(courier_name__iexact=courier.full_name) |
+            Q(courier_contact__iexact=courier.phone_number) |
+            Q(receipts__courier=courier) |
+            Q(deliveries__courier=courier)
+        ).distinct().order_by('-shipment_date')
+
+    if filter_form.is_valid():
+        search = filter_form.cleaned_data.get('search')
+        if search:
+            shipments = shipments.filter(
+                Q(shipment_id__icontains=search) |
+                Q(source_location__icontains=search) |
+                Q(destination_location__icontains=search) |
+                Q(receiving_organization__icontains=search) |
+                Q(courier_name__icontains=search)
+            )
+        status = filter_form.cleaned_data.get('status')
+        if status:
+            shipments = shipments.filter(status=status)
+        shipment_type = filter_form.cleaned_data.get('shipment_type')
+        if shipment_type:
+            shipments = shipments.filter(shipment_type=shipment_type)
+        date_from = filter_form.cleaned_data.get('date_from')
+        if date_from:
+            shipments = shipments.filter(shipment_date__gte=date_from)
+        date_to = filter_form.cleaned_data.get('date_to')
+        if date_to:
+            shipments = shipments.filter(shipment_date__lte=date_to)
+
+    page_number = request.GET.get('page', 1)
+    paginator = Paginator(shipments, 10)
+    shipment_page = paginator.get_page(page_number)
+
+    context = {
+        'courier': courier,
+        'filter_form': filter_form,
+        'shipments': shipment_page,
+    }
+    return render(request, 'assigned_shipments.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_courier(u), login_url='signin')
+@login_required(login_url='signin')
+def manifest_detail(request, shipment_pk):
+    shipment = get_object_or_404(Shipment.objects.prefetch_related('tapes'), pk=shipment_pk)
+    courier = get_courier_profile(request.user)
+    manifest_tapes = shipment.tapes.all()
+    context = {
+        'courier': courier,
+        'shipment': shipment,
+        'manifest_tapes': manifest_tapes,
+    }
+    return render(request, 'manifest_detail.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_courier(u), login_url='signin')
+@login_required(login_url='signin')
+def pickup_confirmation(request, shipment_pk):
+    shipment = get_object_or_404(Shipment.objects.prefetch_related('tapes'), pk=shipment_pk)
+    courier = get_courier_profile(request.user)
+    form = ShipmentReceiptForm(request.POST or None)
+
+    if request.method == 'POST':
+        if form.is_valid():
+            receipt = form.save(commit=False)
+            receipt.shipment = shipment
+            receipt.courier = courier
+            receipt.confirmation_timestamp = timezone.localtime()
+            receipt.save()
+            shipment.status = 'Picked Up'
+            shipment.last_updated_by = request.user
+            shipment.save(update_fields=['status', 'last_updated_by', 'last_updated_at'])
+            AuditLog.objects.create(
+                name='Pickup Confirmed',
+                action=f'Pickup confirmed for shipment {shipment.shipment_id}',
+                user=request.user,
+                severity='success',
+            )
+            messages.success(request, 'Pickup confirmation saved successfully.')
+            return redirect('courier-dashboard')
+        else:
+            messages.error(request, 'Please correct the form errors and try again.')
+
+    if not courier:
+        messages.warning(request, 'Courier profile not found for your user account.')
+    context = {
+        'courier': courier,
+        'shipment': shipment,
+        'form': form,
+    }
+    return render(request, 'pickup_confirmation.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_courier(u), login_url='signin')
+@login_required(login_url='signin')
+def delivery_confirmation(request, shipment_pk):
+    shipment = get_object_or_404(Shipment.objects.prefetch_related('tapes'), pk=shipment_pk)
+    courier = get_courier_profile(request.user)
+    form = DeliveryConfirmationForm(request.POST or None)
+
+    if request.method == 'POST':
+        if form.is_valid():
+            confirmation = form.save(commit=False)
+            confirmation.shipment = shipment
+            confirmation.courier = courier
+            confirmation.save()
+            shipment.delivery_date = confirmation.delivery_date
+            shipment.delivery_time = confirmation.delivery_time
+            shipment.delivery_status = confirmation.delivery_status
+            shipment.status = 'Delivered' if confirmation.delivery_status == 'Delivered' else shipment.status
+            shipment.last_updated_by = request.user
+            shipment.save(update_fields=['delivery_date', 'delivery_time', 'delivery_status', 'status', 'last_updated_by', 'last_updated_at'])
+            AuditLog.objects.create(
+                name='Delivery Confirmed',
+                action=f'Delivery confirmed for shipment {shipment.shipment_id}',
+                user=request.user,
+                severity='success',
+            )
+            messages.success(request, 'Delivery confirmation saved successfully.')
+            return redirect('courier-dashboard')
+        else:
+            messages.error(request, 'Please correct the form errors and try again.')
+
+    context = {
+        'courier': courier,
+        'shipment': shipment,
+        'form': form,
+    }
+    return render(request, 'delivery_confirmation.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_courier(u), login_url='signin')
+@login_required(login_url='signin')
+def return_shipments(request):
+    courier = get_courier_profile(request.user)
+    shipments = Shipment.objects.filter(
+        Q(shipment_type='Return') | Q(status='Return Accepted'),
+        Q(courier_name__iexact=courier.full_name) | Q(courier_contact__iexact=courier.phone_number) | Q(receipts__courier=courier) | Q(deliveries__courier=courier)
+    ).distinct().order_by('-shipment_date') if courier else Shipment.objects.none()
+
+    context = {
+        'courier': courier,
+        'shipments': shipments,
+    }
+    return render(request, 'return_shipments.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_courier(u), login_url='signin')
+@login_required(login_url='signin')
+def incident_management(request):
+    courier = get_courier_profile(request.user)
+    form = ShipmentExceptionForm(request.POST or None, courier=courier)
+    exceptions = ShipmentException.objects.filter(
+        Q(shipment__courier_name__iexact=courier.full_name) | Q(shipment__courier_contact__iexact=courier.phone_number) | Q(shipment__receipts__courier=courier) | Q(shipment__deliveries__courier=courier)
+    ).distinct().order_by('-reported_date') if courier else ShipmentException.objects.none()
+
+    if request.method == 'POST' and form.is_valid():
+        exception = form.save(commit=False)
+        exception.reported_by = request.user
+        exception.save()
+        AuditLog.objects.create(
+            name='Shipment Exception Reported',
+            action=f'Reported exception {exception.exception_id} for shipment {exception.shipment.shipment_id}',
+            user=request.user,
+            severity='warning',
+        )
+        messages.success(request, 'Exception reported successfully.')
+        return redirect('incident-management')
+    elif request.method == 'POST':
+        messages.error(request, 'Please correct the exception form errors and try again.')
+
+    context = {
+        'courier': courier,
+        'form': form,
+        'exceptions': exceptions,
+    }
+    return render(request, 'incident_management.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_courier(u), login_url='signin')
+@login_required(login_url='signin')
+def activity_log(request):
+    courier = get_courier_profile(request.user)
+    events = ShipmentTransportEvent.objects.filter(courier=courier).order_by('-event_date', '-event_time') if courier else ShipmentTransportEvent.objects.none()
+    exceptions = ShipmentException.objects.filter(
+        Q(shipment__courier_name__iexact=courier.full_name) | Q(shipment__courier_contact__iexact=courier.phone_number) | Q(shipment__receipts__courier=courier) | Q(shipment__deliveries__courier=courier)
+    ).distinct().order_by('-reported_date') if courier else ShipmentException.objects.none()
+
+    context = {
+        'courier': courier,
+        'events': events,
+        'exceptions': exceptions,
+    }
+    return render(request, 'activity_log.html', context)
 
 
 @user_passes_test(lambda u: u.is_superuser or is_backup_administrator(u), login_url='signin')

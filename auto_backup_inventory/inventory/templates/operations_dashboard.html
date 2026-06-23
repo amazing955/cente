@@ -123,8 +123,7 @@ body {
         <a class="nav-link" href="#reconciliation_review"><i class="bi bi-arrow-repeat"></i> Reconciliation Review</a>
         <a class="nav-link" href="#compliance_monitoring"><i class="bi bi-file-earmark-check"></i> Compliance Monitoring</a>
         <a class="nav-link" href="#reports"><i class="bi bi-bar-chart-line"></i> Reports</a>
-        <a class="nav-link" href="#notifications"><i class="bi bi-bell"></i> Notifications</a>
-        <a class="nav-link text-danger mt-3" href="{% url 'signout' %}"><i class="bi bi-box-arrow-right"></i> Logout</a>
+        
     </nav>
 </div>
 <div class="main-content" id="dashboard">
@@ -151,6 +150,11 @@ body {
             <div class="text-end d-none d-md-block">
                 <div class="small-note">Current Date</div>
                 <div class="fw-semibold">{{ current_datetime|date:'M d, Y H:i' }}</div>
+            </div>
+
+            <div class="text-end d-none d-md-block">
+                <div class="small-note"><a class="nav-link text-danger mt-3" href="{% url 'signout' %}"><i class="bi bi-box-arrow-right"></i> Logout</a></div>
+                
             </div>
         </div>
     </div>
@@ -441,6 +445,7 @@ body {
                                 <th>Destination</th>
                                 <th>Shipment Date</th>
                                 <th>Expected Delivery</th>
+                                <th>Action</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -452,6 +457,9 @@ body {
                                 <td>{{ shipment.destination_location }}</td>
                                 <td>{{ shipment.shipment_date|date:'M d, Y' }}</td>
                                 <td>{{ shipment.expected_delivery_date|date:'M d, Y' }}</td>
+                                <td>
+                                    <a class="btn btn-sm btn-outline-primary partial-load" data-url="{% url 'shipment-detail' shipment.pk %}?partial=1" data-panel="#shipment_monitoring" href="{% url 'shipment-detail' shipment.pk %}?partial=1">Follow Up</a>
+                                </td>
                             </tr>
                             {% empty %}
                             <tr><td colspan="6" class="text-center">No shipments available for monitoring.</td></tr>
@@ -489,9 +497,9 @@ body {
                         <div class="card notification-card p-3 h-100">
                             <div class="d-flex align-items-center justify-content-between mb-2">
                                 <span class="small-note">Recent Exceptions</span>
-                                <span class="fw-semibold">{{ latest_reconciliations|length }}</span>
+                                <span class="fw-semibold">{{ exceptions|length }}</span>
                             </div>
-                            <p class="mb-0 small-note">Latest reconciliation runs for exception review.</p>
+                            <p class="mb-0 small-note">Latest reported shipment exceptions for review.</p>
                         </div>
                     </div>
                     <div class="col-12 col-md-6 col-xl-3">
@@ -517,24 +525,38 @@ body {
                     <table class="table table-hover align-middle">
                         <thead class="table-light">
                             <tr>
-                                <th>Reconciliation ID</th>
-                                <th>Location</th>
+                                <th>Exception ID</th>
+                                <th>Shipment</th>
+                                <th>Type</th>
                                 <th>Status</th>
-                                <th>Created</th>
-                                <th>Last Updated</th>
+                                <th>Reported</th>
+                                <th>Action</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {% for reconciliation in latest_reconciliations %}
+                            {% for exception in exceptions %}
                             <tr>
-                                <td>{{ reconciliation.reconciliation_id }}</td>
-                                <td>{{ reconciliation.location|default:'N/A' }}</td>
-                                <td>{{ reconciliation.status }}</td>
-                                <td>{{ reconciliation.created_at|date:'M d, Y' }}</td>
-                                <td>{{ reconciliation.updated_at|date:'M d, Y' }}</td>
+                                <td>{{ exception.exception_id }}</td>
+                                <td>{{ exception.shipment.shipment_id }}</td>
+                                <td>{{ exception.exception_type }}</td>
+                                <td>
+                                    {% if exception.status == 'Investigating' %}
+                                        <span class="badge bg-warning">{{ exception.status }}</span>
+                                    {% elif exception.status == 'Open' %}
+                                        <span class="badge bg-danger">{{ exception.status }}</span>
+                                    {% elif exception.status == 'Resolved' %}
+                                        <span class="badge bg-success">{{ exception.status }}</span>
+                                    {% elif exception.status == 'Closed' %}
+                                        <span class="badge bg-secondary">{{ exception.status }}</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">{{ exception.status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ exception.reported_date|date:'M d, Y' }}</td>
+                                <td><a class="btn btn-sm btn-outline-primary partial-load" data-url="{% url 'exception-detail' exception.pk %}?partial=1" data-panel="#exception_management" href="{% url 'exception-detail' exception.pk %}?partial=1">Review</a></td>
                             </tr>
                             {% empty %}
-                            <tr><td colspan="5" class="text-center">No exception reconciliations available.</td></tr>
+                            <tr><td colspan="6" class="text-center">No shipment exceptions reported.</td></tr>
                             {% endfor %}
                         </tbody>
                     </table>
@@ -1106,7 +1128,7 @@ function updateSidebarActiveLink(targetHref) {
     });
 }
 
-function loadApprovalFragment(url) {
+function loadEmbeddedFragment(url, panel = '#shipment_approvals') {
     const targetUrl = new URL(url, window.location.origin);
     targetUrl.searchParams.set('partial', '1');
     fetch(targetUrl.toString(), { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
@@ -1138,8 +1160,8 @@ function loadApprovalFragment(url) {
                 settings.classList.add('d-none');
                 profile.classList.add('d-none');
                 notifications.classList.add('d-none');
-                updateSidebarActiveLink('#shipment_approvals');
-                attachEmbeddedApprovalHandlers();
+                updateSidebarActiveLink(panel);
+                attachEmbeddedHandlers();
             }
         })
         .catch(() => {
@@ -1178,7 +1200,7 @@ function submitEmbeddedApprovalForm(form) {
             const embedded = document.getElementById('embeddedContent');
             if (embedded) {
                 embedded.innerHTML = html;
-                attachEmbeddedApprovalHandlers();
+                attachEmbeddedHandlers();
             }
         })
         .catch(() => {
@@ -1203,7 +1225,7 @@ function markNotificationsRead() {
     });
 }
 
-function attachEmbeddedApprovalHandlers() {
+function attachEmbeddedHandlers() {
     const embedded = document.getElementById('embeddedContent');
     if (!embedded) {
         return;
@@ -1212,7 +1234,7 @@ function attachEmbeddedApprovalHandlers() {
     embedded.querySelectorAll('a[href*="shipment-approvals"]').forEach(link => {
         link.addEventListener('click', event => {
             event.preventDefault();
-            loadApprovalFragment(event.currentTarget.href);
+            loadEmbeddedFragment(event.currentTarget.href, '#shipment_approvals');
         });
     });
 
@@ -1220,6 +1242,20 @@ function attachEmbeddedApprovalHandlers() {
         form.addEventListener('submit', event => {
             event.preventDefault();
             submitEmbeddedApprovalForm(event.currentTarget);
+        });
+    });
+
+    embedded.querySelectorAll('form[action*="shipment-detail"]').forEach(form => {
+        form.addEventListener('submit', event => {
+            event.preventDefault();
+            submitEmbeddedApprovalForm(event.currentTarget);
+        });
+    });
+
+    embedded.querySelectorAll('#closeEmbeddedExceptionDetail, #returnToExceptionManagement').forEach(button => {
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            showExceptionPanel();
         });
     });
 }
@@ -1656,8 +1692,9 @@ document.querySelectorAll('a.partial-load').forEach(link => {
     link.addEventListener('click', event => {
         event.preventDefault();
         const url = event.currentTarget.dataset.url;
+        const panel = event.currentTarget.dataset.panel || '#shipment_approvals';
         if (url) {
-            loadApprovalFragment(url);
+            loadEmbeddedFragment(url, panel);
         }
     });
 });

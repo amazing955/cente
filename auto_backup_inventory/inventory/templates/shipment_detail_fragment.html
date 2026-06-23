@@ -175,7 +175,7 @@
             <div class="card-body">
                 <h5 class="mb-3">Approval Decision</h5>
                 {% if shipment.status == 'Pending' %}
-                <form method="post" class="mb-3">
+                <form method="post" action="{% url 'shipment-detail' shipment.pk %}?partial=1" class="mb-3">
                     {% csrf_token %}
                     <input type="hidden" name="shipment_pk" value="{{ shipment.pk }}">
                     <input type="hidden" name="decision" value="approve">
@@ -183,7 +183,7 @@
                     <button type="submit" class="btn btn-success w-100">Approve Shipment</button>
                 </form>
                 {% endif %}
-                <form method="post">
+                <form method="post" action="{% url 'shipment-detail' shipment.pk %}?partial=1">
                     {% csrf_token %}
                     {{ approval_form.shipment_pk }}
                     <div class="mb-3">

@@ -8,6 +8,7 @@ urlpatterns = [
     path('dashboard/', views.dashboard, name='dashboard'),
     path('backup-dashboard/', views.backup_dashboard, name='backup-dashboard'),
     path('operations-dashboard/', views.operations_dashboard, name='operations-dashboard'),
+    path('operations-dashboard/exception/<uuid:pk>/', views.exception_detail, name='exception-detail'),
     path('shipment-approvals/', views.shipment_approvals, name='shipment-approvals'),
     path('shipment-approvals/<uuid:shipment_pk>/', views.shipment_detail, name='shipment-detail'),
     path('shipment-approvals/<uuid:shipment_pk>/history/', views.approval_history, name='approval-history'),

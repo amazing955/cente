@@ -1,0 +1,89 @@
+{% extends 'courier_base.html' %}
+{% block title %}Incident Management{% endblock %}
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h1 class="h3">Incident Management</h1>
+        <p class="text-muted">Capture shipment exceptions, damaged tapes, missing manifests and custody issues.</p>
+    </div>
+    <div class="col-md-4 text-end">
+        <a href="{% url 'courier-dashboard' %}" class="btn btn-outline-secondary">Back to Dashboard</a>
+    </div>
+</div>
+
+{% if messages %}
+<div class="mb-3">
+    {% for message in messages %}
+    <div class="alert alert-{{ message.tags }} py-2">{{ message }}</div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="row g-3">
+    <div class="col-lg-5">
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-body">
+                <h5 class="mb-3">Report New Exception</h5>
+                <form method="post">
+                    {% csrf_token %}
+                    {{ form.non_field_errors }}
+                    <div class="mb-3">
+                        {{ form.shipment.label_tag }}
+                        {{ form.shipment }}
+                    </div>
+                    <div class="mb-3">
+                        {{ form.tape.label_tag }}
+                        {{ form.tape }}
+                    </div>
+                    <div class="mb-3">
+                        {{ form.exception_type.label_tag }}
+                        {{ form.exception_type }}
+                    </div>
+                    <div class="mb-3">
+                        {{ form.severity.label_tag }}
+                        {{ form.severity }}
+                    </div>
+                    <div class="mb-3">
+                        {{ form.status.label_tag }}
+                        {{ form.status }}
+                    </div>
+                    <div class="mb-3">
+                        {{ form.description.label_tag }}
+                        {{ form.description }}
+                    </div>
+                    <div class="text-end">
+                        <button type="submit" class="btn btn-primary">Submit Exception</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-7">
+        <div class="card shadow-sm border-0">
+            <div class="card-body">
+                <h5 class="mb-3">Open Issues</h5>
+                {% if exceptions %}
+                <div class="list-group">
+                    {% for exception in exceptions %}
+                    <div class="list-group-item">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <div class="fw-semibold">{{ exception.exception_type }}</div>
+                                <small class="text-muted">Shipment {{ exception.shipment.shipment_id }} · {{ exception.reported_date|date:'M d, Y H:i' }}</small>
+                            </div>
+                            <span class="badge bg-warning">{{ exception.status }}</span>
+                        </div>
+                        <div class="mt-2 small text-muted">{{ exception.description|truncatechars:120 }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="text-center py-5">
+                    <p class="mb-0 text-muted">No shipment exceptions have been reported.</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
