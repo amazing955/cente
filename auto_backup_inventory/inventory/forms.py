@@ -324,7 +324,183 @@ class ManifestSearchForm(forms.Form):
     )
 
 
-class ReconciliationForm(forms.ModelForm):
+class CourierShipmentFilterForm(forms.Form):
+    search = forms.CharField(
+        required=False,
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Search shipments by ID, source, destination'}),
+        label='Search',
+    )
+    status = forms.ChoiceField(
+        required=False,
+        choices=[('', 'All Statuses')] + Shipment.SHIPMENT_STATUS_CHOICES,
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        label='Status',
+    )
+    shipment_type = forms.ChoiceField(
+        required=False,
+        choices=[('', 'All Types')] + Shipment.SHIPMENT_TYPE_CHOICES,
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        label='Shipment Type',
+    )
+    date_from = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+        label='Dispatch From',
+    )
+    date_to = forms.DateField(
+        required=False,
+        widget=forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+        label='Dispatch To',
+    )
+
+
+class ScanTapeForm(forms.Form):
+    SCAN_METHOD_CHOICES = [
+        ('volser', 'VolSER'),
+        ('barcode', 'Barcode'),
+        ('rfid', 'RFID Tag'),
+    ]
+
+    scan_method = forms.ChoiceField(
+        choices=SCAN_METHOD_CHOICES,
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        label='Scan Method',
+        required=True,
+    )
+    scan_value = forms.CharField(
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Scan or enter VolSER / Barcode / RFID'}),
+        label='Scan Value',
+        required=True,
+    )
+
+
+class ShipmentReceiptForm(forms.ModelForm):
+    class Meta:
+        model = ShipmentReceipt
+        fields = [
+            'manifest_reference',
+            'pickup_date',
+            'pickup_time',
+            'pickup_location',
+            'notes',
+            'all_tapes_scanned',
+            'manifest_verified',
+            'tape_count_matched',
+            'no_damaged_tapes',
+            'custody_accepted',
+        ]
+        widgets = {
+            'manifest_reference': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Manifest Number'}),
+            'pickup_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'pickup_time': forms.TimeInput(attrs={'class': 'form-control', 'type': 'time'}),
+            'pickup_location': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Pickup Location'}),
+            'notes': forms.Textarea(attrs={'class': 'form-control', 'rows': 3, 'placeholder': 'Add pickup notes or exceptions'}),
+            'all_tapes_scanned': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+            'manifest_verified': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+            'tape_count_matched': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+            'no_damaged_tapes': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+            'custody_accepted': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+        }
+
+
+class DeliveryConfirmationForm(forms.ModelForm):
+    class Meta:
+        model = DeliveryConfirmation
+        fields = [
+            'destination_location',
+            'receiving_custodian',
+            'delivery_date',
+            'delivery_time',
+            'delivery_status',
+            'notes',
+            'manifest_matched',
+            'all_tapes_delivered',
+            'discrepancies_resolved',
+        ]
+        widgets = {
+            'destination_location': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Destination Location'}),
+            'receiving_custodian': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Receiving Custodian'}),
+            'delivery_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'delivery_time': forms.TimeInput(attrs={'class': 'form-control', 'type': 'time'}),
+            'delivery_status': forms.Select(attrs={'class': 'form-select'}),
+            'notes': forms.Textarea(attrs={'class': 'form-control', 'rows': 3, 'placeholder': 'Delivery notes or discrepancies'}),
+            'manifest_matched': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+            'all_tapes_delivered': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+            'discrepancies_resolved': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+        }
+
+
+class ShipmentExceptionForm(forms.ModelForm):
+    class Meta:
+        model = ShipmentException
+        fields = [
+            'shipment',
+            'tape',
+            'exception_type',
+            'severity',
+            'status',
+            'description',
+        ]
+        widgets = {
+            'shipment': forms.Select(attrs={'class': 'form-select'}),
+            'tape': forms.Select(attrs={'class': 'form-select'}),
+            'exception_type': forms.Select(attrs={'class': 'form-select'}),
+            'severity': forms.Select(attrs={'class': 'form-select'}),
+            'status': forms.Select(attrs={'class': 'form-select'}),
+            'description': forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Describe the incident in detail'}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        courier = kwargs.pop('courier', None)
+        super().__init__(*args, **kwargs)
+        if courier:
+            self.fields['shipment'].queryset = Shipment.objects.filter(
+                Q(receipts__courier=courier) | Q(deliveries__courier=courier)
+            ).distinct().order_by('-shipment_date')
+            self.fields['tape'].queryset = Tape.objects.filter(shipments__in=self.fields['shipment'].queryset).distinct().order_by('volser')
+        else:
+            self.fields['shipment'].queryset = Shipment.objects.order_by('-shipment_date')
+            self.fields['tape'].queryset = Tape.objects.order_by('volser')
+        self.fields['tape'].required = False
+
+
+class TransportEventForm(forms.Form):
+    event_type = forms.ChoiceField(
+        choices=ShipmentTransportEvent.EVENT_TYPE_CHOICES,
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        label='Transport Event',
+    )
+    event_date = forms.DateField(
+        widget=forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+        label='Date',
+        initial=timezone.localdate,
+    )
+    event_time = forms.TimeField(
+        widget=forms.TimeInput(attrs={'class': 'form-control', 'type': 'time'}),
+        label='Time',
+        initial=timezone.localtime,
+    )
+    comments = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 3, 'placeholder': 'Optional comments'}),
+        label='Comments',
+    )
+
+
+class ReturnShipmentActionForm(forms.Form):
+    shipment_pk = forms.UUIDField(widget=forms.HiddenInput())
+    action = forms.ChoiceField(
+        choices=[
+            ('accept_return', 'Accept Return'),
+            ('confirm_pickup', 'Confirm Pickup'),
+            ('confirm_delivery', 'Confirm Return Delivery'),
+        ],
+        widget=forms.HiddenInput(),
+        required=True,
+    )
+
+
+class ReportEmailForm(forms.Form):
     class Meta:
         model = Reconciliation
         fields = [
