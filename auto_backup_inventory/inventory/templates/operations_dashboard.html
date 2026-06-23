@@ -20,7 +20,7 @@ body {
     left: 0;
     width: 260px;
     height: 100vh;
-    background: linear-gradient(180deg, #02234f 0%, #0c3a80 100%);
+    background: linear-gradient(135deg,#0548ad,#001f54);
     color: #ffffff;
     padding: 2rem 1.25rem;
     z-index: 10;
@@ -123,6 +123,7 @@ body {
         <a class="nav-link" href="#reconciliation_review"><i class="bi bi-arrow-repeat"></i> Reconciliation Review</a>
         <a class="nav-link" href="#compliance_monitoring"><i class="bi bi-file-earmark-check"></i> Compliance Monitoring</a>
         <a class="nav-link" href="#reports"><i class="bi bi-bar-chart-line"></i> Reports</a>
+        <a class="nav-link" href="#notifications"><i class="bi bi-bell"></i> Notifications</a>
         <a class="nav-link text-danger mt-3" href="{% url 'signout' %}"><i class="bi bi-box-arrow-right"></i> Logout</a>
     </nav>
 </div>
@@ -135,9 +136,9 @@ body {
                 <p class="small-note mb-0">Automated Backup Tape Inventory Management System — Banking Operations Command Center</p>
             </div>
         <div class="d-flex align-items-center gap-3">
-            <button class="btn btn-outline-secondary btn-sm position-relative">
+            <button class="btn btn-outline-secondary btn-sm position-relative" id="notificationBellBtn" title="Notifications">
                 <i class="bi bi-bell"></i>
-                <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">{{ alert_items|length }}</span>
+                <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger{% if unread_alert_count == 0 %} d-none{% endif %}" id="notificationBadge">{{ unread_alert_count }}</span>
             </button>
             <button class="btn btn-outline-secondary btn-sm" id="settingsNavBtn" title="Settings"><i class="bi bi-gear"></i></button>
             <div class="d-flex align-items-center gap-2 profile-widget" id="profileWidget" role="button" tabindex="0" title="View profile">
@@ -517,7 +518,7 @@ body {
                         <thead class="table-light">
                             <tr>
                                 <th>Reconciliation ID</th>
-                                <th>Issue Type</th>
+                                <th>Location</th>
                                 <th>Status</th>
                                 <th>Created</th>
                                 <th>Last Updated</th>
@@ -527,8 +528,8 @@ body {
                             {% for reconciliation in latest_reconciliations %}
                             <tr>
                                 <td>{{ reconciliation.reconciliation_id }}</td>
-                                <td>{{ reconciliation.issue_type }}</td>
-                                <td>{{ reconciliation.resolution_status }}</td>
+                                <td>{{ reconciliation.location|default:'N/A' }}</td>
+                                <td>{{ reconciliation.status }}</td>
                                 <td>{{ reconciliation.created_at|date:'M d, Y' }}</td>
                                 <td>{{ reconciliation.updated_at|date:'M d, Y' }}</td>
                             </tr>
@@ -688,7 +689,7 @@ body {
                             <tr>
                                 <td>{{ reconciliation.reconciliation_id }}</td>
                                 <td>{{ reconciliation.location|default:'N/A' }}</td>
-                                <td>{{ reconciliation.status|default:reconciliation.resolution_status }}</td>
+                                <td>{{ reconciliation.status }}</td>
                                 <td>{{ reconciliation.created_at|date:'M d, Y' }}</td>
                                 <td>{{ reconciliation.updated_at|date:'M d, Y' }}</td>
                             </tr>
@@ -781,6 +782,78 @@ body {
             </div>
         </div>
     </div>
+    </div>
+
+    <div id="notificationsPanel" class="d-none">
+        <div class="row g-3 mb-4" id="notifications">
+            <div class="col-12">
+                <div class="section-card p-4 h-100">
+                    <div class="d-flex justify-content-between align-items-center mb-4">
+                        <div>
+                            <h5 class="mb-1">Notifications</h5>
+                            <p class="small-note mb-0">Review recent alert activity and audit notifications.</p>
+                        </div>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-outline-secondary btn-sm" id="markAllNotificationsReadBtn">Mark all read</button>
+                            <button class="btn btn-outline-secondary btn-sm back-to-dashboard-btn">Back to Dashboard</button>
+                        </div>
+                    </div>
+                    <div class="row g-3 mb-4">
+                        <div class="col-12 col-md-4">
+                            <div class="card notification-card p-3 h-100">
+                                <div class="d-flex align-items-center justify-content-between mb-2">
+                                    <span class="small-note">Unread Alerts</span>
+                                    <span class="fw-semibold" id="notificationsUnreadCount">{{ unread_alert_count }}</span>
+                                </div>
+                                <p class="mb-0 small-note">Alerts that require your attention before they are marked read.</p>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="card notification-card p-3 h-100">
+                                <div class="d-flex align-items-center justify-content-between mb-2">
+                                    <span class="small-note">Recent Notifications</span>
+                                    <span class="fw-semibold">{{ notification_items|length }}</span>
+                                </div>
+                                <p class="mb-0 small-note">Latest severity warnings and errors from the audit log.</p>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <div class="card notification-card p-3 h-100">
+                                <div class="d-flex align-items-center justify-content-between mb-2">
+                                    <span class="small-note">Pending Actions</span>
+                                    <span class="fw-semibold">{{ alert_items|length }}</span>
+                                </div>
+                                <p class="mb-0 small-note">Items pulled from compliance and reconciliation alerts.</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Status</th>
+                                    <th>Date</th>
+                                    <th>Description</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for notification in notification_items %}
+                                <tr>
+                                    <td>{{ notification.severity|title }}</td>
+                                    <td>{{ notification.timestamp|date:'M d, Y H:i' }}</td>
+                                    <td>{{ notification.message|default:notification.action|default:notification.name }}</td>
+                                    <td><span class="badge bg-secondary">View</span></td>
+                                </tr>
+                                {% empty %}
+                                <tr><td colspan="4" class="text-center">No notifications available.</td></tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div id="reportsPanel" class="d-none">
@@ -927,7 +1000,7 @@ body {
                         <div class="border rounded-4 p-3 h-100">
                             <h6 class="mb-3">Profile Settings</h6>
                             <p class="small-note">Manage your profile details, password, and account security settings.</p>
-                            <button class="btn btn-sm btn-primary">Edit Profile</button>
+                            <a href="{% url 'operations-dashboard' %}?show_profile=1&edit_profile=1" class="btn btn-sm btn-primary">Edit Profile</a>
                         </div>
                     </div>
                     <div class="col-12 col-md-6">
@@ -954,6 +1027,44 @@ body {
                     </div>
                     <button class="btn btn-outline-secondary btn-sm back-to-dashboard-btn">Back to Dashboard</button>
                 </div>
+                {% if profile_edit_mode %}
+                <div id="editProfileFormContainer" class="card border rounded-4 p-4 mb-4">
+                    <h6 class="mb-3">Edit Profile</h6>
+                    <form method="post" action="{% url 'operations-dashboard' %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="form_type" value="edit_profile">
+                        <div class="row g-3">
+                            <div class="col-md-6">
+                                <label class="form-label">Username</label>
+                                {{ profile_form.username }}
+                                {{ profile_form.username.errors }}
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Email</label>
+                                {{ profile_form.email }}
+                                {{ profile_form.email.errors }}
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">First Name</label>
+                                {{ profile_form.first_name }}
+                                {{ profile_form.first_name.errors }}
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label">Last Name</label>
+                                {{ profile_form.last_name }}
+                                {{ profile_form.last_name.errors }}
+                            </div>
+                        </div>
+                        <div class="mt-4 d-flex justify-content-end gap-2">
+                            <a href="{% url 'operations-dashboard' %}?show_profile=1" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary">Save Profile</button>
+                        </div>
+                        {% if profile_form.non_field_errors %}
+                        <div class="alert alert-danger mt-3">{{ profile_form.non_field_errors }}</div>
+                        {% endif %}
+                    </form>
+                </div>
+                {% else %}
                 <div class="row g-3 mb-4">
                     <div class="col-12 col-md-4">
                         <div class="border rounded-4 p-3 text-center h-100">
@@ -981,6 +1092,7 @@ body {
                         <li>Checked compliance status</li>
                     </ul>
                 </div>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -995,8 +1107,9 @@ function updateSidebarActiveLink(targetHref) {
 }
 
 function loadApprovalFragment(url) {
-    const targetUrl = url.includes('?') ? `${url}&partial=1` : `${url}?partial=1`;
-    fetch(targetUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+    const targetUrl = new URL(url, window.location.origin);
+    targetUrl.searchParams.set('partial', '1');
+    fetch(targetUrl.toString(), { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
         .then(response => response.text())
         .then(html => {
             const embedded = document.getElementById('embeddedContent');
@@ -1010,7 +1123,8 @@ function loadApprovalFragment(url) {
             const reports = document.getElementById('reportsPanel');
             const settings = document.getElementById('settingsPanel');
             const profile = document.getElementById('profilePanel');
-            if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+            const notifications = document.getElementById('notificationsPanel');
+            if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
                 embedded.innerHTML = html;
                 embedded.classList.remove('d-none');
                 body.classList.add('d-none');
@@ -1023,12 +1137,91 @@ function loadApprovalFragment(url) {
                 reports.classList.add('d-none');
                 settings.classList.add('d-none');
                 profile.classList.add('d-none');
+                notifications.classList.add('d-none');
                 updateSidebarActiveLink('#shipment_approvals');
+                attachEmbeddedApprovalHandlers();
             }
         })
         .catch(() => {
             window.location.href = url;
         });
+}
+
+function submitEmbeddedApprovalForm(form) {
+    const url = new URL(form.action, window.location.origin);
+    url.searchParams.set('partial', '1');
+    const method = (form.method || 'GET').toUpperCase();
+    const options = {
+        method,
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    };
+
+    if (method === 'GET') {
+        const formData = new FormData(form);
+        for (const [name, value] of formData.entries()) {
+            url.searchParams.set(name, value);
+        }
+    } else {
+        options.body = new FormData(form);
+    }
+
+    fetch(url.toString(), options)
+        .then(response => {
+            if (response.redirected) {
+                window.location.href = response.url;
+                return null;
+            }
+            return response.text();
+        })
+        .then(html => {
+            if (!html) return;
+            const embedded = document.getElementById('embeddedContent');
+            if (embedded) {
+                embedded.innerHTML = html;
+                attachEmbeddedApprovalHandlers();
+            }
+        })
+        .catch(() => {
+            form.submit();
+        });
+}
+
+function markNotificationsRead() {
+    const badge = document.querySelector('#notificationBellBtn .badge');
+    const unreadPanelCount = document.getElementById('notificationsUnreadCount');
+    if (badge) {
+        badge.textContent = '0';
+        badge.classList.add('d-none');
+    }
+    if (unreadPanelCount) {
+        unreadPanelCount.textContent = '0';
+    }
+    fetch(`${window.location.pathname}?mark_notifications_read=1`, {
+        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    }).catch(() => {
+        // Silent failure if notification mark-read request cannot complete.
+    });
+}
+
+function attachEmbeddedApprovalHandlers() {
+    const embedded = document.getElementById('embeddedContent');
+    if (!embedded) {
+        return;
+    }
+
+    embedded.querySelectorAll('a[href*="shipment-approvals"]').forEach(link => {
+        link.addEventListener('click', event => {
+            event.preventDefault();
+            loadApprovalFragment(event.currentTarget.href);
+        });
+    });
+
+    embedded.querySelectorAll('form[action*="shipment-approvals"]').forEach(form => {
+        form.addEventListener('submit', event => {
+            event.preventDefault();
+            submitEmbeddedApprovalForm(event.currentTarget);
+        });
+    });
 }
 
 function showAnalyticsPanel() {
@@ -1043,7 +1236,8 @@ function showAnalyticsPanel() {
     const reports = document.getElementById('reportsPanel');
     const settings = document.getElementById('settingsPanel');
     const profile = document.getElementById('profilePanel');
-    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+    const notifications = document.getElementById('notificationsPanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
         embedded.innerHTML = '';
         embedded.classList.add('d-none');
         body.classList.add('d-none');
@@ -1056,6 +1250,7 @@ function showAnalyticsPanel() {
         reports.classList.add('d-none');
         settings.classList.add('d-none');
         profile.classList.add('d-none');
+        notifications.classList.add('d-none');
         updateSidebarActiveLink('#analytics');
     }
 }
@@ -1072,7 +1267,8 @@ function showMonitoringPanel() {
     const reports = document.getElementById('reportsPanel');
     const settings = document.getElementById('settingsPanel');
     const profile = document.getElementById('profilePanel');
-    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+    const notifications = document.getElementById('notificationsPanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
         embedded.innerHTML = '';
         embedded.classList.add('d-none');
         body.classList.add('d-none');
@@ -1085,6 +1281,7 @@ function showMonitoringPanel() {
         reports.classList.add('d-none');
         settings.classList.add('d-none');
         profile.classList.add('d-none');
+        notifications.classList.add('d-none');
         updateSidebarActiveLink('#shipment_monitoring');
     }
 }
@@ -1101,7 +1298,8 @@ function showExceptionPanel() {
     const reports = document.getElementById('reportsPanel');
     const settings = document.getElementById('settingsPanel');
     const profile = document.getElementById('profilePanel');
-    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+    const notifications = document.getElementById('notificationsPanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
         embedded.innerHTML = '';
         embedded.classList.add('d-none');
         body.classList.add('d-none');
@@ -1114,6 +1312,7 @@ function showExceptionPanel() {
         reports.classList.add('d-none');
         settings.classList.add('d-none');
         profile.classList.add('d-none');
+        notifications.classList.add('d-none');
         updateSidebarActiveLink('#exception_management');
     }
 }
@@ -1130,7 +1329,8 @@ function showCustodyPanel() {
     const reports = document.getElementById('reportsPanel');
     const settings = document.getElementById('settingsPanel');
     const profile = document.getElementById('profilePanel');
-    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+    const notifications = document.getElementById('notificationsPanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
         embedded.innerHTML = '';
         embedded.classList.add('d-none');
         body.classList.add('d-none');
@@ -1143,6 +1343,7 @@ function showCustodyPanel() {
         reports.classList.add('d-none');
         settings.classList.add('d-none');
         profile.classList.add('d-none');
+        notifications.classList.add('d-none');
         updateSidebarActiveLink('#custody_governance');
     }
 }
@@ -1159,7 +1360,8 @@ function showReconciliationPanel() {
     const reports = document.getElementById('reportsPanel');
     const settings = document.getElementById('settingsPanel');
     const profile = document.getElementById('profilePanel');
-    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+    const notifications = document.getElementById('notificationsPanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
         embedded.innerHTML = '';
         embedded.classList.add('d-none');
         body.classList.add('d-none');
@@ -1167,10 +1369,12 @@ function showReconciliationPanel() {
         monitoring.classList.add('d-none');
         exception.classList.add('d-none');
         custody.classList.add('d-none');
+        reconciliation.classList.add('d-none');
         compliance.classList.add('d-none');
         reports.classList.add('d-none');
         settings.classList.add('d-none');
         profile.classList.add('d-none');
+        notifications.classList.add('d-none');
         reconciliation.classList.remove('d-none');
         updateSidebarActiveLink('#reconciliation_review');
     }
@@ -1188,7 +1392,8 @@ function showCompliancePanel() {
     const reports = document.getElementById('reportsPanel');
     const settings = document.getElementById('settingsPanel');
     const profile = document.getElementById('profilePanel');
-    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+    const notifications = document.getElementById('notificationsPanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
         embedded.innerHTML = '';
         embedded.classList.add('d-none');
         body.classList.add('d-none');
@@ -1200,6 +1405,7 @@ function showCompliancePanel() {
         reports.classList.add('d-none');
         settings.classList.add('d-none');
         profile.classList.add('d-none');
+        notifications.classList.add('d-none');
         compliance.classList.remove('d-none');
         updateSidebarActiveLink('#compliance_monitoring');
     }
@@ -1217,7 +1423,8 @@ function showReportsPanel() {
     const reports = document.getElementById('reportsPanel');
     const settings = document.getElementById('settingsPanel');
     const profile = document.getElementById('profilePanel');
-    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+    const notifications = document.getElementById('notificationsPanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
         embedded.innerHTML = '';
         embedded.classList.add('d-none');
         body.classList.add('d-none');
@@ -1229,8 +1436,41 @@ function showReportsPanel() {
         compliance.classList.add('d-none');
         settings.classList.add('d-none');
         profile.classList.add('d-none');
+        notifications.classList.add('d-none');
         reports.classList.remove('d-none');
         updateSidebarActiveLink('#reports');
+    }
+}
+
+function showNotificationsPanel() {
+    const embedded = document.getElementById('embeddedContent');
+    const body = document.getElementById('dashboardBody');
+    const analytics = document.getElementById('analyticsPanel');
+    const monitoring = document.getElementById('monitoringPanel');
+    const exception = document.getElementById('exceptionPanel');
+    const custody = document.getElementById('custodyPanel');
+    const reconciliation = document.getElementById('reconciliationPanel');
+    const compliance = document.getElementById('compliancePanel');
+    const reports = document.getElementById('reportsPanel');
+    const settings = document.getElementById('settingsPanel');
+    const profile = document.getElementById('profilePanel');
+    const notifications = document.getElementById('notificationsPanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
+        embedded.innerHTML = '';
+        embedded.classList.add('d-none');
+        body.classList.add('d-none');
+        analytics.classList.add('d-none');
+        monitoring.classList.add('d-none');
+        exception.classList.add('d-none');
+        custody.classList.add('d-none');
+        reconciliation.classList.add('d-none');
+        compliance.classList.add('d-none');
+        reports.classList.add('d-none');
+        settings.classList.add('d-none');
+        profile.classList.add('d-none');
+        notifications.classList.remove('d-none');
+        markNotificationsRead();
+        updateSidebarActiveLink('#notifications');
     }
 }
 
@@ -1246,7 +1486,8 @@ function showSettingsPanel() {
     const reports = document.getElementById('reportsPanel');
     const settings = document.getElementById('settingsPanel');
     const profile = document.getElementById('profilePanel');
-    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+    const notifications = document.getElementById('notificationsPanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
         embedded.innerHTML = '';
         embedded.classList.add('d-none');
         body.classList.add('d-none');
@@ -1258,6 +1499,7 @@ function showSettingsPanel() {
         compliance.classList.add('d-none');
         reports.classList.add('d-none');
         profile.classList.add('d-none');
+        notifications.classList.add('d-none');
         settings.classList.remove('d-none');
         updateSidebarActiveLink('#settings');
     }
@@ -1275,7 +1517,8 @@ function showProfilePanel() {
     const reports = document.getElementById('reportsPanel');
     const settings = document.getElementById('settingsPanel');
     const profile = document.getElementById('profilePanel');
-    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+    const notifications = document.getElementById('notificationsPanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
         embedded.innerHTML = '';
         embedded.classList.add('d-none');
         body.classList.add('d-none');
@@ -1287,8 +1530,9 @@ function showProfilePanel() {
         compliance.classList.add('d-none');
         reports.classList.add('d-none');
         settings.classList.add('d-none');
+        notifications.classList.add('d-none');
         profile.classList.remove('d-none');
-        updateSidebarActiveLink('#dashboard');
+        updateSidebarActiveLink('#profile');
     }
 }
 
@@ -1304,7 +1548,8 @@ function showDashboardBody() {
     const reports = document.getElementById('reportsPanel');
     const settings = document.getElementById('settingsPanel');
     const profile = document.getElementById('profilePanel');
-    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+    const notifications = document.getElementById('notificationsPanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
         embedded.innerHTML = '';
         embedded.classList.add('d-none');
         body.classList.remove('d-none');
@@ -1317,6 +1562,7 @@ function showDashboardBody() {
         reports.classList.add('d-none');
         settings.classList.add('d-none');
         profile.classList.add('d-none');
+        notifications.classList.add('d-none');
         updateSidebarActiveLink('#dashboard');
     }
 }
@@ -1377,6 +1623,18 @@ document.querySelectorAll('a.nav-link[href="#reports"]').forEach(link => {
     });
 });
 
+document.querySelectorAll('a.nav-link[href="#notifications"]').forEach(link => {
+    link.addEventListener('click', event => {
+        event.preventDefault();
+        showNotificationsPanel();
+    });
+});
+
+document.getElementById('notificationBellBtn')?.addEventListener('click', event => {
+    event.preventDefault();
+    showNotificationsPanel();
+});
+
 document.getElementById('settingsNavBtn')?.addEventListener('click', event => {
     event.preventDefault();
     showSettingsPanel();
@@ -1404,6 +1662,26 @@ document.querySelectorAll('a.partial-load').forEach(link => {
     });
 });
 
+document.getElementById('markAllNotificationsReadBtn')?.addEventListener('click', event => {
+    event.preventDefault();
+    markNotificationsRead();
+});
+
+if ({{ show_profile_panel|yesno:'true,false' }}) {
+    showProfilePanel();
+}
+
+if ({{ show_notifications_panel|yesno:'true,false' }}) {
+    showNotificationsPanel();
+}
+
+if ({{ profile_edit_mode|yesno:'true,false' }}) {
+    const editProfileFormContainer = document.getElementById('editProfileFormContainer');
+    if (editProfileFormContainer) {
+        editProfileFormContainer.scrollIntoView({ behavior: 'smooth' });
+    }
+}
+
 document.addEventListener('click', event => {
     const backButton = event.target.closest('.back-to-dashboard-btn');
     if (backButton) {
@@ -1419,7 +1697,8 @@ document.addEventListener('click', event => {
         const reports = document.getElementById('reportsPanel');
         const settings = document.getElementById('settingsPanel');
         const profile = document.getElementById('profilePanel');
-        if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile) {
+        const notifications = document.getElementById('notificationsPanel');
+        if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
             embedded.innerHTML = '';
             embedded.classList.add('d-none');
             body.classList.remove('d-none');
@@ -1432,6 +1711,7 @@ document.addEventListener('click', event => {
             reports.classList.add('d-none');
             settings.classList.add('d-none');
             profile.classList.add('d-none');
+            notifications.classList.add('d-none');
             updateSidebarActiveLink('#dashboard');
         }
     }

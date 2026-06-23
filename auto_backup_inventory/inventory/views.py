@@ -724,6 +724,12 @@ def backup_dashboard(request):
     profile_form = None
     show_profile_panel = False
 
+    selected_tape_id = request.GET.get('selected_tape') or request.POST.get('selected_tape')
+    if selected_tape_id:
+        selected_tape = get_object_by_uuid_pk(Tape, selected_tape_id)
+        if selected_tape:
+            show_tape_actions_panel = True
+
     if request.method == 'POST':
         form_type = request.POST.get('form_type')
         if form_type == 'verify_user':
@@ -1200,6 +1206,33 @@ def operations_dashboard(request):
     reconciliation_results = ReconciliationResult.objects.order_by('-created_at')
     audit_logs = AuditLog.objects.order_by('-timestamp')[:12]
 
+    unread_alert_count = AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).count()
+    notification_items = AuditLog.objects.filter(severity__in=['warning', 'error']).order_by('-timestamp')[:10]
+    show_profile_panel = False
+    profile_edit_mode = False
+    show_notifications_panel = False
+    profile_form = UserProfileForm(instance=request.user)
+
+    if request.method == 'GET' and request.GET.get('mark_notifications_read') == '1':
+        AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).update(is_read=True, read_at=timezone.now())
+        unread_alert_count = 0
+
+    if request.method == 'POST' and request.POST.get('form_type') == 'edit_profile':
+        profile_form = UserProfileForm(request.POST, instance=request.user)
+        if profile_form.is_valid():
+            profile_form.save()
+            AuditLog.objects.create(
+                name='Profile Updated',
+                action=f'Updated profile for {request.user.username}',
+                user=request.user,
+                severity='success',
+            )
+            messages.success(request, 'Your profile has been updated.')
+            return redirect(f'{reverse("operations-dashboard")}?show_profile=1')
+        else:
+            show_profile_panel = True
+            profile_edit_mode = True
+
     total_tapes = tapes.count()
     tapes_in_transit = tapes.filter(status='In Transit').count()
     missing_tapes = tapes.filter(status='Missing').count()
@@ -1267,6 +1300,14 @@ def operations_dashboard(request):
 
     if not isinstance(approval_shipments, list):
         approval_shipments = list(approval_shipments)
+
+    if request.GET.get('show_profile') == '1':
+        show_profile_panel = True
+        if request.GET.get('edit_profile') == '1':
+            profile_edit_mode = True
+
+    if request.GET.get('show_notifications') == '1':
+        show_notifications_panel = True
 
     total_shipments = len(approval_shipments)
     pending_count = sum(1 for shipment in approval_shipments if shipment.status == 'Pending')
@@ -1370,6 +1411,12 @@ def operations_dashboard(request):
         'non_compliant_count': non_compliant_count,
         'overdue_count': overdue_count,
         'has_results': total_shipments > 0,
+        'profile_form': profile_form,
+        'show_profile_panel': show_profile_panel,
+        'profile_edit_mode': profile_edit_mode,
+        'show_notifications_panel': show_notifications_panel,
+        'unread_alert_count': unread_alert_count,
+        'notification_items': notification_items,
         **chart_data,
     }
     return render(request, 'operations_dashboard.html', context)
@@ -1479,6 +1526,8 @@ def shipment_detail(request, shipment_pk):
                 Q(rfid_tag__icontains=manifest_query)
             )
 
+    partial_request = request.GET.get('partial') == '1'
+
     if request.method == 'POST':
         if approval_form.is_valid():
             decision = approval_form.cleaned_data.get('decision')
@@ -1521,9 +1570,14 @@ def shipment_detail(request, shipment_pk):
                 )
 
                 messages.success(request, f'Shipment has been marked as {shipment.status}.')
-                return redirect('shipment-detail', shipment_pk=shipment.pk)
+                if not partial_request:
+                    return redirect('shipment-detail', shipment_pk=shipment.pk)
 
     compliance_checks = shipment.compliance_checks()
+    compliance_checks_display = [
+        (key.replace('_', ' ').title(), value)
+        for key, value in compliance_checks.items()
+    ]
     context = {
         'dashboard_tabs': OPERATIONS_FEATURE_TABS,
         'shipment': shipment,
@@ -1531,13 +1585,15 @@ def shipment_detail(request, shipment_pk):
         'manifest_search_form': manifest_search_form,
         'manifest_tapes': manifest_tapes,
         'compliance_checks': compliance_checks,
+        'compliance_checks_display': compliance_checks_display,
         'compliance_passed': shipment.compliance_passed(),
         'risk_score': shipment.risk_score(),
         'risk_level': shipment.risk_level(),
         'risk_recommendation': shipment.risk_recommendation(),
         'history': shipment.approval_history.all(),
     }
-    return render(request, 'shipment_detail.html', context)
+    template = 'shipment_detail_fragment.html' if partial_request else 'shipment_detail.html'
+    return render(request, template, context)
 
 
 @user_passes_test(lambda u: u.is_superuser or is_operations_manager(u), login_url='signin')

@@ -249,8 +249,10 @@ class Shipment(models.Model):
         ('Approved', 'Approved'),
         ('Rejected', 'Rejected'),
         ('Dispatched', 'Dispatched'),
+        ('Picked Up', 'Picked Up'),
         ('In Transit', 'In Transit'),
         ('Delivered', 'Delivered'),
+        ('Return Accepted', 'Return Accepted'),
         ('Cancelled', 'Cancelled'),
     ]
 
@@ -431,6 +433,176 @@ class ShipmentApprovalHistory(models.Model):
 
     def __str__(self):
         return f'{self.shipment.shipment_id} - {self.action} by {self.user.username if self.user else "System"}'
+
+
+def generate_receipt_id():
+    return f"RCT-{uuid.uuid4().hex[:8].upper()}"
+
+
+def generate_delivery_id():
+    return f"DLV-{uuid.uuid4().hex[:8].upper()}"
+
+
+class CourierProfile(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='courier_profile'
+    )
+    courier_id = models.CharField(max_length=50, unique=True)
+    full_name = models.CharField(max_length=200)
+    company_name = models.CharField(max_length=200, blank=True)
+    phone_number = models.CharField(max_length=50, blank=True)
+    email = models.EmailField(blank=True)
+    employee_number = models.CharField(max_length=50, blank=True)
+    active_status = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Courier Profile'
+        verbose_name_plural = 'Courier Profiles'
+        ordering = ['full_name']
+
+    def __str__(self):
+        return f"{self.full_name} ({self.courier_id})"
+
+
+class ShipmentReceipt(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    receipt_id = models.CharField(max_length=50, unique=True, default=generate_receipt_id)
+    shipment = models.ForeignKey('Shipment', on_delete=models.CASCADE, related_name='receipts')
+    courier = models.ForeignKey(CourierProfile, on_delete=models.CASCADE, related_name='receipts')
+    manifest_reference = models.CharField(max_length=150, blank=True)
+    pickup_date = models.DateField(default=timezone.localdate)
+    pickup_time = models.TimeField(default=timezone.localtime)
+    pickup_location = models.CharField(max_length=200)
+    custody_confirmed = models.BooleanField(default=False)
+    confirmation_timestamp = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    all_tapes_scanned = models.BooleanField(default=False)
+    manifest_verified = models.BooleanField(default=False)
+    tape_count_matched = models.BooleanField(default=False)
+    no_damaged_tapes = models.BooleanField(default=True)
+    custody_accepted = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Shipment Receipt'
+        verbose_name_plural = 'Shipment Receipts'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.receipt_id} for {self.shipment.shipment_id}"
+
+
+class DeliveryConfirmation(models.Model):
+    DELIVERY_STATUS_CHOICES = [
+        ('Delivered', 'Delivered'),
+        ('Partially Delivered', 'Partially Delivered'),
+        ('Delayed', 'Delayed'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    delivery_id = models.CharField(max_length=50, unique=True, default=generate_delivery_id)
+    shipment = models.ForeignKey('Shipment', on_delete=models.CASCADE, related_name='deliveries')
+    courier = models.ForeignKey(CourierProfile, on_delete=models.CASCADE, related_name='deliveries')
+    destination_location = models.CharField(max_length=200)
+    receiving_custodian = models.CharField(max_length=150)
+    delivery_date = models.DateField(default=timezone.localdate)
+    delivery_time = models.TimeField(default=timezone.localtime)
+    delivery_status = models.CharField(max_length=30, choices=DELIVERY_STATUS_CHOICES, default='Delivered')
+    notes = models.TextField(blank=True)
+    manifest_matched = models.BooleanField(default=False)
+    all_tapes_delivered = models.BooleanField(default=False)
+    discrepancies_resolved = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Delivery Confirmation'
+        verbose_name_plural = 'Delivery Confirmations'
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.delivery_id} for {self.shipment.shipment_id}"
+
+
+def generate_exception_id():
+    return f"EXC-{uuid.uuid4().hex[:8].upper()}"
+
+
+class ShipmentException(models.Model):
+    EXCEPTION_TYPE_CHOICES = [
+        ('Missing Tape', 'Missing Tape'),
+        ('Damaged Tape', 'Damaged Tape'),
+        ('Incorrect Manifest', 'Incorrect Manifest'),
+        ('Delivery Delay', 'Delivery Delay'),
+        ('Custody Dispute', 'Custody Dispute'),
+        ('Unexpected Tape', 'Unexpected Tape'),
+    ]
+
+    STATUS_CHOICES = [
+        ('Open', 'Open'),
+        ('Investigating', 'Investigating'),
+        ('Resolved', 'Resolved'),
+        ('Closed', 'Closed'),
+    ]
+
+    SEVERITY_CHOICES = [
+        ('Low', 'Low'),
+        ('Medium', 'Medium'),
+        ('High', 'High'),
+        ('Critical', 'Critical'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    exception_id = models.CharField(max_length=50, unique=True, default=generate_exception_id)
+    shipment = models.ForeignKey('Shipment', on_delete=models.CASCADE, related_name='exceptions')
+    tape = models.ForeignKey('Tape', null=True, blank=True, on_delete=models.SET_NULL, related_name='exceptions')
+    exception_type = models.CharField(max_length=50, choices=EXCEPTION_TYPE_CHOICES)
+    description = models.TextField()
+    reported_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
+    reported_date = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Open')
+    severity = models.CharField(max_length=20, choices=SEVERITY_CHOICES, default='Medium')
+
+    class Meta:
+        verbose_name = 'Shipment Exception'
+        verbose_name_plural = 'Shipment Exceptions'
+        ordering = ['-reported_date']
+
+    def __str__(self):
+        return f"{self.exception_id} ({self.exception_type})"
+
+
+class ShipmentTransportEvent(models.Model):
+    EVENT_TYPE_CHOICES = [
+        ('Picked Up', 'Picked Up'),
+        ('In Transit', 'In Transit'),
+        ('Delayed', 'Delayed'),
+        ('Delivered', 'Delivered'),
+        ('Return Accepted', 'Return Accepted'),
+        ('Return Delivered', 'Return Delivered'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    shipment = models.ForeignKey('Shipment', on_delete=models.CASCADE, related_name='transport_events')
+    courier = models.ForeignKey(CourierProfile, null=True, blank=True, on_delete=models.SET_NULL, related_name='transport_events')
+    event_type = models.CharField(max_length=50, choices=EVENT_TYPE_CHOICES)
+    event_date = models.DateField(default=timezone.localdate)
+    event_time = models.TimeField(default=timezone.localtime)
+    comments = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Shipment Transport Event'
+        verbose_name_plural = 'Shipment Transport Events'
+        ordering = ['-event_date', '-event_time', '-created_at']
+
+    def __str__(self):
+        return f"{self.shipment.shipment_id} - {self.event_type}"
 
 
 class ReportTemplate(models.Model):

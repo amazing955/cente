@@ -12,6 +12,6 @@ urlpatterns = [
     path('shipment-approvals/<uuid:shipment_pk>/', views.shipment_detail, name='shipment-detail'),
     path('shipment-approvals/<uuid:shipment_pk>/history/', views.approval_history, name='approval-history'),
     path('reconciliation-reports/', views.reconciliation_reports, name='reconciliation-reports'),
-    path('reconciliation-reports/<int:pk>/', views.reconciliation_report_detail, name='reconciliation-report-detail'),
+    path('reconciliation-reports/<uuid:pk>/', views.reconciliation_report_detail, name='reconciliation-report-detail'),
     path('tapes/add/', views.add_tape, name='add-tape'),
 ]

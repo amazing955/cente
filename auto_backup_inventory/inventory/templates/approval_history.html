@@ -23,9 +23,17 @@
                     <div>
                         <h6 class="mb-1">{{ entry.action }}</h6>
                         <p class="mb-1 text-muted">{{ entry.comments|default:'No comments provided.' }}</p>
-                        <div class="small text-muted">By {{ entry.user.username if entry.user else 'System' }} · {{ entry.created_at|date:'M d, Y H:i' }}</div>
+                        <div class="small text-muted">
+                            By {% if entry.user %}{{ entry.user.username }}{% else %}System{% endif %} · {{ entry.created_at|date:'M d, Y H:i' }}
+                        </div>
                     </div>
-                    <span class="badge bg-{{ 'success' if entry.action == 'Approved' else 'warning' if entry.action == 'Requested More Information' else 'danger' }} align-self-start">{{ entry.action }}</span>
+                    {% if entry.action == 'Approved' %}
+                        <span class="badge bg-success align-self-start">{{ entry.action }}</span>
+                    {% elif entry.action == 'Requested More Information' %}
+                        <span class="badge bg-warning align-self-start">{{ entry.action }}</span>
+                    {% else %}
+                        <span class="badge bg-danger align-self-start">{{ entry.action }}</span>
+                    {% endif %}
                 </div>
             </div>
             {% empty %}

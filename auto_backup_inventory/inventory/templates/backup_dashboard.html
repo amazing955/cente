@@ -254,9 +254,9 @@ footer{
             <h5 class="mb-0">Reconciliation Management</h5>
             <small class="text-muted">Track reconciliation sessions, tape discrepancies, and resolution status.</small>
         </div>
-        <button id="toggle-reconciliation-form" type="button" class="btn btn-sm btn-primary">
+        <a id="toggle-reconciliation-form" href="{% url 'backup-dashboard' %}?show_reconciliation=1&show_add_reconciliation=1" class="btn btn-sm btn-primary" role="button" aria-expanded="false">
             <i class="bi bi-plus-circle me-1"></i> New Reconciliation
-        </button>
+        </a>
     </div>
     <div class="card-body">
         <div id="new-reconciliation-form-card" class="card mb-4" style="display: {% if show_add_reconciliation_panel %}block{% else %}none{% endif %};">
@@ -871,22 +871,37 @@ footer{
                             <div class="col-12">
                                 <label class="form-label">VolSER</label>
                                 {{ tape_action_form.volser }}
+                                {% if tape_action_form.volser.errors %}
+                                    <div class="invalid-feedback d-block">{{ tape_action_form.volser.errors.0 }}</div>
+                                {% endif %}
                             </div>
                             <div class="col-12">
                                 <label class="form-label">Barcode</label>
                                 {{ tape_action_form.barcode }}
+                                {% if tape_action_form.barcode.errors %}
+                                    <div class="invalid-feedback d-block">{{ tape_action_form.barcode.errors.0 }}</div>
+                                {% endif %}
                             </div>
                             <div class="col-12">
                                 <label class="form-label">Current Location</label>
                                 {{ tape_action_form.current_location }}
+                                {% if tape_action_form.current_location.errors %}
+                                    <div class="invalid-feedback d-block">{{ tape_action_form.current_location.errors.0 }}</div>
+                                {% endif %}
                             </div>
                             <div class="col-12">
                                 <label class="form-label">Retention End Date</label>
                                 {{ tape_action_form.retention_end_date }}
+                                {% if tape_action_form.retention_end_date.errors %}
+                                    <div class="invalid-feedback d-block">{{ tape_action_form.retention_end_date.errors.0 }}</div>
+                                {% endif %}
                             </div>
                             <div class="col-12">
                                 <label class="form-label">Status</label>
                                 {{ tape_action_form.status }}
+                                {% if tape_action_form.status.errors %}
+                                    <div class="invalid-feedback d-block">{{ tape_action_form.status.errors.0 }}</div>
+                                {% endif %}
                             </div>
                         </div>
                         <div class="mt-3 text-end">
@@ -1430,17 +1445,24 @@ new Chart(document.getElementById('monthlyChart'), {
 const toggleReconciliationForm = document.getElementById('toggle-reconciliation-form');
 const reconciliationFormCard = document.getElementById('new-reconciliation-form-card');
 if (toggleReconciliationForm && reconciliationFormCard) {
-    toggleReconciliationForm.addEventListener('click', () => {
-        if (reconciliationFormCard.style.display === 'none' || reconciliationFormCard.style.display === '') {
-            reconciliationFormCard.style.display = 'block';
-            toggleReconciliationForm.classList.remove('btn-primary');
-            toggleReconciliationForm.classList.add('btn-secondary');
-            toggleReconciliationForm.innerHTML = '<i class="bi bi-x-circle me-1"></i> Close Form';
-        } else {
-            reconciliationFormCard.style.display = 'none';
-            toggleReconciliationForm.classList.remove('btn-secondary');
-            toggleReconciliationForm.classList.add('btn-primary');
-            toggleReconciliationForm.innerHTML = '<i class="bi bi-plus-circle me-1"></i> New Reconciliation';
+    const toggleFormState = (show) => {
+        reconciliationFormCard.style.display = show ? 'block' : 'none';
+        toggleReconciliationForm.classList.toggle('btn-primary', !show);
+        toggleReconciliationForm.classList.toggle('btn-secondary', show);
+        toggleReconciliationForm.innerHTML = show
+            ? '<i class="bi bi-x-circle me-1"></i> Close Form'
+            : '<i class="bi bi-plus-circle me-1"></i> New Reconciliation';
+        toggleReconciliationForm.setAttribute('aria-expanded', String(show));
+    };
+
+    const currentDisplay = window.getComputedStyle(reconciliationFormCard).display;
+    toggleFormState(currentDisplay !== 'none');
+
+    toggleReconciliationForm.addEventListener('click', (event) => {
+        event.preventDefault();
+        toggleFormState(reconciliationFormCard.style.display === 'none' || reconciliationFormCard.style.display === '');
+        if (reconciliationFormCard.style.display === 'block') {
+            reconciliationFormCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
     });
 }
