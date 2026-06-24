@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path, include
 from . import views
 
 urlpatterns = [
@@ -23,4 +23,5 @@ urlpatterns = [
     path('reconciliation-reports/', views.reconciliation_reports, name='reconciliation-reports'),
     path('reconciliation-reports/<uuid:pk>/', views.reconciliation_report_detail, name='reconciliation-report-detail'),
     path('tapes/add/', views.add_tape, name='add-tape'),
+    path('reports/', include('inventory.reports_urls')),
 ]

@@ -1099,8 +1099,8 @@ except Exception as e:
 finally:
     print('bye bye')
 
-
-
+import mysql.connector
+'''
 
 '''
 create table student if not exists (rollno int primary key auto_increment,

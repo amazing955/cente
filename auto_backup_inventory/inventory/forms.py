@@ -186,7 +186,59 @@ class TapeForm(forms.ModelForm):
         return barcode
 
 
+class AddTapeForm(forms.ModelForm):
+    class Meta:
+        model = Tape
+        fields = [
+            'volser',
+            'rfid_tag',
+            'tape_type',
+            'manufacturer',
+            'status',
+            'current_location',
+            'retention_end_date',
+            'legal_hold',
+            'audit_hold',
+            'remarks',
+        ]
+        widgets = {
+            'volser': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter VolSER', 'required': True}),
+            'rfid_tag': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter RFID Tag'}),
+            'tape_type': forms.Select(attrs={'class': 'form-select'}),
+            'manufacturer': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter Manufacturer'}),
+            'status': forms.Select(attrs={'class': 'form-select'}),
+            'current_location': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter Current Location'}),
+            'retention_end_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date', 'required': True}),
+            'legal_hold': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+            'audit_hold': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+            'remarks': forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Add remarks'}),
+        }
+
+    def clean_volser(self):
+        volser = self.cleaned_data.get('volser')
+        qs = Tape.objects.filter(volser__iexact=volser)
+        if self.instance and self.instance.pk:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise forms.ValidationError('VolSER already exists.')
+        return volser
+
+    def save(self, commit=True):
+        tape = super().save(commit=False)
+        if not tape.barcode:
+            tape.barcode = tape.generate_barcode()
+        if commit:
+            tape.save()
+        return tape
+
 class ShipmentForm(forms.ModelForm):
+    courier = forms.ModelChoiceField(
+        queryset=CourierProfile.objects.filter(active_status=True).order_by('full_name'),
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        label='Select Courier',
+        required=False,
+    )
+
     class Meta:
         model = Shipment
         fields = [
@@ -202,8 +254,6 @@ class ShipmentForm(forms.ModelForm):
             'receiving_organization',
             'expected_delivery_date',
             'receiving_custodian',
-            'courier_name',
-            'courier_contact',
             'vehicle_number',
             'tracking_number',
             'tapes',
@@ -223,14 +273,12 @@ class ShipmentForm(forms.ModelForm):
             'priority_level': forms.Select(attrs={'class': 'form-select'}),
             'number_of_tapes': forms.NumberInput(attrs={'class': 'form-control', 'min': 0}),
             'source_location': forms.TextInput(attrs={'class': 'form-control'}),
-            'releasing_custodian': forms.TextInput(attrs={'class': 'form-control'}),
+            'releasing_custodian': forms.TextInput(attrs={'class': 'form-control', 'readonly': True}),
             'release_datetime': forms.DateTimeInput(attrs={'class': 'form-control', 'type': 'datetime-local'}),
             'destination_location': forms.TextInput(attrs={'class': 'form-control'}),
             'receiving_organization': forms.TextInput(attrs={'class': 'form-control'}),
             'expected_delivery_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
             'receiving_custodian': forms.TextInput(attrs={'class': 'form-control'}),
-            'courier_name': forms.TextInput(attrs={'class': 'form-control'}),
-            'courier_contact': forms.TextInput(attrs={'class': 'form-control'}),
             'vehicle_number': forms.TextInput(attrs={'class': 'form-control'}),
             'tracking_number': forms.TextInput(attrs={'class': 'form-control'}),
             'tapes': forms.SelectMultiple(attrs={'class': 'form-select', 'size': '6'}),
@@ -244,8 +292,9 @@ class ShipmentForm(forms.ModelForm):
             'delivery_notes': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
         }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, request=None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.request = request
         self.fields['tapes'].queryset = Tape.objects.order_by('volser')
         self.fields['approved_by'].queryset = CustomUser.objects.filter(is_active=True).order_by('username')
         self.fields['approved_by'].required = False
@@ -256,6 +305,64 @@ class ShipmentForm(forms.ModelForm):
         self.fields['received_by'].required = False
         self.fields['delivery_status'].required = False
         self.fields['delivery_notes'].required = False
+        self.fields['receiving_custodian'].required = False
+        
+        if request and request.user.is_authenticated:
+            self.fields['releasing_custodian'].initial = request.user.get_full_name() or request.user.username
+        
+        self.fields['courier'].help_text = 'Select a courier profile to auto-fill courier details.'
+
+    def clean(self):
+        cleaned_data = super().clean()
+        tapes = cleaned_data.get('tapes')
+        number_of_tapes = cleaned_data.get('number_of_tapes')
+        expected_delivery_date = cleaned_data.get('expected_delivery_date')
+        releasing_custodian = cleaned_data.get('releasing_custodian')
+        receiving_custodian = cleaned_data.get('receiving_custodian')
+
+        if tapes:
+            tape_count = tapes.count()
+            if number_of_tapes in [None, 0]:
+                cleaned_data['number_of_tapes'] = tape_count
+                number_of_tapes = tape_count
+
+            if number_of_tapes != tape_count:
+                self.add_error(
+                    'number_of_tapes',
+                    'Number of tapes must equal selected tapes for a complete manifest.'
+                )
+
+            if tapes.filter(Q(legal_hold=True) | Q(audit_hold=True)).exists():
+                self.add_error(
+                    'tapes',
+                    'Selected tapes include legal or audit hold records. Remove hold tapes before shipment creation.'
+                )
+
+            if tapes.filter(status='Damaged').exists():
+                self.add_error(
+                    'tapes',
+                    'Selected tapes include damaged tapes. Remove damaged tapes before shipment creation.'
+                )
+
+            if tapes.filter(status='Missing').exists():
+                self.add_error(
+                    'tapes',
+                    'Selected tapes include missing tapes. Remove missing tapes before shipment creation.'
+                )
+
+            if expected_delivery_date:
+                retention_issues = tapes.filter(retention_end_date__lt=expected_delivery_date)
+                if retention_issues.exists():
+                    self.add_error(
+                        'expected_delivery_date',
+                        'One or more selected tapes violate retention compliance for the expected delivery date.'
+                    )
+
+            if not releasing_custodian or not receiving_custodian:
+                self.add_error('releasing_custodian', 'Dual custody requires both releasing and receiving custodians.')
+                self.add_error('receiving_custodian', 'Dual custody requires both releasing and receiving custodians.')
+
+        return cleaned_data
 
 
 class ShipmentApprovalDecisionForm(forms.Form):

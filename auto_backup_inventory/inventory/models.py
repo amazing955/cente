@@ -136,9 +136,28 @@ class Tape(models.Model):
         ordering = ['-date_registered']
 
     def generate_barcode(self):
-        barcode_base = self.volser.strip().upper().replace(' ', '').replace('-', '')
+        normalized_volser = self.volser.strip().upper().replace(' ', '').replace('-', '')
+        parts = [normalized_volser]
+
         if self.tape_type:
-            barcode_base = f"{barcode_base}-{self.tape_type.replace(' ', '').upper()}"
+            parts.append(self.tape_type.replace(' ', '').upper())
+
+        if self.manufacturer:
+            manufacturer_code = ''.join(ch for ch in self.manufacturer.strip().upper() if ch.isalnum())[:3]
+            if manufacturer_code:
+                parts.append(manufacturer_code)
+
+        if self.current_location:
+            location_code = ''.join(ch for ch in self.current_location.strip().upper() if ch.isalnum())[:3]
+            if location_code:
+                parts.append(location_code)
+
+        if self.rfid_tag:
+            rfid_code = ''.join(ch for ch in self.rfid_tag.strip().upper() if ch.isalnum())[-4:]
+            if rfid_code:
+                parts.append(rfid_code)
+
+        barcode_base = '-'.join(parts)
         barcode_candidate = barcode_base
         suffix = 1
         while Tape.objects.filter(barcode=barcode_candidate).exclude(pk=self.pk).exists():

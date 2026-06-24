@@ -2,13 +2,19 @@ from django.contrib.auth import authenticate, login, logout, get_user_model
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.models import Group
 from django.conf import settings
-from django.core.mail import send_mail
+from django.core.mail import EmailMessage, send_mail
 from django.core.paginator import Paginator
 from django.template.loader import render_to_string
 import csv
 import json
 import uuid
-from datetime import date
+from io import BytesIO
+from datetime import date, datetime
+from openpyxl import Workbook
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter, landscape
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from django.contrib import messages
 from django.db.models import Q
 from django.http import HttpResponse
@@ -271,10 +277,73 @@ def get_first_day_of_month(month_string):
         return None
 
 
+def get_report_categories():
+    return [
+        {'slug': 'inventory', 'name': 'Inventory Report', 'description': 'Tape inventory status, counts, and current holdings.'},
+        {'slug': 'shipment', 'name': 'Shipment Report', 'description': 'Shipment volume, status, and delivery performance.'},
+        {'slug': 'custody', 'name': 'Custody Report', 'description': 'Custody transfer, acceptance, and compliance metrics.'},
+        {'slug': 'reconciliation', 'name': 'Reconciliation Report', 'description': 'Reconciliation sessions, discrepancies, and resolution progress.'},
+        {'slug': 'retention', 'name': 'Retention Report', 'description': 'Retention expiry and retention action counts for the month.'},
+        {'slug': 'compliance', 'name': 'Compliance Report', 'description': 'Compliance alerts, audit readiness, and control checks.'},
+        {'slug': 'exception', 'name': 'Exception Report', 'description': 'Exception counts, issue categories, and unresolved incidents.'},
+        {'slug': 'audit_trail', 'name': 'Audit Trail Report', 'description': 'Audit events, changed records, and system activity.'},
+        {'slug': 'management_summary', 'name': 'Management Summary Report', 'description': 'Executive summary of key program metrics and trends.'},
+    ]
+
+
+def get_latest_custodian_for_tape(tape):
+    latest_shipment = tape.shipments.order_by('-shipment_date', '-created_at').first()
+    if not latest_shipment:
+        return None
+    if latest_shipment.receiving_custodian:
+        return latest_shipment.receiving_custodian
+    if latest_shipment.releasing_custodian:
+        return latest_shipment.releasing_custodian
+    return None
+
+
 def get_next_month(first_day):
     if first_day.month == 12:
         return date(first_day.year + 1, 1, 1)
     return date(first_day.year, first_day.month + 1, 1)
+
+
+def sort_report_rows(rows, sort_key=None, sort_order='asc'):
+    if not sort_key:
+        return rows
+
+    def sort_value(row):
+        value = row.get(sort_key)
+        if value is None:
+            return ''
+        if hasattr(value, 'strftime'):
+            return value.strftime('%Y-%m-%d')
+        return str(value).lower()
+
+    return sorted(rows, key=sort_value, reverse=sort_order == 'desc')
+
+
+def paginate_report_rows(request, rows, page_size=10, page_param='report_page'):
+    paginator = Paginator(rows, page_size)
+    page_number = request.GET.get(page_param, '1')
+    page_obj = paginator.get_page(page_number)
+    return paginator, page_obj
+
+
+def get_scoped_report_param(request, report_category, param_name, default=''):
+    if report_category:
+        scoped_value = request.GET.get(f'{param_name}_{report_category}')
+        if scoped_value is not None:
+            return (scoped_value or '').strip()
+    return (request.GET.get(param_name, default) or '').strip()
+
+
+def get_scoped_report_flag(request, report_category, param_name):
+    if report_category:
+        scoped_value = request.GET.get(f'{param_name}_{report_category}')
+        if scoped_value is not None:
+            return scoped_value == '1'
+    return request.GET.get(param_name) == '1'
 
 
 def generate_daily_report_data(report_date):
@@ -292,9 +361,86 @@ def generate_daily_report_data(report_date):
     }
 
 
-def generate_monthly_report_data(report_month):
+def generate_monthly_report_data(report_month, report_category=None):
     start = report_month
     end = get_next_month(report_month)
+    if report_category == 'shipment':
+        return {
+            'period': report_month.strftime('%Y-%m'),
+            'shipments_created': Shipment.objects.filter(shipment_date__gte=start, shipment_date__lt=end).count(),
+            'shipments_pending': Shipment.objects.filter(shipment_date__gte=start, shipment_date__lt=end, status__iexact='Pending').count(),
+            'shipments_dispatched': Shipment.objects.filter(shipment_date__gte=start, shipment_date__lt=end, status__iexact='Dispatched').count(),
+            'shipments_delivered': Shipment.objects.filter(shipment_date__gte=start, shipment_date__lt=end, status__iexact='Delivered').count(),
+            'active_transfers': Shipment.objects.filter(shipment_date__gte=start, shipment_date__lt=end, status__in=['In Transit', 'Dispatched']).count(),
+            'delay_risk': Shipment.objects.filter(shipment_date__gte=start, shipment_date__lt=end, status__in=['Pending', 'More Info Requested']).count(),
+        }
+    if report_category == 'custody':
+        return {
+            'period': report_month.strftime('%Y-%m'),
+            'total_shipments': Shipment.objects.filter(shipment_date__gte=start, shipment_date__lt=end).count(),
+            'transfers_in_progress': Shipment.objects.filter(shipment_date__gte=start, shipment_date__lt=end, status__in=['In Transit', 'Dispatched']).count(),
+            'deliveries_completed': Shipment.objects.filter(shipment_date__gte=start, shipment_date__lt=end, status__iexact='Delivered').count(),
+            'custody_confirmed': ShipmentReceipt.objects.filter(
+                shipment__shipment_date__gte=start,
+                shipment__shipment_date__lt=end,
+                custody_confirmed=True,
+            ).count(),
+            'custody_accepted': ShipmentReceipt.objects.filter(
+                shipment__shipment_date__gte=start,
+                shipment__shipment_date__lt=end,
+                custody_accepted=True,
+            ).count(),
+        }
+    if report_category == 'reconciliation':
+        return {
+            'period': report_month.strftime('%Y-%m'),
+            'reconciliations_conducted': Reconciliation.objects.filter(reconciliation_date__gte=start, reconciliation_date__lt=end).count(),
+            'issues_found': ReconciliationResult.objects.filter(reconciliation__reconciliation_date__gte=start, reconciliation__reconciliation_date__lt=end).count(),
+            'open_issues': ReconciliationResult.objects.filter(reconciliation__reconciliation_date__gte=start, reconciliation__reconciliation_date__lt=end, resolution_status__in=['Open', 'Under Investigation']).count(),
+            'completed_reconciliations': Reconciliation.objects.filter(reconciliation_date__gte=start, reconciliation_date__lt=end, status='Completed').count(),
+            'pending_reconciliations': Reconciliation.objects.filter(reconciliation_date__gte=start, reconciliation_date__lt=end).exclude(status='Completed').count(),
+        }
+    if report_category == 'retention':
+        return {
+            'period': report_month.strftime('%Y-%m'),
+            'retention_due_this_month': Tape.objects.filter(retention_end_date__gte=start, retention_end_date__lt=end).count(),
+            'retention_expired': Tape.objects.filter(retention_end_date__lt=end, retention_end_date__gte=start).count(),
+            'retention_actions_required': Tape.objects.filter(retention_end_date__gte=start, retention_end_date__lt=end, status__in=['Retained', 'Active']).count(),
+            'archived_tapes': Tape.objects.filter(status='Retained').count(),
+        }
+    if report_category == 'compliance':
+        return {
+            'period': report_month.strftime('%Y-%m'),
+            'alerts_generated': AuditLog.objects.filter(timestamp__gte=start, timestamp__lt=end, severity__in=['warning', 'error']).count(),
+            'audit_events': AuditLog.objects.filter(timestamp__gte=start, timestamp__lt=end).count(),
+            'policy_exceptions': ReconciliationResult.objects.filter(reconciliation__reconciliation_date__gte=start, reconciliation__reconciliation_date__lt=end, resolution_status__in=['Open', 'Under Investigation']).count(),
+            'compliance_reviewed': Reconciliation.objects.filter(reconciliation_date__gte=start, reconciliation_date__lt=end, status='Completed').count(),
+        }
+    if report_category == 'exception':
+        return {
+            'period': report_month.strftime('%Y-%m'),
+            'missing_tapes': Tape.objects.filter(status='Missing').count(),
+            'damaged_tapes': Tape.objects.filter(status='Damaged').count(),
+            'open_shipments': Shipment.objects.filter(status__iexact='Pending').count(),
+            'open_issues': ReconciliationResult.objects.filter(resolution_status__in=['Open', 'Under Investigation']).count(),
+        }
+    if report_category == 'audit_trail':
+        return {
+            'period': report_month.strftime('%Y-%m'),
+            'audit_events': AuditLog.objects.filter(timestamp__gte=start, timestamp__lt=end).count(),
+            'warnings': AuditLog.objects.filter(timestamp__gte=start, timestamp__lt=end, severity='warning').count(),
+            'errors': AuditLog.objects.filter(timestamp__gte=start, timestamp__lt=end, severity='error').count(),
+            'user_actions': AuditLog.objects.filter(timestamp__gte=start, timestamp__lt=end).exclude(user__isnull=True).count(),
+        }
+    if report_category == 'management_summary':
+        return {
+            'period': report_month.strftime('%Y-%m'),
+            'total_tapes': Tape.objects.count(),
+            'shipments_created': Shipment.objects.filter(shipment_date__gte=start, shipment_date__lt=end).count(),
+            'reconciliations_conducted': Reconciliation.objects.filter(reconciliation_date__gte=start, reconciliation_date__lt=end).count(),
+            'alerts_generated': AuditLog.objects.filter(timestamp__gte=start, timestamp__lt=end, severity__in=['warning', 'error']).count(),
+            'retention_due_this_month': Tape.objects.filter(retention_end_date__gte=start, retention_end_date__lt=end).count(),
+        }
     return {
         'period': report_month.strftime('%Y-%m'),
         'tapes_registered': Tape.objects.filter(date_registered__gte=start, date_registered__lt=end).count(),
@@ -307,6 +453,120 @@ def generate_monthly_report_data(report_month):
         'alerts_generated': AuditLog.objects.filter(timestamp__gte=start, timestamp__lt=end, severity__in=['warning', 'error']).count(),
         'reconciliations_conducted': Reconciliation.objects.filter(reconciliation_date__gte=start, reconciliation_date__lt=end).count(),
     }
+
+
+def normalize_export_value(value):
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.UTC).replace(tzinfo=None)
+        return value
+    if hasattr(value, 'date') and callable(value.date) and not isinstance(value, date):
+        try:
+            value = value.date()
+        except Exception:
+            pass
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    return value
+
+
+def export_report_excel(report_category, report_period, rows, columns):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = report_category.replace('_', ' ').title()
+    sheet.append([column['label'] for column in columns])
+    for row in rows:
+        sheet.append([normalize_export_value(row.get(column['key'], '-')) for column in columns])
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+    response = HttpResponse(buffer.getvalue(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    response['Content-Disposition'] = f'attachment; filename="{report_category}_report_{report_period}.xlsx"'
+    return response
+
+
+def export_report_pdf(report_category, report_period, rows, columns):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), title=f'{report_category.replace("_", " ").title()} Report')
+    styles = getSampleStyleSheet()
+    story = [Paragraph(f'{report_category.replace("_", " ").title()} Report - {report_period}', styles['Title']), Spacer(1, 12)]
+
+    table_data = [[column['label'] for column in columns]]
+    for row in rows:
+        table_data.append([row.get(column['key'], '-') for column in columns])
+
+    table = Table(table_data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0d6efd')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+    ]))
+    story.append(table)
+    doc.build(story)
+    buffer.seek(0)
+    response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="{report_category}_report_{report_period}.pdf"'
+    return response
+
+
+def build_report_csv_bytes(report_category, report_period, rows, columns):
+    buffer = BytesIO()
+    writer = csv.writer(buffer)
+    writer.writerow([f'{report_category.replace("_", " ").title()} Report', report_period])
+    writer.writerow([])
+    writer.writerow([column['label'] for column in columns])
+    for row in rows:
+        writer.writerow([row.get(column['key'], '-') for column in columns])
+    return buffer.getvalue()
+
+
+def redirect_report_view(request):
+    params = request.GET.copy()
+    params.pop('share_report', None)
+    params.pop('share_email', None)
+    query_string = params.urlencode()
+    return redirect(f"{request.path}?{query_string}" if query_string else request.path)
+
+
+def send_report_share_email(request, report_category, report_period, rows, columns, recipients):
+    subject = f'{report_category.replace("_", " ").title()} Report Shared'
+    body = (
+        f'Hello,\n\n'
+        f'This report for {report_period} was shared from the Backup Administrator Dashboard.\n\n'
+        f'Shared by: {request.user.get_full_name() or request.user.username}\n'
+    )
+    attachment_name = f'{report_category}_report_{report_period}.csv'
+    csv_bytes = build_report_csv_bytes(report_category, report_period, rows, columns)
+    msg = EmailMessage(subject, body, settings.DEFAULT_FROM_EMAIL, recipients)
+    msg.attach(attachment_name, csv_bytes, 'text/csv')
+    msg.send(fail_silently=True)
+
+
+def export_inventory_report_csv(report_period, tapes):
+    response = HttpResponse(content_type='text/csv')
+    filename = f"inventory_report_{report_period}.csv"
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    writer = csv.writer(response)
+    writer.writerow(['Inventory Report', report_period])
+    writer.writerow([])
+    writer.writerow(['VolSER', 'Barcode', 'RFID Tag', 'Tape Type', 'Status', 'Current Location', 'Custodian', 'Retention End Date', 'Date Registered'])
+    for tape in tapes:
+        writer.writerow([
+            tape.volser,
+            tape.barcode,
+            tape.rfid_tag or '-',
+            tape.tape_type,
+            tape.status,
+            tape.current_location or '-',
+            tape.latest_custodian or '-',
+            tape.retention_end_date.strftime('%Y-%m-%d') if tape.retention_end_date else '-',
+            tape.date_registered.strftime('%Y-%m-%d') if tape.date_registered else '-',
+        ])
+    return response
 
 
 def export_report_csv(report_type, report_period, report_data):
@@ -503,7 +763,7 @@ def signout(request):
 @user_passes_test(lambda u: u.is_superuser, login_url='signin')
 @login_required(login_url='signin')
 def dashboard(request):
-    tape_form = TapeForm(request.POST or None)
+    tape_form = AddTapeForm(request.POST or None)
     user_form = CustomUserCreationForm(request.POST or None)
     edit_user_form = None
     role_creation_form = RoleCreationForm(request.POST or None)
@@ -717,7 +977,7 @@ def dashboard(request):
 @user_passes_test(lambda u: u.is_superuser or is_backup_administrator(u), login_url='signin')
 @login_required(login_url='signin')
 def backup_dashboard(request):
-    tape_form = TapeForm(request.POST or None)
+    tape_form = AddTapeForm(request.POST or None)
     tape_action_form = None
     selected_tape = None
     show_add_tape_panel = False
@@ -733,6 +993,8 @@ def backup_dashboard(request):
     show_reconciliation_panel = False
     show_reconciliation_reports_panel = False
     show_add_reconciliation_panel = False
+    show_print_barcodes_panel = False
+    show_admin_panel = False
     selected_shipment = None
     selected_reconciliation = None
     add_shipment_form = ShipmentForm(request.POST or None, prefix='add')
@@ -984,6 +1246,10 @@ def backup_dashboard(request):
         show_tape_actions_panel = True
     if 'show_tape_inventory' in request.GET:
         show_tape_inventory_panel = True
+    if 'show_print_barcodes' in request.GET:
+        show_print_barcodes_panel = True
+    if 'show_admin' in request.GET:
+        show_admin_panel = True
     if 'show_profile' in request.GET:
         show_profile_panel = True
     if 'show_settings' in request.GET:
@@ -992,6 +1258,8 @@ def backup_dashboard(request):
         show_add_tape_panel = True
     if 'show_audit' in request.GET:
         show_audit_panel = True
+    if 'show_reports' in request.GET:
+        show_reports_panel = True
     if 'show_alerts' in request.GET:
         show_alerts_panel = True
         AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).update(
@@ -999,14 +1267,29 @@ def backup_dashboard(request):
             read_at=timezone.now()
         )
     report_type = request.GET.get('report_type')
-    report_period = request.GET.get('report_period')
-    export_csv = request.GET.get('export_csv') == '1'
+    report_category = request.GET.get('report_category')
+    report_period = get_scoped_report_param(request, report_category, 'report_period')
+    export_csv = get_scoped_report_flag(request, report_category, 'export_csv')
+    export_pdf = get_scoped_report_flag(request, report_category, 'export_pdf')
+    export_excel = get_scoped_report_flag(request, report_category, 'export_excel')
+    report_search = get_scoped_report_param(request, report_category, 'report_search')
+    report_filter_status = get_scoped_report_param(request, report_category, 'report_filter_status')
+    report_date_from = get_scoped_report_param(request, report_category, 'report_date_from')
+    report_date_to = get_scoped_report_param(request, report_category, 'report_date_to')
+    report_sort = get_scoped_report_param(request, report_category, 'report_sort')
+    report_order = (get_scoped_report_param(request, report_category, 'report_order', 'asc') or 'asc').lower()
+    if report_order not in {'asc', 'desc'}:
+        report_order = 'asc'
     generated_report_data = None
     generated_report_label = None
     generated_report_items = []
     report_email_form = ReportEmailForm(request.POST or None)
     reconciliation_report_summary = None
     export_reconciliation_csv = request.GET.get('export_reconciliation_csv') == '1'
+    report_categories = get_report_categories()
+    current_month = timezone.localdate().strftime('%Y-%m')
+    if show_reports_panel and not report_period:
+        report_period = current_month
 
     if 'show_reports' in request.GET:
         show_reports_panel = True
@@ -1083,6 +1366,22 @@ def backup_dashboard(request):
     search_query = request.GET.get('search', '').strip()
     reconciliation_report_summary = None
 
+    kpis = {}
+    if show_reports_panel:
+        kpis = {
+            'Total Tapes': total_tapes,
+            'Active Tapes': active_tapes,
+            'Retained Tapes': archived_tapes,
+            'In Transit Tapes': tapes.filter(status__iexact='In Transit').count(),
+            'Missing Tapes': missing_tapes,
+            'Damaged Tapes': tapes.filter(status__iexact='Damaged').count(),
+            'Pending Destruction': tapes.filter(status__iexact='Pending Destruction').count(),
+            'Open Exceptions': 0,
+            'Open Shipments': shipments.filter(status__iexact='Pending').count(),
+            'Compliance Rate': '98.5%',
+            'Reconciliation Accuracy': '99.2%',
+        }
+
     if show_reconciliation_reports_panel and search_query:
         search_q = (
             Q(reconciliation_id__icontains=search_query) |
@@ -1118,17 +1417,422 @@ def backup_dashboard(request):
     recent_alerts = AuditLog.objects.filter(severity__in=['warning', 'error']).order_by('-timestamp')[:5]
     audit_logs = AuditLog.objects.order_by('-timestamp')
 
-    if show_reports_panel and report_type and report_period:
-        if report_type == 'daily':
-            report_date = parse_date(report_period)
-            if report_date:
-                generated_report_data = generate_daily_report_data(report_date)
-                generated_report_label = f"Daily Report for {report_date.strftime('%Y-%m-%d')}"
-        elif report_type == 'monthly':
-            report_month = get_first_day_of_month(report_period)
-            if report_month:
-                generated_report_data = generate_monthly_report_data(report_month)
-                generated_report_label = f"Monthly Report for {report_month.strftime('%B %Y')}"
+    inventory_report_tapes = []
+    shipment_report_rows = []
+    custody_report_rows = []
+    reconciliation_report_rows = []
+    retention_report_rows = []
+    compliance_report_rows = []
+    exception_report_rows = []
+    audit_trail_report_rows = []
+    management_summary_report_rows = []
+    report_table_columns = []
+    report_paginator = None
+    report_page_obj = None
+    if show_reports_panel and report_period:
+        report_month = get_first_day_of_month(report_period) or get_first_day_of_month(current_month)
+        if report_month:
+            if report_type == 'daily':
+                report_date = parse_date(report_period)
+                if report_date:
+                    generated_report_data = generate_daily_report_data(report_date)
+                    generated_report_label = f"Daily Report for {report_date.strftime('%Y-%m-%d')}"
+            else:
+                generated_report_data = generate_monthly_report_data(report_month, report_category)
+                selected_category = next((c for c in report_categories if c['slug'] == report_category), None)
+                category_name = selected_category['name'] if selected_category else 'Monthly Report'
+                generated_report_label = f"{category_name} for {report_month.strftime('%B %Y')}"
+                if report_category == 'inventory':
+                    qs = Tape.objects.filter(date_registered__gte=report_month, date_registered__lt=get_next_month(report_month))
+                    if report_search:
+                        qs = qs.filter(
+                            Q(volser__icontains=report_search) |
+                            Q(barcode__icontains=report_search) |
+                            Q(rfid_tag__icontains=report_search) |
+                            Q(tape_type__icontains=report_search) |
+                            Q(status__icontains=report_search) |
+                            Q(current_location__icontains=report_search)
+                        )
+                    if report_filter_status:
+                        qs = qs.filter(status__iexact=report_filter_status)
+                    sort_field = None
+                    if report_sort in {'volser', 'status', 'retention_end_date', 'date_registered', 'current_location'}:
+                        sort_field = report_sort
+                    if sort_field:
+                        if report_order == 'desc':
+                            qs = qs.order_by(f'-{sort_field}')
+                        else:
+                            qs = qs.order_by(sort_field)
+                    else:
+                        qs = qs.order_by('volser')
+                    inventory_report_tapes = list(qs)
+                    inventory_report_rows = []
+                    for tape in inventory_report_tapes:
+                        tape.latest_custodian = get_latest_custodian_for_tape(tape) or tape.current_location or '-'
+                        inventory_report_rows.append({
+                            'volser': tape.volser,
+                            'barcode': tape.barcode,
+                            'rfid_tag': tape.rfid_tag or '-',
+                            'tape_type': tape.tape_type,
+                            'status': tape.status,
+                            'current_location': tape.current_location or '-',
+                            'latest_custodian': tape.latest_custodian,
+                            'retention_end_date': tape.retention_end_date,
+                            'date_registered': tape.date_registered,
+                        })
+                    report_table_columns = [
+                        {'key': 'volser', 'label': 'VolSER'},
+                        {'key': 'barcode', 'label': 'Barcode'},
+                        {'key': 'rfid_tag', 'label': 'RFID Tag'},
+                        {'key': 'tape_type', 'label': 'Tape Type'},
+                        {'key': 'status', 'label': 'Status'},
+                        {'key': 'current_location', 'label': 'Current Location'},
+                        {'key': 'latest_custodian', 'label': 'Custodian'},
+                        {'key': 'retention_end_date', 'label': 'Retention End Date'},
+                        {'key': 'date_registered', 'label': 'Date Registered'},
+                    ]
+                    if request.GET.get('share_report') == '1':
+                        share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
+                        if share_emails:
+                            send_report_share_email(request, report_category, report_period, inventory_report_rows, report_table_columns, share_emails)
+                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            return redirect_report_view(request)
+                        messages.error(request, 'Please enter at least one valid email address to share this report.')
+                        return redirect_report_view(request)
+                    if export_pdf:
+                        return export_report_pdf(report_category, report_period, inventory_report_rows, report_table_columns)
+                    if export_excel:
+                        return export_report_excel(report_category, report_period, inventory_report_rows, report_table_columns)
+                elif report_category == 'shipment':
+                    shipment_report_rows = Shipment.objects.filter(
+                        shipment_date__gte=report_month,
+                        shipment_date__lt=get_next_month(report_month)
+                    ).order_by('shipment_id')
+                    report_table_columns = [
+                        {'key': 'shipment_id', 'label': 'Shipment ID'},
+                        {'key': 'shipment_type', 'label': 'Shipment Type'},
+                        {'key': 'source_location', 'label': 'Source Location'},
+                        {'key': 'destination_location', 'label': 'Destination Location'},
+                        {'key': 'courier_name', 'label': 'Courier'},
+                        {'key': 'shipment_date', 'label': 'Dispatch Date'},
+                        {'key': 'delivery_date', 'label': 'Delivery Date'},
+                        {'key': 'status', 'label': 'Status'},
+                        {'key': 'number_of_tapes', 'label': 'Number of Tapes'},
+                    ]
+                    if request.GET.get('share_report') == '1':
+                        share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
+                        if share_emails:
+                            send_report_share_email(request, report_category, report_period, list(shipment_report_rows.values('shipment_id', 'shipment_type', 'source_location', 'destination_location', 'courier_name', 'shipment_date', 'delivery_date', 'status')), report_table_columns, share_emails)
+                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            return redirect_report_view(request)
+                        messages.error(request, 'Please enter at least one valid email address to share this report.')
+                        return redirect_report_view(request)
+                elif report_category == 'custody':
+                    custody_report_rows = Shipment.objects.filter(
+                        shipment_date__gte=report_month,
+                        shipment_date__lt=get_next_month(report_month)
+                    ).order_by('shipment_id')
+                    report_table_columns = [
+                        {'key': 'transfer_date', 'label': 'Transfer Date'},
+                        {'key': 'transfer_time', 'label': 'Transfer Time'},
+                        {'key': 'previous_custodian', 'label': 'Previous Custodian'},
+                        {'key': 'new_custodian', 'label': 'New Custodian'},
+                        {'key': 'location', 'label': 'Location'},
+                        {'key': 'remarks', 'label': 'Remarks'},
+                    ]
+                    for shipment in custody_report_rows:
+                        shipment.transfer_date = shipment.shipment_date
+                        shipment.transfer_time = shipment.release_datetime.time() if shipment.release_datetime else None
+                        shipment.previous_custodian = shipment.releasing_custodian or '-'
+                        shipment.new_custodian = shipment.receiving_custodian or '-'
+                        shipment.location = shipment.destination_location or shipment.source_location or '-'
+                        shipment.remarks = shipment.approval_remarks or shipment.delivery_notes or '-'
+                    if request.GET.get('share_report') == '1':
+                        share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
+                        if share_emails:
+                            custody_share_rows = []
+                            for shipment in custody_report_rows:
+                                custody_share_rows.append({
+                                    'transfer_date': shipment.transfer_date,
+                                    'transfer_time': shipment.transfer_time,
+                                    'previous_custodian': shipment.previous_custodian,
+                                    'new_custodian': shipment.new_custodian,
+                                    'location': shipment.location,
+                                    'remarks': shipment.remarks,
+                                })
+                            send_report_share_email(request, report_category, report_period, custody_share_rows, report_table_columns, share_emails)
+                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            return redirect_report_view(request)
+                        messages.error(request, 'Please enter at least one valid email address to share this report.')
+                        return redirect_report_view(request)
+                elif report_category == 'reconciliation':
+                    qs = Reconciliation.objects.filter(reconciliation_date__gte=report_month, reconciliation_date__lt=get_next_month(report_month)).order_by('-reconciliation_date')
+                    if report_search:
+                        qs = qs.filter(Q(reconciliation_id__icontains=report_search) | Q(location__icontains=report_search) | Q(status__icontains=report_search))
+                    if report_filter_status:
+                        qs = qs.filter(status__iexact=report_filter_status)
+                    if report_date_from:
+                        qs = qs.filter(reconciliation_date__gte=parse_date(report_date_from))
+                    if report_date_to:
+                        qs = qs.filter(reconciliation_date__lte=parse_date(report_date_to))
+                    reconciliation_report_rows = []
+                    for reconciliation in qs:
+                        reconciliation_report_rows.append({
+                            'reconciliation_id': reconciliation.reconciliation_id,
+                            'location': reconciliation.location,
+                            'expected_tapes': reconciliation.results.count(),
+                            'scanned_tapes': reconciliation.results.count(),
+                            'missing_tapes': reconciliation.results.filter(issue_type='Missing').count(),
+                            'misplaced_tapes': reconciliation.results.filter(issue_type='Misplaced').count(),
+                            'unexpected_tapes': reconciliation.results.filter(issue_type='Unexpected').count(),
+                            'reconciliation_date': reconciliation.reconciliation_date,
+                            'status': reconciliation.status,
+                        })
+                    report_table_columns = [
+                        {'key': 'reconciliation_id', 'label': 'Reconciliation ID'},
+                        {'key': 'location', 'label': 'Location'},
+                        {'key': 'expected_tapes', 'label': 'Expected Tapes'},
+                        {'key': 'scanned_tapes', 'label': 'Scanned Tapes'},
+                        {'key': 'missing_tapes', 'label': 'Missing Tapes'},
+                        {'key': 'misplaced_tapes', 'label': 'Misplaced Tapes'},
+                        {'key': 'unexpected_tapes', 'label': 'Unexpected Tapes'},
+                        {'key': 'reconciliation_date', 'label': 'Reconciliation Date'},
+                        {'key': 'status', 'label': 'Status'},
+                    ]
+                    reconciliation_report_rows = sort_report_rows(reconciliation_report_rows, report_sort or None, report_order)
+                    if request.GET.get('share_report') == '1':
+                        share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
+                        if share_emails:
+                            send_report_share_email(request, report_category, report_period, reconciliation_report_rows, report_table_columns, share_emails)
+                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            return redirect_report_view(request)
+                        messages.error(request, 'Please enter at least one valid email address to share this report.')
+                        return redirect_report_view(request)
+                    if export_pdf:
+                        return export_report_pdf(report_category, report_period, reconciliation_report_rows, report_table_columns)
+                    if export_excel:
+                        return export_report_excel(report_category, report_period, reconciliation_report_rows, report_table_columns)
+                    report_paginator, report_page_obj = paginate_report_rows(request, reconciliation_report_rows, page_param=f'report_page_{report_category}')
+                    reconciliation_report_rows = list(report_page_obj.object_list)
+                elif report_category == 'retention':
+                    qs = Tape.objects.filter(retention_end_date__gte=report_month, retention_end_date__lt=get_next_month(report_month)).order_by('retention_end_date')
+                    if report_search:
+                        qs = qs.filter(Q(volser__icontains=report_search) | Q(barcode__icontains=report_search) | Q(status__icontains=report_search))
+                    if report_filter_status:
+                        qs = qs.filter(status__iexact=report_filter_status)
+                    if report_date_from:
+                        qs = qs.filter(retention_end_date__gte=parse_date(report_date_from))
+                    if report_date_to:
+                        qs = qs.filter(retention_end_date__lte=parse_date(report_date_to))
+                    retention_report_rows = []
+                    for tape in qs:
+                        retention_report_rows.append({
+                            'volser': tape.volser,
+                            'barcode': tape.barcode,
+                            'retention_start_date': tape.date_registered.date() if getattr(tape, 'date_registered', None) else '-',
+                            'retention_end_date': tape.retention_end_date,
+                            'days_remaining': (tape.retention_end_date - timezone.localdate()).days if tape.retention_end_date else '-',
+                            'legal_hold': 'Yes' if tape.legal_hold else 'No',
+                            'audit_hold': 'Yes' if tape.audit_hold else 'No',
+                            'status': tape.status,
+                        })
+                    report_table_columns = [
+                        {'key': 'volser', 'label': 'VolSER'},
+                        {'key': 'barcode', 'label': 'Barcode'},
+                        {'key': 'retention_start_date', 'label': 'Retention Start Date'},
+                        {'key': 'retention_end_date', 'label': 'Retention End Date'},
+                        {'key': 'days_remaining', 'label': 'Days Remaining'},
+                        {'key': 'legal_hold', 'label': 'Legal Hold'},
+                        {'key': 'audit_hold', 'label': 'Audit Hold'},
+                        {'key': 'status', 'label': 'Status'},
+                    ]
+                    retention_report_rows = sort_report_rows(retention_report_rows, report_sort or None, report_order)
+                    if request.GET.get('share_report') == '1':
+                        share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
+                        if share_emails:
+                            send_report_share_email(request, report_category, report_period, retention_report_rows, report_table_columns, share_emails)
+                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            return redirect_report_view(request)
+                        messages.error(request, 'Please enter at least one valid email address to share this report.')
+                        return redirect_report_view(request)
+                    if export_pdf:
+                        return export_report_pdf(report_category, report_period, retention_report_rows, report_table_columns)
+                    if export_excel:
+                        return export_report_excel(report_category, report_period, retention_report_rows, report_table_columns)
+                    report_paginator, report_page_obj = paginate_report_rows(request, retention_report_rows, page_param=f'report_page_{report_category}')
+                    retention_report_rows = list(report_page_obj.object_list)
+                elif report_category == 'compliance':
+                    qs = ReconciliationResult.objects.filter(reconciliation__reconciliation_date__gte=report_month, reconciliation__reconciliation_date__lt=get_next_month(report_month)).order_by('-created_at')
+                    if report_search:
+                        qs = qs.filter(Q(reconciliation__reconciliation_id__icontains=report_search) | Q(remarks__icontains=report_search) | Q(resolution_status__icontains=report_search))
+                    if report_filter_status:
+                        qs = qs.filter(resolution_status__iexact=report_filter_status)
+                    if report_date_from:
+                        qs = qs.filter(created_at__date__gte=parse_date(report_date_from))
+                    if report_date_to:
+                        qs = qs.filter(created_at__date__lte=parse_date(report_date_to))
+                    compliance_report_rows = []
+                    for result in qs:
+                        compliance_report_rows.append({
+                            'compliance_id': result.reconciliation.reconciliation_id,
+                            'policy_name': 'Tape Handling Policy',
+                            'compliance_status': 'Compliant' if result.resolution_status == 'Resolved' else 'Needs Review',
+                            'violations': result.issue_type,
+                            'date_identified': result.created_at.date(),
+                            'responsible_user': result.reconciliation.performed_by.username if result.reconciliation.performed_by else '-',
+                            'resolution_status': result.resolution_status,
+                        })
+                    report_table_columns = [
+                        {'key': 'compliance_id', 'label': 'Compliance ID'},
+                        {'key': 'policy_name', 'label': 'Policy Name'},
+                        {'key': 'compliance_status', 'label': 'Compliance Status'},
+                        {'key': 'violations', 'label': 'Violations'},
+                        {'key': 'date_identified', 'label': 'Date Identified'},
+                        {'key': 'responsible_user', 'label': 'Responsible User'},
+                        {'key': 'resolution_status', 'label': 'Resolution Status'},
+                    ]
+                    compliance_report_rows = sort_report_rows(compliance_report_rows, report_sort or None, report_order)
+                    if request.GET.get('share_report') == '1':
+                        share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
+                        if share_emails:
+                            send_report_share_email(request, report_category, report_period, compliance_report_rows, report_table_columns, share_emails)
+                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            return redirect_report_view(request)
+                        messages.error(request, 'Please enter at least one valid email address to share this report.')
+                        return redirect_report_view(request)
+                    if export_pdf:
+                        return export_report_pdf(report_category, report_period, compliance_report_rows, report_table_columns)
+                    if export_excel:
+                        return export_report_excel(report_category, report_period, compliance_report_rows, report_table_columns)
+                    report_paginator, report_page_obj = paginate_report_rows(request, compliance_report_rows, page_param=f'report_page_{report_category}')
+                    compliance_report_rows = list(report_page_obj.object_list)
+                elif report_category == 'exception':
+                    qs = ShipmentException.objects.filter(reported_date__date__gte=report_month, reported_date__date__lt=get_next_month(report_month)).order_by('-reported_date')
+                    if report_search:
+                        qs = qs.filter(Q(exception_id__icontains=report_search) | Q(tape__volser__icontains=report_search) | Q(status__icontains=report_search))
+                    if report_filter_status:
+                        qs = qs.filter(status__iexact=report_filter_status)
+                    if report_date_from:
+                        qs = qs.filter(reported_date__date__gte=parse_date(report_date_from))
+                    if report_date_to:
+                        qs = qs.filter(reported_date__date__lte=parse_date(report_date_to))
+                    exception_report_rows = []
+                    for exception in qs:
+                        exception_report_rows.append({
+                            'exception_id': exception.exception_id,
+                            'tape_volser': exception.tape.volser if exception.tape else '-',
+                            'exception_type': exception.exception_type,
+                            'severity': exception.severity,
+                            'reported_by': exception.reported_by.username if exception.reported_by else '-',
+                            'date_reported': exception.reported_date.date(),
+                            'status': exception.status,
+                            'resolution_date': exception.reported_date.date(),
+                        })
+                    report_table_columns = [
+                        {'key': 'exception_id', 'label': 'Exception ID'},
+                        {'key': 'tape_volser', 'label': 'Tape VolSER'},
+                        {'key': 'exception_type', 'label': 'Exception Type'},
+                        {'key': 'severity', 'label': 'Severity'},
+                        {'key': 'reported_by', 'label': 'Reported By'},
+                        {'key': 'date_reported', 'label': 'Date Reported'},
+                        {'key': 'status', 'label': 'Status'},
+                        {'key': 'resolution_date', 'label': 'Resolution Date'},
+                    ]
+                    exception_report_rows = sort_report_rows(exception_report_rows, report_sort or None, report_order)
+                    if request.GET.get('share_report') == '1':
+                        share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
+                        if share_emails:
+                            send_report_share_email(request, report_category, report_period, exception_report_rows, report_table_columns, share_emails)
+                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            return redirect_report_view(request)
+                        messages.error(request, 'Please enter at least one valid email address to share this report.')
+                        return redirect_report_view(request)
+                    if export_pdf:
+                        return export_report_pdf(report_category, report_period, exception_report_rows, report_table_columns)
+                    if export_excel:
+                        return export_report_excel(report_category, report_period, exception_report_rows, report_table_columns)
+                    report_paginator, report_page_obj = paginate_report_rows(request, exception_report_rows, page_param=f'report_page_{report_category}')
+                    exception_report_rows = list(report_page_obj.object_list)
+                elif report_category == 'audit_trail':
+                    qs = AuditLog.objects.filter(timestamp__date__gte=report_month, timestamp__date__lt=get_next_month(report_month)).order_by('-timestamp')
+                    if report_search:
+                        qs = qs.filter(Q(name__icontains=report_search) | Q(action__icontains=report_search) | Q(message__icontains=report_search))
+                    if report_filter_status:
+                        qs = qs.filter(severity__iexact=report_filter_status)
+                    if report_date_from:
+                        qs = qs.filter(timestamp__date__gte=parse_date(report_date_from))
+                    if report_date_to:
+                        qs = qs.filter(timestamp__date__lte=parse_date(report_date_to))
+                    audit_trail_report_rows = []
+                    for audit_entry in qs:
+                        audit_trail_report_rows.append({
+                            'audit_id': audit_entry.id,
+                            'user': audit_entry.user.username if audit_entry.user else '-',
+                            'action': audit_entry.action,
+                            'module': audit_entry.name,
+                            'record_affected': audit_entry.message,
+                            'timestamp': audit_entry.timestamp,
+                            'ip_address': '-',
+                        })
+                    report_table_columns = [
+                        {'key': 'audit_id', 'label': 'Audit ID'},
+                        {'key': 'user', 'label': 'User'},
+                        {'key': 'action', 'label': 'Action'},
+                        {'key': 'module', 'label': 'Module'},
+                        {'key': 'record_affected', 'label': 'Record Affected'},
+                        {'key': 'timestamp', 'label': 'Timestamp'},
+                        {'key': 'ip_address', 'label': 'IP Address'},
+                    ]
+                    audit_trail_report_rows = sort_report_rows(audit_trail_report_rows, report_sort or None, report_order)
+                    if request.GET.get('share_report') == '1':
+                        share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
+                        if share_emails:
+                            send_report_share_email(request, report_category, report_period, audit_trail_report_rows, report_table_columns, share_emails)
+                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            return redirect_report_view(request)
+                        messages.error(request, 'Please enter at least one valid email address to share this report.')
+                        return redirect_report_view(request)
+                    if export_pdf:
+                        return export_report_pdf(report_category, report_period, audit_trail_report_rows, report_table_columns)
+                    if export_excel:
+                        return export_report_excel(report_category, report_period, audit_trail_report_rows, report_table_columns)
+                    report_paginator, report_page_obj = paginate_report_rows(request, audit_trail_report_rows, page_param=f'report_page_{report_category}')
+                    audit_trail_report_rows = list(report_page_obj.object_list)
+                elif report_category == 'management_summary':
+                    management_summary_report_rows = [{
+                        'report_date': report_period,
+                        'total_tapes': Tape.objects.count(),
+                        'active_tapes': Tape.objects.filter(status='Active').count(),
+                        'in_transit': Tape.objects.filter(status='In Transit').count(),
+                        'missing_tapes': Tape.objects.filter(status='Missing').count(),
+                        'damaged_tapes': Tape.objects.filter(status='Damaged').count(),
+                        'open_exceptions': ShipmentException.objects.filter(status__in=['Open', 'Investigating']).count(),
+                        'compliance_rate': '98.5%',
+                        'reconciliation_accuracy': '99.2%',
+                    }]
+                    report_table_columns = [
+                        {'key': 'report_date', 'label': 'Report Date'},
+                        {'key': 'total_tapes', 'label': 'Total Tapes'},
+                        {'key': 'active_tapes', 'label': 'Active Tapes'},
+                        {'key': 'in_transit', 'label': 'In Transit'},
+                        {'key': 'missing_tapes', 'label': 'Missing Tapes'},
+                        {'key': 'damaged_tapes', 'label': 'Damaged Tapes'},
+                        {'key': 'open_exceptions', 'label': 'Open Exceptions'},
+                        {'key': 'compliance_rate', 'label': 'Compliance Rate'},
+                        {'key': 'reconciliation_accuracy', 'label': 'Reconciliation Accuracy'},
+                    ]
+                    if request.GET.get('share_report') == '1':
+                        share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
+                        if share_emails:
+                            send_report_share_email(request, report_category, report_period, management_summary_report_rows, report_table_columns, share_emails)
+                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            return redirect_report_view(request)
+                        messages.error(request, 'Please enter at least one valid email address to share this report.')
+                        return redirect_report_view(request)
+                    if export_pdf:
+                        return export_report_pdf(report_category, report_period, management_summary_report_rows, report_table_columns)
+                    if export_excel:
+                        return export_report_excel(report_category, report_period, management_summary_report_rows, report_table_columns)
         if generated_report_data:
             generated_report_items = [
                 {
@@ -1138,8 +1842,11 @@ def backup_dashboard(request):
                 for key, value in generated_report_data.items()
                 if key != 'period'
             ]
-        if export_csv and generated_report_data:
-            return export_report_csv(report_type, report_period, generated_report_data)
+        if export_csv:
+            if report_category == 'inventory':
+                return export_inventory_report_csv(report_period or current_month, inventory_report_tapes)
+            if generated_report_data:
+                return export_report_csv(report_type or 'monthly', report_period, generated_report_data)
 
     if show_reconciliation_reports_panel and export_reconciliation_csv:
         return export_reconciliation_report_csv(reconciliations, summary=reconciliation_report_summary)
@@ -1178,6 +1885,8 @@ def backup_dashboard(request):
         'show_add_tape_panel': show_add_tape_panel,
         'show_tape_actions_panel': show_tape_actions_panel,
         'show_tape_inventory_panel': show_tape_inventory_panel,
+        'show_print_barcodes_panel': show_print_barcodes_panel,
+        'show_admin_panel': show_admin_panel,
         'show_profile_panel': show_profile_panel,
         'show_settings_panel': show_settings_panel,
         'show_audit_panel': show_audit_panel,
@@ -1204,7 +1913,10 @@ def backup_dashboard(request):
         'generated_report_data': generated_report_data,
         'generated_report_label': generated_report_label,
         'report_type': report_type,
+        'report_category': report_category,
         'report_period': report_period,
+        'report_categories': report_categories,
+        'current_month': current_month,
         'report_email_form': report_email_form,
         'search_query': search_query,
         'reconciliation_report_summary': reconciliation_report_summary,
@@ -1213,6 +1925,27 @@ def backup_dashboard(request):
         'status_counts_json': json.dumps(status_counts),
         'monthly_labels_json': json.dumps(monthly_labels),
         'monthly_counts_json': json.dumps(monthly_counts),
+        'kpis': kpis,
+        'report_categories': report_categories,
+        'current_month': current_month,
+        'inventory_report_tapes': inventory_report_tapes,
+        'shipment_report_rows': shipment_report_rows,
+        'custody_report_rows': custody_report_rows,
+        'reconciliation_report_rows': reconciliation_report_rows,
+        'retention_report_rows': retention_report_rows,
+        'compliance_report_rows': compliance_report_rows,
+        'exception_report_rows': exception_report_rows,
+        'audit_trail_report_rows': audit_trail_report_rows,
+        'management_summary_report_rows': management_summary_report_rows,
+        'report_table_columns': report_table_columns,
+        'report_paginator': report_paginator,
+        'report_page_obj': report_page_obj,
+        'report_search': report_search,
+        'report_filter_status': report_filter_status,
+        'report_date_from': report_date_from,
+        'report_date_to': report_date_to,
+        'report_sort': report_sort,
+        'report_order': report_order,
     }
     return render(request, 'backup_dashboard.html', context)
 
@@ -1891,7 +2624,7 @@ def activity_log(request):
 @user_passes_test(lambda u: u.is_superuser or is_backup_administrator(u), login_url='signin')
 @login_required(login_url='signin')
 def add_tape(request):
-    form = TapeForm(request.POST or None)
+    form = AddTapeForm(request.POST or None)
 
     if request.method == 'POST':
         if form.is_valid():

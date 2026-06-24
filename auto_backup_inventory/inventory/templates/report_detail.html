@@ -1,3 +1,71 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block content %}
+<div class="container p-4">
+    <h4>Tape Detail - {{ tape.volser }}</h4>
+    <div class="row g-3 mt-3">
+        <div class="col-md-4">
+            <div class="card p-3">
+                <strong>Barcode</strong>
+                <div>{{ tape.barcode }}</div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card p-3">
+                <strong>Status</strong>
+                <div>{{ tape.status }}</div>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="card p-3">
+                <strong>Location</strong>
+                <div>{{ tape.current_location }}</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="mt-4">
+        <h5>Custody History</h5>
+        {% if custody_history %}
+            <ul>
+                {% for c in custody_history %}
+                    <li>{{ c }}</li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p class="text-muted">No custody history available.</p>
+        {% endif %}
+    </div>
+
+    <div class="mt-4">
+        <h5>Shipment History</h5>
+        {% if shipment_history %}
+            <ul>
+                {% for s in shipment_history %}
+                    <li>{{ s }}</li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p class="text-muted">No shipment history available.</p>
+        {% endif %}
+    </div>
+
+    <div class="mt-4">
+        <h5>Audit Trail</h5>
+        {% if audit_trail %}
+            <ul>
+                {% for a in audit_trail %}
+                    <li>{{ a }}</li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p class="text-muted">No audit trail available.</p>
+        {% endif %}
+    </div>
+
+</div>
+{% endblock %}
 {% extends 'base.html' %}
 {% load static %}
 
