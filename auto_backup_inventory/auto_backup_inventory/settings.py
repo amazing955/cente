@@ -32,6 +32,7 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    'jazzmin',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -131,6 +132,30 @@ EMAIL_TIMEOUT = int(os.getenv('EMAIL_TIMEOUT', '15'))
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = '/static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [
     BASE_DIR / 'inventory' / 'static',
 ]
+
+JAZZMIN_SETTINGS = {
+    'site_title': 'Backup Inventory Admin',
+    'site_header': 'Backup Inventory',
+    'site_brand': 'Backup Inventory',
+    'welcome_sign': 'Welcome to Backup Inventory Admin',
+    'copyright': 'Backup Inventory',
+    'show_sidebar': True,
+    'navigation_expanded': True,
+    'hide_apps': [],
+    'hide_models': [],
+    'order_with_respect_to': ['inventory', 'auth', 'authtoken'],
+    'icons': {
+        'inventory.customuser': 'fas fa-user',
+        'inventory.tape': 'fas fa-archive',
+        'inventory.shipment': 'fas fa-shipping-fast',
+    },
+}
+
+JAZZMIN_UI_TWEAKS = {
+    'theme': 'darkly',
+    'dark_mode_theme': 'darkly',
+}
