@@ -534,16 +534,23 @@ def redirect_report_view(request):
 
 def send_report_share_email(request, report_category, report_period, rows, columns, recipients):
     subject = f'{report_category.replace("_", " ").title()} Report Shared'
+    sender_email = request.user.email or settings.DEFAULT_FROM_EMAIL
     body = (
         f'Hello,\n\n'
         f'This report for {report_period} was shared from the Backup Administrator Dashboard.\n\n'
         f'Shared by: {request.user.get_full_name() or request.user.username}\n'
+        f'Sender email: {sender_email}\n'
     )
     attachment_name = f'{report_category}_report_{report_period}.csv'
     csv_bytes = build_report_csv_bytes(report_category, report_period, rows, columns)
-    msg = EmailMessage(subject, body, settings.DEFAULT_FROM_EMAIL, recipients)
+    msg = EmailMessage(subject, body, sender_email, recipients)
     msg.attach(attachment_name, csv_bytes, 'text/csv')
-    msg.send(fail_silently=True)
+    try:
+        msg.send(fail_silently=False)
+        return True
+    except Exception as exc:
+        messages.error(request, f'Report sharing failed: {exc}')
+        return False
 
 
 def export_inventory_report_csv(report_period, tapes):
@@ -702,7 +709,7 @@ def signin(request):
                     user=user,
                     severity='success',
                 )
-                return redirect("dashboard")
+                return redirect("/admin/")
             if is_backup_administrator(user):
                 AuditLog.objects.create(
                     name='Backup Administrator Login',
@@ -1494,8 +1501,8 @@ def backup_dashboard(request):
                     if request.GET.get('share_report') == '1':
                         share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
                         if share_emails:
-                            send_report_share_email(request, report_category, report_period, inventory_report_rows, report_table_columns, share_emails)
-                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            if send_report_share_email(request, report_category, report_period, inventory_report_rows, report_table_columns, share_emails):
+                                messages.success(request, f'Report shared with {", ".join(share_emails)}.')
                             return redirect_report_view(request)
                         messages.error(request, 'Please enter at least one valid email address to share this report.')
                         return redirect_report_view(request)
@@ -1522,8 +1529,8 @@ def backup_dashboard(request):
                     if request.GET.get('share_report') == '1':
                         share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
                         if share_emails:
-                            send_report_share_email(request, report_category, report_period, list(shipment_report_rows.values('shipment_id', 'shipment_type', 'source_location', 'destination_location', 'courier_name', 'shipment_date', 'delivery_date', 'status')), report_table_columns, share_emails)
-                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            if send_report_share_email(request, report_category, report_period, list(shipment_report_rows.values('shipment_id', 'shipment_type', 'source_location', 'destination_location', 'courier_name', 'shipment_date', 'delivery_date', 'status')), report_table_columns, share_emails):
+                                messages.success(request, f'Report shared with {", ".join(share_emails)}.')
                             return redirect_report_view(request)
                         messages.error(request, 'Please enter at least one valid email address to share this report.')
                         return redirect_report_view(request)
@@ -1560,8 +1567,8 @@ def backup_dashboard(request):
                                     'location': shipment.location,
                                     'remarks': shipment.remarks,
                                 })
-                            send_report_share_email(request, report_category, report_period, custody_share_rows, report_table_columns, share_emails)
-                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            if send_report_share_email(request, report_category, report_period, custody_share_rows, report_table_columns, share_emails):
+                                messages.success(request, f'Report shared with {", ".join(share_emails)}.')
                             return redirect_report_view(request)
                         messages.error(request, 'Please enter at least one valid email address to share this report.')
                         return redirect_report_view(request)
@@ -1603,8 +1610,8 @@ def backup_dashboard(request):
                     if request.GET.get('share_report') == '1':
                         share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
                         if share_emails:
-                            send_report_share_email(request, report_category, report_period, reconciliation_report_rows, report_table_columns, share_emails)
-                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            if send_report_share_email(request, report_category, report_period, reconciliation_report_rows, report_table_columns, share_emails):
+                                messages.success(request, f'Report shared with {", ".join(share_emails)}.')
                             return redirect_report_view(request)
                         messages.error(request, 'Please enter at least one valid email address to share this report.')
                         return redirect_report_view(request)
@@ -1650,8 +1657,8 @@ def backup_dashboard(request):
                     if request.GET.get('share_report') == '1':
                         share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
                         if share_emails:
-                            send_report_share_email(request, report_category, report_period, retention_report_rows, report_table_columns, share_emails)
-                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            if send_report_share_email(request, report_category, report_period, retention_report_rows, report_table_columns, share_emails):
+                                messages.success(request, f'Report shared with {", ".join(share_emails)}.')
                             return redirect_report_view(request)
                         messages.error(request, 'Please enter at least one valid email address to share this report.')
                         return redirect_report_view(request)
@@ -1695,8 +1702,8 @@ def backup_dashboard(request):
                     if request.GET.get('share_report') == '1':
                         share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
                         if share_emails:
-                            send_report_share_email(request, report_category, report_period, compliance_report_rows, report_table_columns, share_emails)
-                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            if send_report_share_email(request, report_category, report_period, compliance_report_rows, report_table_columns, share_emails):
+                                messages.success(request, f'Report shared with {", ".join(share_emails)}.')
                             return redirect_report_view(request)
                         messages.error(request, 'Please enter at least one valid email address to share this report.')
                         return redirect_report_view(request)
@@ -1742,8 +1749,8 @@ def backup_dashboard(request):
                     if request.GET.get('share_report') == '1':
                         share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
                         if share_emails:
-                            send_report_share_email(request, report_category, report_period, exception_report_rows, report_table_columns, share_emails)
-                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            if send_report_share_email(request, report_category, report_period, exception_report_rows, report_table_columns, share_emails):
+                                messages.success(request, f'Report shared with {", ".join(share_emails)}.')
                             return redirect_report_view(request)
                         messages.error(request, 'Please enter at least one valid email address to share this report.')
                         return redirect_report_view(request)
@@ -1787,8 +1794,8 @@ def backup_dashboard(request):
                     if request.GET.get('share_report') == '1':
                         share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
                         if share_emails:
-                            send_report_share_email(request, report_category, report_period, audit_trail_report_rows, report_table_columns, share_emails)
-                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            if send_report_share_email(request, report_category, report_period, audit_trail_report_rows, report_table_columns, share_emails):
+                                messages.success(request, f'Report shared with {", ".join(share_emails)}.')
                             return redirect_report_view(request)
                         messages.error(request, 'Please enter at least one valid email address to share this report.')
                         return redirect_report_view(request)
@@ -1824,8 +1831,8 @@ def backup_dashboard(request):
                     if request.GET.get('share_report') == '1':
                         share_emails = [email.strip() for email in request.GET.get('share_email', '').split(',') if email.strip()]
                         if share_emails:
-                            send_report_share_email(request, report_category, report_period, management_summary_report_rows, report_table_columns, share_emails)
-                            messages.success(request, f'Report shared with {", ".join(share_emails)}.')
+                            if send_report_share_email(request, report_category, report_period, management_summary_report_rows, report_table_columns, share_emails):
+                                messages.success(request, f'Report shared with {", ".join(share_emails)}.')
                             return redirect_report_view(request)
                         messages.error(request, 'Please enter at least one valid email address to share this report.')
                         return redirect_report_view(request)

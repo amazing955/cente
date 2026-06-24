@@ -2204,9 +2204,33 @@ function printActiveReportTable() {
 }
 </script>
 
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
 
 <script>
+document.addEventListener('click', function (event) {
+    const trigger = event.target.closest('[data-bs-toggle="modal"]');
+    if (!trigger) {
+        return;
+    }
+
+    const targetSelector = trigger.getAttribute('data-bs-target');
+    if (!targetSelector) {
+        return;
+    }
+
+    const modalElement = document.querySelector(targetSelector);
+    if (!modalElement) {
+        return;
+    }
+
+    if (!window.bootstrap || !window.bootstrap.Modal) {
+        modalElement.classList.add('show');
+        modalElement.style.display = 'block';
+        document.body.classList.add('modal-open');
+    }
+});
+
 // Barcode Printing Functionality
 document.addEventListener('DOMContentLoaded', function() {
     // Select all checkboxes

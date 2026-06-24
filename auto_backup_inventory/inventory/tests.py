@@ -221,5 +221,38 @@ class InventoryReportExportTests(TestCase):
 
         self.assertEqual(response.status_code, 302)
         self.assertTrue(mock_email_cls.called)
+        self.assertEqual(mock_email_cls.call_args.args[2], self.user.email)
         self.assertEqual(mock_email_cls.call_args.args[3], ['recipient@example.com'])
         self.assertTrue(mock_instance.attach.called)
+        mock_instance.send.assert_called_once_with(fail_silently=False)
+
+    def test_inventory_report_share_handles_smtp_errors_without_500(self):
+        Tape.objects.create(
+            volser='ABC123',
+            barcode='BAR001',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+            status='Active',
+            current_location='Room A',
+        )
+
+        self.client.force_login(self.user)
+        with patch('inventory.views.EmailMessage') as mock_email_cls:
+            mock_instance = mock_email_cls.return_value
+            mock_instance.send.side_effect = Exception('Authentication Required')
+
+            response = self.client.get(
+                reverse('backup-dashboard'),
+                {
+                    'show_reports': '1',
+                    'report_category': 'inventory',
+                    'report_period_inventory': '2026-06',
+                    'report_type': 'monthly',
+                    'share_report': '1',
+                    'share_email': 'recipient@example.com',
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        follow_response = self.client.get(response.url)
+        self.assertContains(follow_response, 'Report sharing failed')
