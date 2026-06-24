@@ -8,7 +8,7 @@ from django.template.loader import render_to_string
 import csv
 import json
 import uuid
-from io import BytesIO
+from io import BytesIO, StringIO
 from datetime import date, datetime
 from openpyxl import Workbook
 from reportlab.lib import colors
@@ -514,14 +514,14 @@ def export_report_pdf(report_category, report_period, rows, columns):
 
 
 def build_report_csv_bytes(report_category, report_period, rows, columns):
-    buffer = BytesIO()
+    buffer = StringIO()
     writer = csv.writer(buffer)
     writer.writerow([f'{report_category.replace("_", " ").title()} Report', report_period])
     writer.writerow([])
     writer.writerow([column['label'] for column in columns])
     for row in rows:
         writer.writerow([row.get(column['key'], '-') for column in columns])
-    return buffer.getvalue()
+    return buffer.getvalue().encode('utf-8')
 
 
 def redirect_report_view(request):
