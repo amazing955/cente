@@ -5,7 +5,7 @@ from django.core.validators import validate_email
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import ApplicationSetting, CustomUser, CourierProfile, Reconciliation, ReconciliationResult, Shipment, ShipmentException, ShipmentReceipt, ShipmentTransportEvent, Tape, DeliveryConfirmation
+from .models import ApplicationSetting, CustomUser, CourierProfile, Reconciliation, ReconciliationResult, Shipment, ShipmentException, ShipmentReceipt, ShipmentTransportEvent, Tape, TapeRequest, DeliveryConfirmation
 
 
 class CustomUserCreationForm(UserCreationForm):
@@ -231,6 +231,42 @@ class AddTapeForm(forms.ModelForm):
             tape.save()
         return tape
 
+class AuditorShipmentRequestForm(forms.Form):
+    branch_name = forms.CharField(
+        max_length=200,
+        label='Branch Name',
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter branch or site name'})
+    )
+    request_details = forms.CharField(
+        label='Request Details',
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Describe the shipment request'})
+    )
+
+
+class TapeRequestForm(forms.ModelForm):
+    class Meta:
+        model = TapeRequest
+        fields = [
+            'tape',
+            'quantity',
+            'destination_location',
+            'receiving_organization',
+            'reason',
+        ]
+        widgets = {
+            'tape': forms.Select(attrs={'class': 'form-select'}),
+            'quantity': forms.NumberInput(attrs={'class': 'form-control', 'min': 1}),
+            'destination_location': forms.TextInput(attrs={'class': 'form-control'}),
+            'receiving_organization': forms.TextInput(attrs={'class': 'form-control'}),
+            'reason': forms.Textarea(attrs={'class': 'form-control', 'rows': 3}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['tape'].queryset = Tape.objects.order_by('volser')
+        self.fields['tape'].empty_label = 'Select a tape'
+
+
 class ShipmentForm(forms.ModelForm):
     courier = forms.ModelChoiceField(
         queryset=CourierProfile.objects.filter(active_status=True).order_by('full_name'),
@@ -390,6 +426,19 @@ class ShipmentApprovalDecisionForm(forms.Form):
         if decision == 'reject' and not comments:
             raise forms.ValidationError('Comments are required when rejecting a shipment.')
         return cleaned_data
+
+
+class OperatorReceiptCompletionForm(forms.Form):
+    receiving_custodian = forms.CharField(
+        required=True,
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Receiving custodian'}),
+        label='Receiving Custodian',
+    )
+    receipt_notes = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 3, 'placeholder': 'Document receipt conditions, discrepancies, or notes'}),
+        label='Receipt Notes',
+    )
 
 
 class ShipmentApprovalFilterForm(forms.Form):

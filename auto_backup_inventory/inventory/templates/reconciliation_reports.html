@@ -14,7 +14,7 @@
             <a href="{{ report_export_url }}?export_reconciliation_csv=1{% if search_query %}&search={{ search_query|urlencode }}{% endif %}" class="btn btn-outline-primary">
                 <i class="bi bi-file-earmark-spreadsheet me-1"></i> Export CSV
             </a>
-            <a href="{% url 'backup-dashboard' %}?show_reports=1" class="btn btn-secondary">
+            <a href="{% url 'backup-dashboard' %}?show_reports=reports" class="btn btn-secondary">
                 <i class="bi bi-speedometer2 me-1"></i> Dashboard Reports
             </a>
         </div>

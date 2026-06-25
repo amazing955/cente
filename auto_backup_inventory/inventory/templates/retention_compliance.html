@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Retention Compliance Review</title></head>
+<body>
+<div style="font-family: Arial, sans-serif; padding: 24px;">
+    <h2>Retention Compliance Review</h2>
+    <table border="1" cellpadding="6" cellspacing="0">
+        <tr><th>VolSER</th><th>Retention End Date</th><th>Status</th><th>Compliance</th></tr>
+        {% for row in retention_rows %}
+        <tr><td>{{ row.volser }}</td><td>{{ row.retention_end_date }}</td><td>{{ row.current_status }}</td><td>{{ row.compliance_status }}</td></tr>
+        {% empty %}<tr><td colspan="4">No retention data.</td></tr>{% endfor %}
+    </table>
+</div>
+</body>
+</html>

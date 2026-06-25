@@ -93,24 +93,60 @@
         .app-sidebar-dark .sidebar-menu .nav-link.text-danger:hover {
             color: #ffffff;
         }
+        .sidebar-toggle {
+            display: none;
+        }
+        .sidebar-panel {
+            display: block;
+        }
+        @media (max-width: 1199.98px) {
+            .sidebar-toggle {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .app-sidebar {
+                min-height: auto;
+                border-right: none;
+                border-bottom: 1px solid rgba(0,0,0,.08);
+                padding: 1rem;
+            }
+            .app-sidebar-dark {
+                border-radius: 1rem;
+            }
+            .sidebar-panel {
+                display: none;
+            }
+            .sidebar-panel.show {
+                display: block;
+            }
+        }
     </style>
 </head>
 <body>
-<div class="container-fluid py-4">
+<div class="container-fluid py-3 py-lg-4">
     <div class="row g-4">
-        <aside class="col-12 col-xl-3 col-xxl-2 d-none d-xl-block app-sidebar {% block sidebar_class %}{% endblock %}">
-            {% block sidebar %}
-            <div class="sidebar-logo">
-                <i class="bi bi-truck"></i>
-                <div>
-                    <h4>Courier Hub</h4>
-                    <small class="text-muted">Route Control</small>
-                </div>
+        <aside class="col-12 col-xl-3 col-xxl-2 app-sidebar {% block sidebar_class %}{% endblock %}">
+            <div class="d-flex justify-content-between align-items-center mb-3 d-xl-none">
+                <div class="fw-semibold">Menu</div>
+                <button class="btn btn-sm btn-light sidebar-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#sidebarPanel" aria-expanded="false" aria-controls="sidebarPanel">
+                    <i class="bi bi-list"></i>
+                </button>
             </div>
-            <nav class="nav flex-column sidebar-menu">
-                <a class="nav-link active" href="#">Courier Dashboard</a>
-            </nav>
-            {% endblock %}
+            <div id="sidebarPanel" class="sidebar-panel">
+                {% block sidebar %}
+                <div class="sidebar-logo">
+                    <i class="bi bi-truck"></i>
+                    <div>
+                        <h4>Courier Hub</h4>
+                        <small class="text-muted">Route Control</small>
+                    </div>
+                </div>
+                <nav class="nav flex-column sidebar-menu">
+                    <a class="nav-link active" href="#">Courier Dashboard</a>
+                </nav>
+                {% endblock %}
+            </div>
         </aside>
         <main class="col-12 col-xl-9 col-xxl-10">
             {% block content %}{% endblock %}

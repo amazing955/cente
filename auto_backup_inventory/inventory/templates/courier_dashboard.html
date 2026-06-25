@@ -1,14 +1,16 @@
 {% extends 'courier_base.html' %}
 {% block title %}Courier Dashboard{% endblock %}
 {% block content %}
-<div class="row mb-4">
-    <div class="col-md-8">
+<div class="row mb-4 align-items-start">
+    <div class="col-12 col-lg-8">
         <h1 class="h3">Courier Dashboard</h1>
-        <p class="text-muted">Manage off-site vault courier assignments, pickups, deliveries, and incident reporting.</p>
+        <p class="text-muted mb-0">Manage off-site vault courier assignments, pickups, deliveries, and incident reporting.</p>
     </div>
-    <div class="col-md-4 text-end">
-        <a href="{% url 'assigned-shipments' %}" class="btn btn-primary me-2">Assigned Shipments</a>
-        <a href="{% url 'incident-management' %}" class="btn btn-outline-secondary">Incident Management</a>
+    <div class="col-12 col-lg-4 mt-3 mt-lg-0">
+        <div class="d-flex flex-wrap gap-2 justify-content-lg-end">
+            <a href="{% url 'assigned-shipments' %}" class="btn btn-primary w-100 w-lg-auto">Assigned Shipments</a>
+            <a href="{% url 'incident-management' %}" class="btn btn-outline-secondary w-100 w-lg-auto">Incident Management</a>
+        </div>
     </div>
 </div>
 {% comment %} Add any additional dashboard content here, such as shipment summaries, recent activity, or quick links. {% endcomment %}
@@ -83,13 +85,15 @@
                                 </td>
                                 <td>{{ shipment.destination_location|default:'N/A' }}</td>
                                 <td>
-                                    <a href="{% url 'manifest-detail' shipment.pk %}" class="btn btn-sm btn-outline-primary">Manifest</a>
-                                    {% if shipment.status == 'Approved' or shipment.status == 'Dispatched' %}
-                                        <a href="{% url 'pickup-confirmation' shipment.pk %}" class="btn btn-sm btn-outline-success ms-1">Pickup</a>
-                                    {% endif %}
-                                    {% if shipment.status == 'In Transit' %}
-                                        <a href="{% url 'delivery-confirmation' shipment.pk %}" class="btn btn-sm btn-outline-info ms-1">Deliver</a>
-                                    {% endif %}
+                                    <div class="d-flex flex-wrap gap-1">
+                                        <a href="{% url 'manifest-detail' shipment.pk %}" class="btn btn-sm btn-outline-primary">Manifest</a>
+                                        {% if shipment.status == 'Approved' or shipment.status == 'Dispatched' %}
+                                            <a href="{% url 'pickup-confirmation' shipment.pk %}" class="btn btn-sm btn-outline-success">Pickup</a>
+                                        {% endif %}
+                                        {% if shipment.status == 'In Transit' %}
+                                            <a href="{% url 'delivery-confirmation' shipment.pk %}" class="btn btn-sm btn-outline-info">Deliver</a>
+                                        {% endif %}
+                                    </div>
                                 </td>
                             </tr>
                             {% endfor %}

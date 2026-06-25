@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>Exception Review</title></head>
+<body>
+<div style="font-family: Arial, sans-serif; padding: 24px;">
+    <h2>Exception Review</h2>
+    <table border="1" cellpadding="6" cellspacing="0">
+        <tr><th>Exception ID</th><th>VolSER</th><th>Type</th><th>Status</th></tr>
+        {% for row in exception_rows %}
+        <tr><td>{{ row.exception_id }}</td><td>{{ row.volser }}</td><td>{{ row.exception_type }}</td><td>{{ row.status }}</td></tr>
+        {% empty %}<tr><td colspan="4">No exceptions.</td></tr>{% endfor %}
+    </table>
+</div>
+</body>
+</html>

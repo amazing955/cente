@@ -23,5 +23,12 @@ urlpatterns = [
     path('reconciliation-reports/', views.reconciliation_reports, name='reconciliation-reports'),
     path('reconciliation-reports/<uuid:pk>/', views.reconciliation_report_detail, name='reconciliation-report-detail'),
     path('tapes/add/', views.add_tape, name='add-tape'),
+    path('auditor-dashboard/', views.auditor_dashboard, name='auditor-dashboard'),
+    path('auditor-dashboard/audit-logs/', views.audit_logs_view, name='auditor-audit-logs'),
+    path('auditor-dashboard/reports/', views.compliance_reports_view, name='auditor-reports'),
+    path('auditor-dashboard/exceptions/', views.exception_review_view, name='auditor-exceptions'),
+    path('auditor-dashboard/shipments/', views.shipment_compliance_view, name='auditor-shipments'),
+    path('auditor-dashboard/retention/', views.retention_compliance_view, name='auditor-retention'),
+    path('auditor-dashboard/reconciliation/', views.reconciliation_review_view, name='auditor-reconciliation'),
     path('reports/', include('inventory.reports_urls')),
 ]

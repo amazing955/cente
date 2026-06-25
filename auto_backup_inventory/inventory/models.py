@@ -56,6 +56,7 @@ class CustomUser(AbstractUser):
 
     ROLE_CHOICES = [
         ('admin', 'Admin'),
+        ('auditor', 'IT Compliance Auditor'),
         ('user', 'User'),
     ]
 
@@ -174,6 +175,43 @@ class Tape(models.Model):
         return f"{self.volser} ({self.barcode})"
 
 
+class TapeRequest(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    STATUS_CHOICES = [
+        ('Pending', 'Pending'),
+        ('Approved', 'Approved'),
+        ('Rejected', 'Rejected'),
+        ('Cancelled', 'Cancelled'),
+    ]
+
+    tape = models.ForeignKey('Tape', on_delete=models.CASCADE, related_name='requests')
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='requested_tapes')
+    quantity = models.PositiveIntegerField(default=1)
+    destination_location = models.CharField(max_length=200, blank=True)
+    receiving_organization = models.CharField(max_length=200, blank=True)
+    reason = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Pending')
+    request_date = models.DateTimeField(default=timezone.now)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='approved_tape_requests'
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    approval_notes = models.TextField(blank=True)
+    shipment = models.ForeignKey('Shipment', null=True, blank=True, on_delete=models.SET_NULL, related_name='tape_requests')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-request_date', '-created_at']
+
+    def __str__(self):
+        return f"Tape request for {self.tape.volser} by {self.requested_by.username}"
+
+
 def generate_reconciliation_id():
     return f"REC-{uuid.uuid4().hex[:10].upper()}"
 
@@ -287,6 +325,7 @@ class Shipment(models.Model):
         ('Picked Up', 'Picked Up'),
         ('In Transit', 'In Transit'),
         ('Delivered', 'Delivered'),
+        ('Completed', 'Completed'),
         ('Return Accepted', 'Return Accepted'),
         ('Cancelled', 'Cancelled'),
     ]

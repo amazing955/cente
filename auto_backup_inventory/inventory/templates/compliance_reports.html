@@ -1,0 +1,400 @@
+{% load static %}
+<div class="page-shell">
+    <div class="card shadow-sm mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <div>
+                <h4 class="mb-0">Compliance Reports</h4>
+                <small class="text-muted">Read-only evidence review for IT Compliance Auditors</small>
+            </div>
+            <a href="{% url 'auditor-dashboard' %}" class="btn btn-sm btn-outline-secondary">
+                <i class="bi bi-arrow-left me-1"></i> Back to dashboard
+            </a>
+        </div>
+        <div class="card-body p-0">
+            {% if report_categories %}
+            <div class="p-3 border-bottom">
+                <h6 class="mb-2">Report types</h6>
+                <div class="table-responsive">
+                    <table class="table table-hover table-sm align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th scope="col">Report Name</th>
+                                <th scope="col">Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for report in report_categories %}
+                                <tr>
+                                    <td class="fw-semibold">
+                                        <a href="{% url 'auditor-dashboard' %}?view=reports&show_reports=reports&report_category={{ report.slug }}&report_period={{ current_month }}&report_type=monthly" class="text-decoration-none">
+                                            {{ report.name }}
+                                        </a>
+                                    </td>
+                                    <td class="small text-muted">{{ report.description }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% endif %}
+
+            {% if report_category == 'inventory' or report_category == 'shipment' or report_category == 'custody' or report_category == 'reconciliation' or report_category == 'retention' or report_category == 'compliance' or report_category == 'exception' or report_category == 'audit_trail' or report_category == 'management_summary' %}
+            <div class="p-3 border-bottom bg-light">
+                <form method="get" action="{% url 'auditor-dashboard' %}" class="row g-2 align-items-end">
+                    <input type="hidden" name="view" value="reports">
+                    <input type="hidden" name="show_reports" value="reports">
+                    <input type="hidden" name="report_category" value="{{ report_category }}">
+                    <input type="hidden" name="report_type" value="monthly">
+                    <div class="col-md-3">
+                        <label class="form-label small mb-1">Month</label>
+                        <input type="month" class="form-control form-control-sm" name="report_period_{{ report_category }}" value="{{ report_period|default:current_month }}">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label small mb-1">Search</label>
+                        <input type="text" class="form-control form-control-sm" name="report_search_{{ report_category }}" value="{{ report_search }}" placeholder="Search records">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small mb-1">Status</label>
+                        <select class="form-select form-select-sm" name="report_filter_status_{{ report_category }}">
+                            <option value="">All</option>
+                            <option value="Open" {% if report_filter_status == 'Open' %}selected{% endif %}>Open</option>
+                            <option value="Resolved" {% if report_filter_status == 'Resolved' %}selected{% endif %}>Resolved</option>
+                            <option value="Completed" {% if report_filter_status == 'Completed' %}selected{% endif %}>Completed</option>
+                            <option value="Active" {% if report_filter_status == 'Active' %}selected{% endif %}>Active</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small mb-1">Sort</label>
+                        <select class="form-select form-select-sm" name="report_sort_{{ report_category }}">
+                            <option value="">Default</option>
+                            <option value="reconciliation_date" {% if report_sort == 'reconciliation_date' %}selected{% endif %}>Date</option>
+                            <option value="volser" {% if report_sort == 'volser' %}selected{% endif %}>VolSER</option>
+                            <option value="status" {% if report_sort == 'status' %}selected{% endif %}>Status</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label small mb-1">Order</label>
+                        <select class="form-select form-select-sm" name="report_order_{{ report_category }}">
+                            <option value="asc" {% if report_order == 'asc' %}selected{% endif %}>Asc</option>
+                            <option value="desc" {% if report_order == 'desc' %}selected{% endif %}>Desc</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+                    </div>
+                    <div class="col-md-2">
+                        <button class="btn btn-sm btn-outline-primary" type="submit" name="export_csv_{{ report_category }}" value="1">Export CSV</button>
+                    </div>
+                    <div class="col-md-2">
+                        <button class="btn btn-sm btn-outline-secondary" type="submit" name="export_pdf_{{ report_category }}" value="1">Export PDF</button>
+                    </div>
+                    <div class="col-md-2">
+                        <button class="btn btn-sm btn-outline-success" type="submit" name="export_excel_{{ report_category }}" value="1">Export Excel</button>
+                    </div>
+                </form>
+            </div>
+
+            {% if report_category == 'inventory' %}
+                {% if inventory_report_tapes %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>VolSER</th>
+                                <th>Barcode</th>
+                                <th>RFID Tag</th>
+                                <th>Tape Type</th>
+                                <th>Status</th>
+                                <th>Current Location</th>
+                                <th>Custodian</th>
+                                <th>Retention End Date</th>
+                                <th>Date Registered</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for tape in inventory_report_tapes %}
+                                <tr>
+                                    <td>{{ tape.volser }}</td>
+                                    <td>{{ tape.barcode }}</td>
+                                    <td>{{ tape.rfid_tag|default:'-' }}</td>
+                                    <td>{{ tape.tape_type }}</td>
+                                    <td>{{ tape.status }}</td>
+                                    <td>{{ tape.current_location|default:'-' }}</td>
+                                    <td>{{ tape.latest_custodian|default:'-' }}</td>
+                                    <td>{{ tape.retention_end_date|date:'Y-m-d' }}</td>
+                                    <td>{{ tape.date_registered|date:'Y-m-d' }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-4 text-muted">No inventory data available for the selected month.</div>
+                {% endif %}
+            {% elif report_category == 'shipment' %}
+                {% if shipment_report_rows %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Shipment ID</th>
+                                <th>Shipment Type</th>
+                                <th>Source Location</th>
+                                <th>Destination Location</th>
+                                <th>Courier</th>
+                                <th>Dispatch Date</th>
+                                <th>Delivery Date</th>
+                                <th>Status</th>
+                                <th>Number of Tapes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for shipment in shipment_report_rows %}
+                                <tr>
+                                    <td>{{ shipment.shipment_id }}</td>
+                                    <td>{{ shipment.shipment_type }}</td>
+                                    <td>{{ shipment.source_location|default:'-' }}</td>
+                                    <td>{{ shipment.destination_location|default:'-' }}</td>
+                                    <td>{{ shipment.courier_name|default:'-' }}</td>
+                                    <td>{{ shipment.shipment_date|date:'Y-m-d' }}</td>
+                                    <td>{{ shipment.delivery_date|date:'Y-m-d'|default:'-' }}</td>
+                                    <td>{{ shipment.status }}</td>
+                                    <td>{{ shipment.number_of_tapes }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-4 text-muted">No shipment data available for the selected month.</div>
+                {% endif %}
+            {% elif report_category == 'reconciliation' %}
+                {% if reconciliation_report_rows %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Reconciliation ID</th>
+                                <th>Location</th>
+                                <th>Expected Tapes</th>
+                                <th>Scanned Tapes</th>
+                                <th>Missing Tapes</th>
+                                <th>Misplaced Tapes</th>
+                                <th>Unexpected Tapes</th>
+                                <th>Reconciliation Date</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in reconciliation_report_rows %}
+                                <tr>
+                                    <td>{{ row.reconciliation_id }}</td>
+                                    <td>{{ row.location }}</td>
+                                    <td>{{ row.expected_tapes }}</td>
+                                    <td>{{ row.scanned_tapes }}</td>
+                                    <td>{{ row.missing_tapes }}</td>
+                                    <td>{{ row.misplaced_tapes }}</td>
+                                    <td>{{ row.unexpected_tapes }}</td>
+                                    <td>{{ row.reconciliation_date|date:'Y-m-d' }}</td>
+                                    <td>{{ row.status }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-4 text-muted">No reconciliation data available for the selected month.</div>
+                {% endif %}
+            {% elif report_category == 'retention' %}
+                {% if retention_report_rows %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>VolSER</th>
+                                <th>Barcode</th>
+                                <th>Retention Start Date</th>
+                                <th>Retention End Date</th>
+                                <th>Days Remaining</th>
+                                <th>Legal Hold</th>
+                                <th>Audit Hold</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in retention_report_rows %}
+                                <tr>
+                                    <td>{{ row.volser }}</td>
+                                    <td>{{ row.barcode }}</td>
+                                    <td>{{ row.retention_start_date|date:'Y-m-d' }}</td>
+                                    <td>{{ row.retention_end_date|date:'Y-m-d' }}</td>
+                                    <td>{{ row.days_remaining }}</td>
+                                    <td>{{ row.legal_hold }}</td>
+                                    <td>{{ row.audit_hold }}</td>
+                                    <td>{{ row.status }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-4 text-muted">No retention data available for the selected month.</div>
+                {% endif %}
+            {% elif report_category == 'compliance' %}
+                {% if compliance_report_rows %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Compliance ID</th>
+                                <th>Policy Name</th>
+                                <th>Compliance Status</th>
+                                <th>Violations</th>
+                                <th>Date Identified</th>
+                                <th>Responsible User</th>
+                                <th>Resolution Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in compliance_report_rows %}
+                                <tr>
+                                    <td>{{ row.compliance_id }}</td>
+                                    <td>{{ row.policy_name }}</td>
+                                    <td>{{ row.compliance_status }}</td>
+                                    <td>{{ row.violations }}</td>
+                                    <td>{{ row.date_identified|date:'Y-m-d' }}</td>
+                                    <td>{{ row.responsible_user }}</td>
+                                    <td>{{ row.resolution_status }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-4 text-muted">No compliance data available for the selected month.</div>
+                {% endif %}
+            {% elif report_category == 'exception' %}
+                {% if exception_report_rows %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Exception ID</th>
+                                <th>Tape VolSER</th>
+                                <th>Exception Type</th>
+                                <th>Severity</th>
+                                <th>Reported By</th>
+                                <th>Date Reported</th>
+                                <th>Status</th>
+                                <th>Resolution Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in exception_report_rows %}
+                                <tr>
+                                    <td>{{ row.exception_id }}</td>
+                                    <td>{{ row.tape_volser }}</td>
+                                    <td>{{ row.exception_type }}</td>
+                                    <td>{{ row.severity }}</td>
+                                    <td>{{ row.reported_by }}</td>
+                                    <td>{{ row.date_reported|date:'Y-m-d' }}</td>
+                                    <td>{{ row.status }}</td>
+                                    <td>{{ row.resolution_date|date:'Y-m-d' }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-4 text-muted">No exception data available for the selected month.</div>
+                {% endif %}
+            {% elif report_category == 'audit_trail' %}
+                {% if audit_trail_report_rows %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Audit ID</th>
+                                <th>User</th>
+                                <th>Action</th>
+                                <th>Module</th>
+                                <th>Record Affected</th>
+                                <th>Timestamp</th>
+                                <th>IP Address</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in audit_trail_report_rows %}
+                                <tr>
+                                    <td>{{ row.audit_id }}</td>
+                                    <td>{{ row.user }}</td>
+                                    <td>{{ row.action }}</td>
+                                    <td>{{ row.module }}</td>
+                                    <td>{{ row.record_affected }}</td>
+                                    <td>{{ row.timestamp|date:'Y-m-d H:i' }}</td>
+                                    <td>{{ row.ip_address }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-4 text-muted">No audit trail data available for the selected month.</div>
+                {% endif %}
+            {% elif report_category == 'management_summary' %}
+                {% if management_summary_report_rows %}
+                <div class="table-responsive">
+                    <table class="table table-striped table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Report Date</th>
+                                <th>Total Tapes</th>
+                                <th>Active Tapes</th>
+                                <th>In Transit</th>
+                                <th>Missing Tapes</th>
+                                <th>Damaged Tapes</th>
+                                <th>Open Exceptions</th>
+                                <th>Compliance Rate</th>
+                                <th>Reconciliation Accuracy</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in management_summary_report_rows %}
+                                <tr>
+                                    <td>{{ row.report_date }}</td>
+                                    <td>{{ row.total_tapes }}</td>
+                                    <td>{{ row.active_tapes }}</td>
+                                    <td>{{ row.in_transit }}</td>
+                                    <td>{{ row.missing_tapes }}</td>
+                                    <td>{{ row.damaged_tapes }}</td>
+                                    <td>{{ row.open_exceptions }}</td>
+                                    <td>{{ row.compliance_rate }}</td>
+                                    <td>{{ row.reconciliation_accuracy }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="p-4 text-muted">No management summary data available for the selected month.</div>
+                {% endif %}
+            {% endif %}
+
+            {% if report_paginator and report_paginator.num_pages > 1 %}
+            <div class="d-flex justify-content-between align-items-center p-3 border-top">
+                <small class="text-muted">Page {{ report_page_obj.number }} of {{ report_paginator.num_pages }}</small>
+                <div class="d-flex gap-2">
+                    {% if report_page_obj.has_previous %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ request.get_full_path }}{% if '?' in request.get_full_path %}&{% else %}?{% endif %}report_page_{{ report_category }}={{ report_page_obj.previous_page_number }}">Previous</a>
+                    {% endif %}
+                    {% if report_page_obj.has_next %}
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ request.get_full_path }}{% if '?' in request.get_full_path %}&{% else %}?{% endif %}report_page_{{ report_category }}={{ report_page_obj.next_page_number }}">Next</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+            {% endif %}
+        </div>
+    </div>
+</div>

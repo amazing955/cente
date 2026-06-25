@@ -169,6 +169,27 @@
             </div>
         </div>
 
+        {% if shipment.status != 'Completed' and shipment.status != 'Cancelled' and shipment.status != 'Rejected' %}
+        <div class="card shadow-sm border-0 mb-3">
+            <div class="card-body">
+                <h5 class="mb-3">Receive Shipment</h5>
+                <form method="post" action="{% url 'shipment-detail' shipment.pk %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="form_type" value="operator_receipt_completion">
+                    <div class="mb-3">
+                        <label class="form-label" for="id_receiving_custodian">Receiving Custodian</label>
+                        {{ receipt_form.receiving_custodian }}
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label" for="id_receipt_notes">Receipt Notes</label>
+                        {{ receipt_form.receipt_notes }}
+                    </div>
+                    <button type="submit" class="btn btn-success w-100">Receive Tapes & Complete Shipment</button>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+
         <div class="card shadow-sm border-0 mb-3">
             <div class="card-body">
                 <h5 class="mb-3">Approval Decision</h5>

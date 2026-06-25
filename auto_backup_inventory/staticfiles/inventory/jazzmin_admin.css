@@ -1,0 +1,47 @@
+:root {
+    --admin-sidebar-bg: linear-gradient(135deg, #0548ad 0%, #001f54 100%);
+    --admin-sidebar-text: #ffffff;
+    --admin-sidebar-hover: rgba(255,255,255,0.12);
+    --admin-sidebar-active: rgba(255,255,255,0.22);
+}
+
+#jazzy-sidebar.app-sidebar,
+#jazzy-sidebar.app-sidebar .sidebar-wrapper,
+#jazzy-sidebar.app-sidebar .nav-sidebar,
+#jazzy-sidebar.app-sidebar .nav-sidebar > .nav-item > .nav-link,
+#jazzy-sidebar.app-sidebar .nav-sidebar .nav-link {
+    background: var(--admin-sidebar-bg) !important;
+    background-color: transparent !important;
+}
+
+#jazzy-sidebar.app-sidebar {
+    background: var(--admin-sidebar-bg) !important;
+    border-right: none !important;
+}
+
+#jazzy-sidebar .brand-link,
+#jazzy-sidebar .brand-text,
+#jazzy-sidebar .nav-sidebar .nav-link,
+#jazzy-sidebar .nav-sidebar .nav-header,
+#jazzy-sidebar .user-panel a,
+#jazzy-sidebar .nav-sidebar .nav-icon {
+    color: var(--admin-sidebar-text) !important;
+}
+
+#jazzy-sidebar .brand-link {
+    background: transparent !important;
+    border-bottom: 1px solid rgba(255,255,255,0.15);
+}
+
+#jazzy-sidebar .nav-sidebar .nav-link {
+    border-radius: 10px;
+    margin: 4px 10px;
+}
+
+#jazzy-sidebar .nav-sidebar .nav-link:hover {
+    background: var(--admin-sidebar-hover) !important;
+}
+
+#jazzy-sidebar .nav-sidebar .nav-link.active {
+    background: var(--admin-sidebar-active) !important;
+}

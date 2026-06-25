@@ -9,14 +9,14 @@ import csv
 import json
 import uuid
 from io import BytesIO, StringIO
-from datetime import date, datetime
-from openpyxl import Workbook
+from datetime import date, datetime, timedelta
+from openpyxl import Workbook, load_workbook
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from django.contrib import messages
-from django.db.models import Q
+from django.db.models import Q, Count
 from django.http import HttpResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse
@@ -339,11 +339,16 @@ def get_scoped_report_param(request, report_category, param_name, default=''):
 
 
 def get_scoped_report_flag(request, report_category, param_name):
+    def is_enabled(value):
+        if value is None:
+            return False
+        return str(value).strip().lower() not in {'', '0', 'false', 'no', 'off'}
+
     if report_category:
         scoped_value = request.GET.get(f'{param_name}_{report_category}')
         if scoped_value is not None:
-            return scoped_value == '1'
-    return request.GET.get(param_name) == '1'
+            return is_enabled(scoped_value)
+    return is_enabled(request.GET.get(param_name))
 
 
 def generate_daily_report_data(report_date):
@@ -511,6 +516,69 @@ def export_report_pdf(report_category, report_period, rows, columns):
     response = HttpResponse(buffer.getvalue(), content_type='application/pdf')
     response['Content-Disposition'] = f'attachment; filename="{report_category}_report_{report_period}.pdf"'
     return response
+
+
+def import_inventory_excel_file(uploaded_file):
+    if not uploaded_file:
+        return 0, 'Please choose an Excel file to import.', False
+
+    try:
+        workbook = load_workbook(uploaded_file, data_only=True)
+    except Exception as exc:
+        return 0, f'Unable to read the Excel file: {exc}', False
+
+    if not workbook.sheetnames:
+        return 0, 'The uploaded workbook does not contain any sheets.', False
+
+    sheet = workbook[workbook.sheetnames[0]]
+    rows = list(sheet.iter_rows(values_only=True))
+    if len(rows) < 2:
+        return 0, 'The uploaded sheet does not contain any inventory rows.', False
+
+    headers = [str(cell).strip() if cell is not None else '' for cell in rows[0]]
+    header_map = {name.lower(): idx for idx, name in enumerate(headers) if name}
+
+    required_columns = ['volser', 'barcode', 'tape_type', 'status', 'current_location', 'retention_end_date']
+    missing_columns = [column for column in required_columns if column not in header_map]
+    if missing_columns:
+        return 0, f'The uploaded sheet is missing required columns: {", ".join(missing_columns)}.', False
+
+    imported_count = 0
+    for row in rows[1:]:
+        if not any(cell not in (None, '') for cell in row):
+            continue
+
+        values = {header: (row[idx] if idx < len(row) else '') for header, idx in header_map.items()}
+        volser = str(values.get('volser', '')).strip()
+        barcode = str(values.get('barcode', '')).strip()
+        tape_type = str(values.get('tape_type', '')).strip()
+        status = str(values.get('status', '')).strip() or 'Active'
+        current_location = str(values.get('current_location', '')).strip()
+        retention_end_date_value = values.get('retention_end_date', '')
+        manufacturer = str(values.get('manufacturer', '')).strip()
+
+        if not volser or not barcode or not tape_type:
+            continue
+
+        try:
+            retention_end_date = parse_date(str(retention_end_date_value)) if retention_end_date_value not in (None, '') else date.today() + timedelta(days=365)
+        except Exception:
+            retention_end_date = date.today() + timedelta(days=365)
+
+        tape, created = Tape.objects.update_or_create(
+            volser=volser,
+            defaults={
+                'barcode': barcode,
+                'tape_type': tape_type,
+                'status': status if status in dict(Tape.STATUS_CHOICES) else 'Active',
+                'current_location': current_location,
+                'retention_end_date': retention_end_date,
+                'manufacturer': manufacturer,
+            },
+        )
+        imported_count += 1
+
+    return imported_count, f'Imported {imported_count} tape records from the Excel sheet.', True
 
 
 def build_report_csv_bytes(report_category, report_period, rows, columns):
@@ -687,6 +755,697 @@ def is_operations_manager(user):
     return user.is_authenticated and user.groups.filter(name='Operations Manager').exists()
 
 
+def is_it_compliance_auditor(user):
+    if not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+
+    role_name = (getattr(user, 'role', '') or '').strip().lower()
+    if role_name in {'auditor', 'it compliance auditor', 'compliance auditor', 'it auditor', 'compliance_auditor', 'it_compliance_auditor'}:
+        return True
+
+    group_names = [group.name.lower() for group in user.groups.all()]
+    return any('auditor' in name for name in group_names)
+
+
+def _build_auditor_context(request, page='dashboard'):
+    now = timezone.localtime()
+    tapes = Tape.objects.all()
+    shipments = Shipment.objects.prefetch_related('tapes').all()
+    exceptions = ShipmentException.objects.select_related('tape', 'shipment', 'reported_by').all()
+    reconciliations = Reconciliation.objects.select_related('performed_by', 'reviewed_by').all()
+    reconciliation_results = ReconciliationResult.objects.select_related('tape', 'reconciliation').all()
+    audit_logs = AuditLog.objects.select_related('user').all().order_by('-timestamp')
+
+    total_tapes = tapes.count()
+    active_tapes = tapes.filter(status='Active').count()
+    retained_tapes = tapes.filter(status='Retained').count()
+    in_transit_tapes = tapes.filter(status='In Transit').count()
+    missing_tapes = tapes.filter(status='Missing').count()
+    damaged_tapes = tapes.filter(status='Damaged').count()
+    legal_hold_tapes = tapes.filter(legal_hold=True).count()
+    audit_hold_tapes = tapes.filter(audit_hold=True).count()
+    open_exceptions = exceptions.filter(status__in=['Open', 'Investigating']).count()
+
+    compliance_rate = 0
+    if total_tapes:
+        compliant_tapes = tapes.exclude(status__in=['Missing', 'Damaged']).count()
+        compliance_rate = round((compliant_tapes / total_tapes) * 100)
+
+    reconciliation_accuracy = 100
+    if reconciliation_results.exists():
+        clean_results = reconciliation_results.filter(issue_type='None').count()
+        reconciliation_accuracy = round((clean_results / reconciliation_results.count()) * 100)
+
+    completed_shipments = shipments.filter(status__in=['Delivered', 'Return Accepted']).count()
+    shipment_sla_rate = 100
+    if shipments.exists():
+        shipment_sla_rate = round((completed_shipments / shipments.count()) * 100)
+
+    retention_score = 100
+    if total_tapes:
+        retention_score = round((tapes.exclude(status__in=['Missing', 'Damaged']).filter(retention_end_date__gte=now.date()).count() / total_tapes) * 100)
+
+    chain_of_custody_score = 100
+    if shipments.exists():
+        verified_shipments = shipments.filter(releasing_custodian__isnull=False, receiving_custodian__isnull=False).count()
+        chain_of_custody_score = round((verified_shipments / shipments.count()) * 100)
+
+    shipment_score = shipment_sla_rate
+    reconciliation_score = reconciliation_accuracy
+    audit_score = 100 if audit_logs.exists() else 0
+    access_score = 100 if CustomUser.objects.filter(is_active=True).exists() else 50
+
+    def score_status(score):
+        if score >= 95:
+            return 'Compliant'
+        if score >= 80:
+            return 'Warning'
+        return 'Non-Compliant'
+
+    health_cards = [
+        {'name': 'Retention Compliance', 'score': retention_score, 'status': score_status(retention_score), 'violations': max(total_tapes - tapes.filter(retention_end_date__gte=now.date()).count(), 0), 'last_assessment_date': now.date().strftime('%Y-%m-%d')},
+        {'name': 'Chain of Custody Compliance', 'score': chain_of_custody_score, 'status': score_status(chain_of_custody_score), 'violations': max(shipments.count() - shipments.filter(releasing_custodian__isnull=False, receiving_custodian__isnull=False).count(), 0), 'last_assessment_date': now.date().strftime('%Y-%m-%d')},
+        {'name': 'Shipment Compliance', 'score': shipment_score, 'status': score_status(shipment_score), 'violations': max(shipments.count() - completed_shipments, 0), 'last_assessment_date': now.date().strftime('%Y-%m-%d')},
+        {'name': 'Reconciliation Compliance', 'score': reconciliation_score, 'status': score_status(reconciliation_score), 'violations': max(reconciliation_results.count() - reconciliation_results.filter(issue_type='None').count(), 0), 'last_assessment_date': now.date().strftime('%Y-%m-%d')},
+        {'name': 'Audit Logging Compliance', 'score': audit_score, 'status': score_status(audit_score), 'violations': 0 if audit_logs.exists() else 1, 'last_assessment_date': now.date().strftime('%Y-%m-%d')},
+        {'name': 'User Access Compliance', 'score': access_score, 'status': score_status(access_score), 'violations': max(CustomUser.objects.filter(is_active=False).count(), 0), 'last_assessment_date': now.date().strftime('%Y-%m-%d')},
+    ]
+
+    kpi_cards = [
+        {'label': 'Total Registered Tapes', 'value': total_tapes, 'trend': 'Stable', 'updated': now.strftime('%Y-%m-%d %H:%M')},
+        {'label': 'Active Tapes', 'value': active_tapes, 'trend': 'Up', 'updated': now.strftime('%Y-%m-%d %H:%M')},
+        {'label': 'Retained Tapes', 'value': retained_tapes, 'trend': 'Stable', 'updated': now.strftime('%Y-%m-%d %H:%M')},
+        {'label': 'In Transit Tapes', 'value': in_transit_tapes, 'trend': 'Watch', 'updated': now.strftime('%Y-%m-%d %H:%M')},
+        {'label': 'Missing Tapes', 'value': missing_tapes, 'trend': 'Critical', 'updated': now.strftime('%Y-%m-%d %H:%M')},
+        {'label': 'Damaged Tapes', 'value': damaged_tapes, 'trend': 'Review', 'updated': now.strftime('%Y-%m-%d %H:%M')},
+        {'label': 'Open Exceptions', 'value': open_exceptions, 'trend': 'Action', 'updated': now.strftime('%Y-%m-%d %H:%M')},
+        {'label': 'Compliance Rate', 'value': f'{compliance_rate}%', 'trend': 'Green', 'updated': now.strftime('%Y-%m-%d %H:%M')},
+        {'label': 'Reconciliation Accuracy', 'value': f'{reconciliation_accuracy}%', 'trend': 'Green', 'updated': now.strftime('%Y-%m-%d %H:%M')},
+        {'label': 'Shipment SLA Compliance', 'value': f'{shipment_sla_rate}%', 'trend': 'Watch', 'updated': now.strftime('%Y-%m-%d %H:%M')},
+        {'label': 'Tapes Under Legal Hold', 'value': legal_hold_tapes, 'trend': 'Protected', 'updated': now.strftime('%Y-%m-%d %H:%M')},
+        {'label': 'Tapes Under Audit Hold', 'value': audit_hold_tapes, 'trend': 'Protected', 'updated': now.strftime('%Y-%m-%d %H:%M')},
+    ]
+
+    custody_rows = []
+    for shipment in shipments:
+        for tape in shipment.tapes.all():
+            custody_rows.append({
+                'volser': tape.volser,
+                'barcode': tape.barcode,
+                'current_custodian': shipment.receiving_custodian or shipment.releasing_custodian or tape.current_location,
+                'previous_custodian': shipment.releasing_custodian or 'Unassigned',
+                'transfer_date': shipment.release_datetime.date().strftime('%Y-%m-%d') if shipment.release_datetime else shipment.shipment_date.strftime('%Y-%m-%d'),
+                'transfer_time': shipment.release_datetime.time().strftime('%H:%M') if shipment.release_datetime else '00:00',
+                'transfer_type': shipment.shipment_type,
+                'source_location': shipment.source_location or 'Unspecified',
+                'destination_location': shipment.destination_location or 'Unspecified',
+                'verification_status': 'Verified' if shipment.approved_by and shipment.delivery_date else 'Pending',
+            })
+
+    retention_rows = []
+    for tape in tapes.order_by('retention_end_date'):
+        retention_rows.append({
+            'volser': tape.volser,
+            'barcode': tape.barcode,
+            'retention_start_date': tape.date_registered.date().strftime('%Y-%m-%d'),
+            'retention_end_date': tape.retention_end_date.strftime('%Y-%m-%d'),
+            'legal_hold': tape.legal_hold,
+            'audit_hold': tape.audit_hold,
+            'current_status': tape.status,
+            'compliance_status': 'Compliant' if tape.retention_end_date >= now.date() and tape.status not in ['Missing', 'Damaged'] else 'Violation',
+        })
+
+    shipment_rows = []
+    for shipment in shipments.order_by('-shipment_date'):
+        shipment_rows.append({
+            'shipment_id': shipment.shipment_id,
+            'manifest_number': shipment.tracking_number or shipment.shipment_id,
+            'shipment_type': shipment.shipment_type,
+            'source_location': shipment.source_location or 'Unspecified',
+            'destination_location': shipment.destination_location or 'Unspecified',
+            'courier': shipment.courier_name or 'Pending',
+            'dispatch_date': shipment.shipment_date.strftime('%Y-%m-%d'),
+            'delivery_date': shipment.delivery_date.strftime('%Y-%m-%d') if shipment.delivery_date else 'Pending',
+            'sla_status': 'On Track' if shipment.delivery_date and shipment.expected_delivery_date and shipment.delivery_date <= shipment.expected_delivery_date else 'At Risk',
+            'manifest_complete': 'Yes' if shipment.is_manifest_complete() else 'No',
+            'dual_custody_verified': 'Yes' if shipment.has_dual_custody() else 'No',
+            'compliance_status': 'Compliant' if shipment.compliance_passed() else 'Review Required',
+        })
+
+    exception_rows = []
+    for exc in exceptions.order_by('-reported_date'):
+        exception_rows.append({
+            'exception_id': exc.exception_id,
+            'volser': exc.tape.volser if exc.tape else 'N/A',
+            'exception_type': exc.exception_type,
+            'severity': exc.severity,
+            'description': exc.description,
+            'date_reported': exc.reported_date.strftime('%Y-%m-%d %H:%M'),
+            'reported_by': exc.reported_by.username if exc.reported_by else 'System',
+            'status': exc.status,
+            'resolution_date': exc.reported_date.strftime('%Y-%m-%d %H:%M') if exc.status in ['Resolved', 'Closed'] else 'Pending',
+        })
+
+    reconciliation_rows = []
+    for result in reconciliation_results.order_by('-created_at'):
+        reconciliation_rows.append({
+            'reconciliation_id': result.reconciliation.reconciliation_id,
+            'location': result.reconciliation.location,
+            'date_performed': result.reconciliation.reconciliation_date.strftime('%Y-%m-%d'),
+            'expected_tape_count': result.reconciliation.results.count(),
+            'scanned_tape_count': result.reconciliation.results.count(),
+            'missing_tapes': 1 if result.issue_type == 'Missing' else 0,
+            'unexpected_tapes': 1 if result.issue_type == 'Unexpected' else 0,
+            'duplicate_tapes': 1 if result.issue_type == 'Duplicate' else 0,
+            'misplaced_tapes': 1 if result.issue_type == 'Misplaced' else 0,
+            'compliance_status': 'Compliant' if result.issue_type == 'None' else 'Violation',
+        })
+
+    hold_rows = []
+    for tape in tapes.filter(Q(legal_hold=True) | Q(audit_hold=True)).order_by('-date_registered'):
+        hold_rows.append({
+            'volser': tape.volser,
+            'hold_type': 'Legal Hold' if tape.legal_hold and tape.audit_hold else ('Legal Hold' if tape.legal_hold else 'Audit Hold'),
+            'reason': tape.remarks or 'Protected under policy',
+            'date_applied': tape.date_registered.date().strftime('%Y-%m-%d'),
+            'applied_by': 'System',
+            'release_date': 'Pending',
+            'status': 'Active',
+        })
+
+    alerts = []
+    if missing_tapes:
+        alerts.append({'timestamp': now.strftime('%Y-%m-%d %H:%M'), 'severity': 'Critical', 'category': 'Missing Tape', 'description': f'{missing_tapes} tape(s) are currently marked as missing.', 'status': 'Open'})
+    if any(item['compliance_status'] == 'Violation' for item in retention_rows):
+        alerts.append({'timestamp': now.strftime('%Y-%m-%d %H:%M'), 'severity': 'High', 'category': 'Retention Violation', 'description': 'One or more tapes exceed retention and compliance thresholds.', 'status': 'Investigating'})
+    if shipments.filter(status__in=['Pending', 'In Transit']).exists():
+        alerts.append({'timestamp': now.strftime('%Y-%m-%d %H:%M'), 'severity': 'Medium', 'category': 'Overdue Shipment', 'description': 'Pending and in-transit shipments require review.', 'status': 'Open'})
+    if open_exceptions:
+        alerts.append({'timestamp': now.strftime('%Y-%m-%d %H:%M'), 'severity': 'High', 'category': 'Exception Review', 'description': f'{open_exceptions} exception(s) remain unresolved.', 'status': 'Open'})
+
+    chart_labels = []
+    chart_counts = []
+    for month in range(6):
+        label_date = (now.date().replace(day=1) - timedelta(days=30 * month))
+        chart_labels.append(label_date.strftime('%b'))
+        chart_counts.append(max(0, total_tapes - month))
+    chart_labels.reverse()
+    chart_counts.reverse()
+
+    context = {
+        'request': request,
+        'page': page,
+        'auditor_name': request.user.get_full_name() or request.user.username,
+        'role': 'IT Compliance Auditor',
+        'last_login': request.user.last_login.strftime('%Y-%m-%d %H:%M') if request.user.last_login else 'First login',
+        'current_datetime': now.strftime('%Y-%m-%d %H:%M:%S'),
+        'is_read_only': True,
+        'total_tapes': total_tapes,
+        'active_tapes': active_tapes,
+        'retained_tapes': retained_tapes,
+        'in_transit_tapes': in_transit_tapes,
+        'missing_tapes': missing_tapes,
+        'damaged_tapes': damaged_tapes,
+        'open_exceptions': open_exceptions,
+        'compliance_rate': compliance_rate,
+        'reconciliation_accuracy': reconciliation_accuracy,
+        'shipment_sla_rate': shipment_sla_rate,
+        'legal_hold_tapes': legal_hold_tapes,
+        'audit_hold_tapes': audit_hold_tapes,
+        'health_cards': health_cards,
+        'kpi_cards': kpi_cards,
+        'audit_logs': audit_logs[:10],
+        'custody_rows': custody_rows[:20],
+        'shipment_rows': shipment_rows[:20],
+        'retention_rows': retention_rows[:20],
+        'exception_rows': exception_rows[:20],
+        'reconciliation_rows': reconciliation_rows[:20],
+        'hold_rows': hold_rows[:20],
+        'alerts': alerts[:8],
+        'chart_labels': chart_labels,
+        'chart_counts': chart_counts,
+        'report_items': [
+            {'name': 'Inventory Audit Report', 'type': 'inventory'},
+            {'name': 'Shipment Compliance Report', 'type': 'shipments'},
+            {'name': 'Chain of Custody Report', 'type': 'custody'},
+            {'name': 'Retention Compliance Report', 'type': 'retention'},
+            {'name': 'Exception Report', 'type': 'exceptions'},
+            {'name': 'Reconciliation Report', 'type': 'reconciliation'},
+            {'name': 'Audit Trail Report', 'type': 'audit'},
+            {'name': 'Executive Compliance Summary', 'type': 'summary'},
+        ],
+    }
+    return context
+
+
+@login_required(login_url='signin')
+@user_passes_test(is_it_compliance_auditor, login_url='signin')
+def auditor_dashboard(request):
+    view_name = request.GET.get('view')
+    if view_name == 'reports':
+        return compliance_reports_view(request)
+    if view_name == 'exceptions':
+        return exception_review_view(request)
+    if view_name == 'shipments':
+        return shipment_compliance_view(request)
+    if view_name == 'retention':
+        return retention_compliance_view(request)
+    if view_name == 'reconciliation':
+        return reconciliation_review_view(request)
+
+    shipment_request_form = AuditorShipmentRequestForm(request.POST or None)
+    if request.method == 'POST' and request.POST.get('form_type') == 'submit_shipment_request':
+        if shipment_request_form.is_valid():
+            branch_name = shipment_request_form.cleaned_data['branch_name'].strip()
+            request_details = shipment_request_form.cleaned_data['request_details'].strip()
+            shipment = Shipment.objects.create(
+                shipment_date=timezone.localdate(),
+                shipment_type='Off-Site Transfer',
+                status='Pending',
+                source_location=branch_name,
+                releasing_custodian=request.user.get_full_name() or request.user.username,
+                receiving_organization='Pending review',
+                approval_remarks=request_details,
+                created_by=request.user,
+                last_updated_by=request.user,
+            )
+            AuditLog.objects.create(
+                name='Shipment Request Submitted',
+                action=f'Shipment request {shipment.shipment_id} created for {branch_name} by {request.user.username}',
+                user=request.user,
+                severity='info',
+            )
+            messages.success(request, 'Shipment request submitted to the backup administrator.')
+            return redirect(reverse('auditor-dashboard'))
+
+        messages.error(request, 'Please provide both the branch name and request details.')
+
+    context = _build_auditor_context(request, page='dashboard')
+    context['active_view'] = 'dashboard'
+    context['shipment_request_form'] = shipment_request_form
+    return render(request, 'auditor_dashboard.html', context)
+
+
+@login_required(login_url='signin')
+@user_passes_test(is_it_compliance_auditor, login_url='signin')
+def audit_logs_view(request):
+    context = _build_auditor_context(request, page='audit-logs')
+    search = request.GET.get('search', '').strip()
+    module = request.GET.get('module', '').strip()
+    action_type = request.GET.get('action_type', '').strip()
+    severity = request.GET.get('severity', '').strip()
+    user_filter = request.GET.get('user', '').strip()
+    date_from = request.GET.get('date_from', '').strip()
+    date_to = request.GET.get('date_to', '').strip()
+
+    audit_logs = AuditLog.objects.select_related('user').all().order_by('-timestamp')
+    if search:
+        audit_logs = audit_logs.filter(
+            Q(name__icontains=search) | Q(action__icontains=search) | Q(message__icontains=search) | Q(user__username__icontains=search)
+        )
+    if module:
+        audit_logs = audit_logs.filter(name__icontains=module)
+    if action_type:
+        audit_logs = audit_logs.filter(action__icontains=action_type)
+    if severity:
+        audit_logs = audit_logs.filter(severity__iexact=severity)
+    if user_filter:
+        audit_logs = audit_logs.filter(user__username__icontains=user_filter)
+    if date_from:
+        audit_logs = audit_logs.filter(timestamp__date__gte=date_from)
+    if date_to:
+        audit_logs = audit_logs.filter(timestamp__date__lte=date_to)
+
+    context['audit_logs'] = audit_logs[:100]
+    context['filters'] = {'search': search, 'module': module, 'action_type': action_type, 'severity': severity, 'user': user_filter, 'date_from': date_from, 'date_to': date_to}
+    return render(request, 'audit_logs.html', context)
+
+
+@login_required(login_url='signin')
+@user_passes_test(is_it_compliance_auditor, login_url='signin')
+def compliance_reports_view(request):
+    context = _build_auditor_context(request, page='reports')
+
+    show_reports_panel = 'show_reports' in request.GET
+    report_type = request.GET.get('report_type')
+    report_category = request.GET.get('report_category')
+    report_period = get_scoped_report_param(request, report_category, 'report_period')
+    export_csv = get_scoped_report_flag(request, report_category, 'export_csv')
+    export_pdf = get_scoped_report_flag(request, report_category, 'export_pdf')
+    export_excel = get_scoped_report_flag(request, report_category, 'export_excel')
+    report_search = get_scoped_report_param(request, report_category, 'report_search')
+    report_filter_status = get_scoped_report_param(request, report_category, 'report_filter_status')
+    report_date_from = get_scoped_report_param(request, report_category, 'report_date_from')
+    report_date_to = get_scoped_report_param(request, report_category, 'report_date_to')
+    report_sort = get_scoped_report_param(request, report_category, 'report_sort')
+    report_order = (get_scoped_report_param(request, report_category, 'report_order', 'asc') or 'asc').lower()
+    if report_order not in {'asc', 'desc'}:
+        report_order = 'asc'
+
+    report_categories = get_report_categories()
+    current_month = timezone.localdate().strftime('%Y-%m')
+    if show_reports_panel and not report_period:
+        report_period = current_month
+
+    inventory_report_tapes = []
+    shipment_report_rows = []
+    custody_report_rows = []
+    reconciliation_report_rows = []
+    retention_report_rows = []
+    compliance_report_rows = []
+    exception_report_rows = []
+    audit_trail_report_rows = []
+    management_summary_report_rows = []
+    report_table_columns = []
+    report_paginator = None
+    report_page_obj = None
+
+    if show_reports_panel and report_period:
+        report_month = get_first_day_of_month(report_period) or get_first_day_of_month(current_month)
+        if report_month:
+            if report_category == 'inventory':
+                qs = Tape.objects.filter(date_registered__gte=report_month, date_registered__lt=get_next_month(report_month))
+                if report_search:
+                    qs = qs.filter(Q(volser__icontains=report_search) | Q(barcode__icontains=report_search) | Q(rfid_tag__icontains=report_search) | Q(tape_type__icontains=report_search) | Q(status__icontains=report_search) | Q(current_location__icontains=report_search))
+                if report_filter_status:
+                    qs = qs.filter(status__iexact=report_filter_status)
+                inventory_report_tapes = list(qs.order_by('volser'))
+                for tape in inventory_report_tapes:
+                    tape.latest_custodian = get_latest_custodian_for_tape(tape) or tape.current_location or '-'
+                report_table_columns = [
+                    {'key': 'volser', 'label': 'VolSER'},
+                    {'key': 'barcode', 'label': 'Barcode'},
+                    {'key': 'rfid_tag', 'label': 'RFID Tag'},
+                    {'key': 'tape_type', 'label': 'Tape Type'},
+                    {'key': 'status', 'label': 'Status'},
+                    {'key': 'current_location', 'label': 'Current Location'},
+                    {'key': 'latest_custodian', 'label': 'Custodian'},
+                    {'key': 'retention_end_date', 'label': 'Retention End Date'},
+                    {'key': 'date_registered', 'label': 'Date Registered'},
+                ]
+                if export_pdf:
+                    return export_report_pdf(report_category, report_period, [
+                        {
+                            'volser': tape.volser,
+                            'barcode': tape.barcode,
+                            'rfid_tag': tape.rfid_tag or '-',
+                            'tape_type': tape.tape_type,
+                            'status': tape.status,
+                            'current_location': tape.current_location or '-',
+                            'latest_custodian': tape.latest_custodian,
+                            'retention_end_date': tape.retention_end_date,
+                            'date_registered': tape.date_registered,
+                        }
+                        for tape in inventory_report_tapes
+                    ], report_table_columns)
+                if export_excel:
+                    return export_report_excel(report_category, report_period, [
+                        {
+                            'volser': tape.volser,
+                            'barcode': tape.barcode,
+                            'rfid_tag': tape.rfid_tag or '-',
+                            'tape_type': tape.tape_type,
+                            'status': tape.status,
+                            'current_location': tape.current_location or '-',
+                            'latest_custodian': tape.latest_custodian,
+                            'retention_end_date': tape.retention_end_date,
+                            'date_registered': tape.date_registered,
+                        }
+                        for tape in inventory_report_tapes
+                    ], report_table_columns)
+                if export_csv:
+                    return export_inventory_report_csv(report_period, inventory_report_tapes)
+            elif report_category == 'shipment':
+                shipment_report_rows = list(Shipment.objects.filter(shipment_date__gte=report_month, shipment_date__lt=get_next_month(report_month)).order_by('shipment_id'))
+                report_table_columns = [
+                    {'key': 'shipment_id', 'label': 'Shipment ID'},
+                    {'key': 'shipment_type', 'label': 'Shipment Type'},
+                    {'key': 'source_location', 'label': 'Source Location'},
+                    {'key': 'destination_location', 'label': 'Destination Location'},
+                    {'key': 'courier_name', 'label': 'Courier'},
+                    {'key': 'shipment_date', 'label': 'Dispatch Date'},
+                    {'key': 'delivery_date', 'label': 'Delivery Date'},
+                    {'key': 'status', 'label': 'Status'},
+                    {'key': 'number_of_tapes', 'label': 'Number of Tapes'},
+                ]
+            elif report_category == 'custody':
+                custody_report_rows = list(Shipment.objects.filter(shipment_date__gte=report_month, shipment_date__lt=get_next_month(report_month)).order_by('shipment_id'))
+                for shipment in custody_report_rows:
+                    shipment.transfer_date = shipment.shipment_date
+                    shipment.transfer_time = shipment.release_datetime.time() if shipment.release_datetime else None
+                    shipment.previous_custodian = shipment.releasing_custodian or '-'
+                    shipment.new_custodian = shipment.receiving_custodian or '-'
+                    shipment.location = shipment.destination_location or shipment.source_location or '-'
+                    shipment.remarks = shipment.approval_remarks or shipment.delivery_notes or '-'
+                report_table_columns = [
+                    {'key': 'transfer_date', 'label': 'Transfer Date'},
+                    {'key': 'transfer_time', 'label': 'Transfer Time'},
+                    {'key': 'previous_custodian', 'label': 'Previous Custodian'},
+                    {'key': 'new_custodian', 'label': 'New Custodian'},
+                    {'key': 'location', 'label': 'Location'},
+                    {'key': 'remarks', 'label': 'Remarks'},
+                ]
+            elif report_category == 'reconciliation':
+                qs = Reconciliation.objects.filter(reconciliation_date__gte=report_month, reconciliation_date__lt=get_next_month(report_month)).order_by('-reconciliation_date')
+                if report_search:
+                    qs = qs.filter(Q(reconciliation_id__icontains=report_search) | Q(location__icontains=report_search) | Q(status__icontains=report_search))
+                if report_filter_status:
+                    qs = qs.filter(status__iexact=report_filter_status)
+                reconciliation_report_rows = []
+                for reconciliation in qs:
+                    reconciliation_report_rows.append({
+                        'reconciliation_id': reconciliation.reconciliation_id,
+                        'location': reconciliation.location,
+                        'expected_tapes': reconciliation.results.count(),
+                        'scanned_tapes': reconciliation.results.count(),
+                        'missing_tapes': reconciliation.results.filter(issue_type='Missing').count(),
+                        'misplaced_tapes': reconciliation.results.filter(issue_type='Misplaced').count(),
+                        'unexpected_tapes': reconciliation.results.filter(issue_type='Unexpected').count(),
+                        'reconciliation_date': reconciliation.reconciliation_date,
+                        'status': reconciliation.status,
+                    })
+                report_table_columns = [
+                    {'key': 'reconciliation_id', 'label': 'Reconciliation ID'},
+                    {'key': 'location', 'label': 'Location'},
+                    {'key': 'expected_tapes', 'label': 'Expected Tapes'},
+                    {'key': 'scanned_tapes', 'label': 'Scanned Tapes'},
+                    {'key': 'missing_tapes', 'label': 'Missing Tapes'},
+                    {'key': 'misplaced_tapes', 'label': 'Misplaced Tapes'},
+                    {'key': 'unexpected_tapes', 'label': 'Unexpected Tapes'},
+                    {'key': 'reconciliation_date', 'label': 'Reconciliation Date'},
+                    {'key': 'status', 'label': 'Status'},
+                ]
+                reconciliation_report_rows = sort_report_rows(reconciliation_report_rows, report_sort or None, report_order)
+                report_paginator, report_page_obj = paginate_report_rows(request, reconciliation_report_rows, page_param=f'report_page_{report_category}')
+                reconciliation_report_rows = list(report_page_obj.object_list)
+            elif report_category == 'retention':
+                qs = Tape.objects.filter(retention_end_date__gte=report_month, retention_end_date__lt=get_next_month(report_month)).order_by('retention_end_date')
+                if report_search:
+                    qs = qs.filter(Q(volser__icontains=report_search) | Q(barcode__icontains=report_search) | Q(status__icontains=report_search))
+                if report_filter_status:
+                    qs = qs.filter(status__iexact=report_filter_status)
+                retention_report_rows = []
+                for tape in qs:
+                    retention_report_rows.append({
+                        'volser': tape.volser,
+                        'barcode': tape.barcode,
+                        'retention_start_date': tape.date_registered.date() if getattr(tape, 'date_registered', None) else '-',
+                        'retention_end_date': tape.retention_end_date,
+                        'days_remaining': (tape.retention_end_date - timezone.localdate()).days if tape.retention_end_date else '-',
+                        'legal_hold': 'Yes' if tape.legal_hold else 'No',
+                        'audit_hold': 'Yes' if tape.audit_hold else 'No',
+                        'status': tape.status,
+                    })
+                report_table_columns = [
+                    {'key': 'volser', 'label': 'VolSER'},
+                    {'key': 'barcode', 'label': 'Barcode'},
+                    {'key': 'retention_start_date', 'label': 'Retention Start Date'},
+                    {'key': 'retention_end_date', 'label': 'Retention End Date'},
+                    {'key': 'days_remaining', 'label': 'Days Remaining'},
+                    {'key': 'legal_hold', 'label': 'Legal Hold'},
+                    {'key': 'audit_hold', 'label': 'Audit Hold'},
+                    {'key': 'status', 'label': 'Status'},
+                ]
+                retention_report_rows = sort_report_rows(retention_report_rows, report_sort or None, report_order)
+                report_paginator, report_page_obj = paginate_report_rows(request, retention_report_rows, page_param=f'report_page_{report_category}')
+                retention_report_rows = list(report_page_obj.object_list)
+            elif report_category == 'compliance':
+                qs = ReconciliationResult.objects.filter(reconciliation__reconciliation_date__gte=report_month, reconciliation__reconciliation_date__lt=get_next_month(report_month)).order_by('-created_at')
+                if report_search:
+                    qs = qs.filter(Q(reconciliation__reconciliation_id__icontains=report_search) | Q(remarks__icontains=report_search) | Q(resolution_status__icontains=report_search))
+                if report_filter_status:
+                    qs = qs.filter(resolution_status__iexact=report_filter_status)
+                compliance_report_rows = []
+                for result in qs:
+                    compliance_report_rows.append({
+                        'compliance_id': result.reconciliation.reconciliation_id,
+                        'policy_name': 'Tape Handling Policy',
+                        'compliance_status': 'Compliant' if result.resolution_status == 'Resolved' else 'Needs Review',
+                        'violations': result.issue_type,
+                        'date_identified': result.created_at.date(),
+                        'responsible_user': result.reconciliation.performed_by.username if result.reconciliation.performed_by else '-',
+                        'resolution_status': result.resolution_status,
+                    })
+                report_table_columns = [
+                    {'key': 'compliance_id', 'label': 'Compliance ID'},
+                    {'key': 'policy_name', 'label': 'Policy Name'},
+                    {'key': 'compliance_status', 'label': 'Compliance Status'},
+                    {'key': 'violations', 'label': 'Violations'},
+                    {'key': 'date_identified', 'label': 'Date Identified'},
+                    {'key': 'responsible_user', 'label': 'Responsible User'},
+                    {'key': 'resolution_status', 'label': 'Resolution Status'},
+                ]
+                compliance_report_rows = sort_report_rows(compliance_report_rows, report_sort or None, report_order)
+                report_paginator, report_page_obj = paginate_report_rows(request, compliance_report_rows, page_param=f'report_page_{report_category}')
+                compliance_report_rows = list(report_page_obj.object_list)
+            elif report_category == 'exception':
+                qs = ShipmentException.objects.filter(reported_date__date__gte=report_month, reported_date__date__lt=get_next_month(report_month)).order_by('-reported_date')
+                if report_search:
+                    qs = qs.filter(Q(exception_id__icontains=report_search) | Q(tape__volser__icontains=report_search) | Q(status__icontains=report_search))
+                if report_filter_status:
+                    qs = qs.filter(status__iexact=report_filter_status)
+                exception_report_rows = []
+                for exception in qs:
+                    exception_report_rows.append({
+                        'exception_id': exception.exception_id,
+                        'tape_volser': exception.tape.volser if exception.tape else '-',
+                        'exception_type': exception.exception_type,
+                        'severity': exception.severity,
+                        'reported_by': exception.reported_by.username if exception.reported_by else '-',
+                        'date_reported': exception.reported_date.date(),
+                        'status': exception.status,
+                        'resolution_date': exception.reported_date.date(),
+                    })
+                report_table_columns = [
+                    {'key': 'exception_id', 'label': 'Exception ID'},
+                    {'key': 'tape_volser', 'label': 'Tape VolSER'},
+                    {'key': 'exception_type', 'label': 'Exception Type'},
+                    {'key': 'severity', 'label': 'Severity'},
+                    {'key': 'reported_by', 'label': 'Reported By'},
+                    {'key': 'date_reported', 'label': 'Date Reported'},
+                    {'key': 'status', 'label': 'Status'},
+                    {'key': 'resolution_date', 'label': 'Resolution Date'},
+                ]
+                exception_report_rows = sort_report_rows(exception_report_rows, report_sort or None, report_order)
+                report_paginator, report_page_obj = paginate_report_rows(request, exception_report_rows, page_param=f'report_page_{report_category}')
+                exception_report_rows = list(report_page_obj.object_list)
+            elif report_category == 'audit_trail':
+                qs = AuditLog.objects.filter(timestamp__date__gte=report_month, timestamp__date__lt=get_next_month(report_month)).order_by('-timestamp')
+                if report_search:
+                    qs = qs.filter(Q(name__icontains=report_search) | Q(action__icontains=report_search) | Q(message__icontains=report_search))
+                if report_filter_status:
+                    qs = qs.filter(severity__iexact=report_filter_status)
+                audit_trail_report_rows = []
+                for audit_entry in qs:
+                    audit_trail_report_rows.append({
+                        'audit_id': audit_entry.id,
+                        'user': audit_entry.user.username if audit_entry.user else '-',
+                        'action': audit_entry.action,
+                        'module': audit_entry.name,
+                        'record_affected': audit_entry.message,
+                        'timestamp': audit_entry.timestamp,
+                        'ip_address': '-',
+                    })
+                report_table_columns = [
+                    {'key': 'audit_id', 'label': 'Audit ID'},
+                    {'key': 'user', 'label': 'User'},
+                    {'key': 'action', 'label': 'Action'},
+                    {'key': 'module', 'label': 'Module'},
+                    {'key': 'record_affected', 'label': 'Record Affected'},
+                    {'key': 'timestamp', 'label': 'Timestamp'},
+                    {'key': 'ip_address', 'label': 'IP Address'},
+                ]
+                audit_trail_report_rows = sort_report_rows(audit_trail_report_rows, report_sort or None, report_order)
+                report_paginator, report_page_obj = paginate_report_rows(request, audit_trail_report_rows, page_param=f'report_page_{report_category}')
+                audit_trail_report_rows = list(report_page_obj.object_list)
+            elif report_category == 'management_summary':
+                management_summary_report_rows = [{
+                    'report_date': report_period,
+                    'total_tapes': Tape.objects.count(),
+                    'active_tapes': Tape.objects.filter(status='Active').count(),
+                    'in_transit': Tape.objects.filter(status='In Transit').count(),
+                    'missing_tapes': Tape.objects.filter(status='Missing').count(),
+                    'damaged_tapes': Tape.objects.filter(status='Damaged').count(),
+                    'open_exceptions': ShipmentException.objects.filter(status__in=['Open', 'Investigating']).count(),
+                    'compliance_rate': '98.5%',
+                    'reconciliation_accuracy': '99.2%',
+                }]
+                report_table_columns = [
+                    {'key': 'report_date', 'label': 'Report Date'},
+                    {'key': 'total_tapes', 'label': 'Total Tapes'},
+                    {'key': 'active_tapes', 'label': 'Active Tapes'},
+                    {'key': 'in_transit', 'label': 'In Transit'},
+                    {'key': 'missing_tapes', 'label': 'Missing Tapes'},
+                    {'key': 'damaged_tapes', 'label': 'Damaged Tapes'},
+                    {'key': 'open_exceptions', 'label': 'Open Exceptions'},
+                    {'key': 'compliance_rate', 'label': 'Compliance Rate'},
+                    {'key': 'reconciliation_accuracy', 'label': 'Reconciliation Accuracy'},
+                ]
+
+    context.update({
+        'active_view': 'reports',
+        'show_reports_panel': show_reports_panel,
+        'report_type': report_type,
+        'report_category': report_category,
+        'report_period': report_period,
+        'report_categories': report_categories,
+        'current_month': current_month,
+        'report_search': report_search,
+        'report_filter_status': report_filter_status,
+        'report_date_from': report_date_from,
+        'report_date_to': report_date_to,
+        'report_sort': report_sort,
+        'report_order': report_order,
+        'inventory_report_tapes': inventory_report_tapes,
+        'shipment_report_rows': shipment_report_rows,
+        'custody_report_rows': custody_report_rows,
+        'reconciliation_report_rows': reconciliation_report_rows,
+        'retention_report_rows': retention_report_rows,
+        'compliance_report_rows': compliance_report_rows,
+        'exception_report_rows': exception_report_rows,
+        'audit_trail_report_rows': audit_trail_report_rows,
+        'management_summary_report_rows': management_summary_report_rows,
+        'report_table_columns': report_table_columns,
+        'report_paginator': report_paginator,
+        'report_page_obj': report_page_obj,
+    })
+    return render(request, 'auditor_dashboard.html', context)
+
+
+@login_required(login_url='signin')
+@user_passes_test(is_it_compliance_auditor, login_url='signin')
+def exception_review_view(request):
+    context = _build_auditor_context(request, page='exceptions')
+    context['active_view'] = 'exceptions'
+    return render(request, 'auditor_dashboard.html', context)
+
+
+@login_required(login_url='signin')
+@user_passes_test(is_it_compliance_auditor, login_url='signin')
+def shipment_compliance_view(request):
+    context = _build_auditor_context(request, page='shipments')
+    context['active_view'] = 'shipments'
+    return render(request, 'auditor_dashboard.html', context)
+
+
+@login_required(login_url='signin')
+@user_passes_test(is_it_compliance_auditor, login_url='signin')
+def retention_compliance_view(request):
+    context = _build_auditor_context(request, page='retention')
+    context['active_view'] = 'retention'
+    return render(request, 'auditor_dashboard.html', context)
+
+
+@login_required(login_url='signin')
+@user_passes_test(is_it_compliance_auditor, login_url='signin')
+def reconciliation_review_view(request):
+    context = _build_auditor_context(request, page='reconciliation')
+    context['active_view'] = 'reconciliation'
+    return render(request, 'auditor_dashboard.html', context)
+
+
 def signin(request):
 
     if request.method == "POST":
@@ -710,6 +1469,14 @@ def signin(request):
                     severity='success',
                 )
                 return redirect("/admin/")
+            if is_it_compliance_auditor(user):
+                AuditLog.objects.create(
+                    name='Compliance Auditor Login',
+                    action=f'User {user.username} signed in as IT Compliance Auditor',
+                    user=user,
+                    severity='success',
+                )
+                return redirect("auditor-dashboard")
             if is_backup_administrator(user):
                 AuditLog.objects.create(
                     name='Backup Administrator Login',
@@ -1004,7 +1771,7 @@ def backup_dashboard(request):
     show_admin_panel = False
     selected_shipment = None
     selected_reconciliation = None
-    add_shipment_form = ShipmentForm(request.POST or None, prefix='add')
+    add_shipment_form = ShipmentForm(request.POST or None, prefix='add', request=request)
     edit_shipment_form = None
     reconciliation_form = ReconciliationForm(request.POST or None, prefix='reconciliation')
     reconciliation_result_form = ReconciliationResultForm(request.POST or None, prefix='result')
@@ -1041,6 +1808,44 @@ def backup_dashboard(request):
             else:
                 messages.error(request, 'Unable to verify the selected user.')
             return redirect('backup-dashboard')
+        elif form_type == 'approve_tape_request':
+            tape_request_id = request.POST.get('request_id')
+            tape_request = get_object_by_uuid_pk(TapeRequest, tape_request_id)
+            if tape_request and tape_request.status == 'Pending':
+                shipment = Shipment.objects.create(
+                    shipment_date=timezone.localdate(),
+                    shipment_type='Retrieval',
+                    status='Approved',
+                    priority_level='Normal',
+                    number_of_tapes=tape_request.quantity,
+                    source_location=tape_request.tape.current_location or '',
+                    releasing_custodian=request.user.get_full_name() or request.user.username,
+                    destination_location=tape_request.destination_location,
+                    receiving_organization=tape_request.receiving_organization,
+                    expected_delivery_date=timezone.localdate() + timedelta(days=2),
+                    approved_by=request.user,
+                    approval_date=timezone.localtime(),
+                    approval_remarks=request.POST.get('approval_notes', '').strip() or 'Approved from tape request',
+                    created_by=request.user,
+                    last_updated_by=request.user,
+                )
+                shipment.tapes.add(tape_request.tape)
+                tape_request.shipment = shipment
+                tape_request.status = 'Approved'
+                tape_request.approved_by = request.user
+                tape_request.approved_at = timezone.localtime()
+                tape_request.approval_notes = request.POST.get('approval_notes', '').strip() or 'Approved from tape request'
+                tape_request.save(update_fields=['shipment', 'status', 'approved_by', 'approved_at', 'approval_notes', 'updated_at'])
+                AuditLog.objects.create(
+                    name='Tape Request Approved',
+                    action=f'Approved tape request {tape_request.id} into shipment {shipment.shipment_id}',
+                    user=request.user,
+                    severity='success',
+                )
+                messages.success(request, 'Tape request approved and converted into a shipment.')
+                return redirect(f'{reverse("backup-dashboard")}?show_shipments=1')
+            messages.error(request, 'Unable to approve the selected tape request.')
+            return redirect(f'{reverse("backup-dashboard")}?show_shipments=1')
         elif form_type == 'add_tape':
             if tape_form.is_valid():
                 tape = tape_form.save()
@@ -1142,7 +1947,7 @@ def backup_dashboard(request):
             shipment_pk = request.POST.get('shipment_pk')
             selected_shipment = get_object_by_uuid_pk(Shipment, shipment_pk)
             if selected_shipment:
-                edit_shipment_form = ShipmentForm(request.POST, instance=selected_shipment, prefix='edit')
+                edit_shipment_form = ShipmentForm(request.POST, instance=selected_shipment, prefix='edit', request=request)
                 if edit_shipment_form.is_valid():
                     shipment = edit_shipment_form.save(commit=False)
                     shipment.last_updated_by = request.user
@@ -1225,6 +2030,20 @@ def backup_dashboard(request):
             else:
                 show_settings_panel = True
                 messages.error(request, 'Please correct the settings form errors and try again.')
+        elif form_type == 'upload_inventory_excel':
+            uploaded_file = request.FILES.get('inventory_file')
+            imported_count, message, success = import_inventory_excel_file(uploaded_file)
+            if success:
+                messages.success(request, message)
+                AuditLog.objects.create(
+                    name='Inventory Import Completed',
+                    action=f'Imported {imported_count} tape records from Excel upload by {request.user.username}',
+                    user=request.user,
+                    severity='success',
+                )
+            else:
+                messages.error(request, message)
+            return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
         elif form_type == 'edit_profile':
             profile_form = UserProfileForm(request.POST, instance=request.user)
             if profile_form.is_valid():
@@ -1324,7 +2143,7 @@ def backup_dashboard(request):
             show_shipments_panel = True
             show_edit_shipment_panel = True
             if not edit_shipment_form:
-                edit_shipment_form = ShipmentForm(instance=selected_shipment, prefix='edit')
+                edit_shipment_form = ShipmentForm(instance=selected_shipment, prefix='edit', request=request)
 
     if not settings_form:
         settings_form = SystemSettingsForm(instance=application_settings)
@@ -1367,6 +2186,7 @@ def backup_dashboard(request):
     archived_tapes = tapes.filter(status="Retained").count()
     retention_due = tapes.filter(retention_end_date__lte=timezone.localdate()).count()
     shipments = Shipment.objects.all().order_by('shipment_id')
+    pending_tape_requests = TapeRequest.objects.select_related('tape', 'requested_by').filter(status='Pending').order_by('-request_date')
     pending_users = User.objects.filter(verified=False).order_by('date_joined')
     reports = ReportTemplate.objects.all()
     reconciliations = Reconciliation.objects.all().order_by('-reconciliation_date', '-created_at')
@@ -1927,7 +2747,7 @@ def backup_dashboard(request):
         'report_email_form': report_email_form,
         'search_query': search_query,
         'reconciliation_report_summary': reconciliation_report_summary,
-        'report_export_url': f"{reverse('backup-dashboard')}?show_reconciliation_reports=1",
+        'report_export_url': f"{reverse('backup-dashboard')}?show_reconciliation_reports=reconciliation-reports",
         'status_labels_json': json.dumps(status_labels),
         'status_counts_json': json.dumps(status_counts),
         'monthly_labels_json': json.dumps(monthly_labels),
@@ -1935,6 +2755,7 @@ def backup_dashboard(request):
         'kpis': kpis,
         'report_categories': report_categories,
         'current_month': current_month,
+        'pending_tape_requests': pending_tape_requests,
         'inventory_report_tapes': inventory_report_tapes,
         'shipment_report_rows': shipment_report_rows,
         'custody_report_rows': custody_report_rows,
@@ -1966,16 +2787,194 @@ def operations_dashboard(request):
     reconciliation_results = ReconciliationResult.objects.order_by('-created_at')
     audit_logs = AuditLog.objects.order_by('-timestamp')[:12]
 
-    unread_alert_count = AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).count()
-    notification_items = AuditLog.objects.filter(severity__in=['warning', 'error']).order_by('-timestamp')[:10]
+    notification_filter = (
+        Q(name__in=[
+            'Shipment Request Submitted',
+            'Tape Request Submitted',
+            'Shipment Approval Decision',
+            'Tape Request Approved',
+            'Reconciliation Created',
+            'Reconciliation Result Added',
+            'Reconciliation Report Sent',
+        ]) |
+        Q(name__icontains='Approval') |
+        Q(name__icontains='Reconciliation') |
+        Q(name__icontains='Retention') |
+        Q(action__icontains='reconciliation') |
+        Q(action__icontains='retention') |
+        Q(action__icontains='approval') |
+        Q(action__icontains='tape request') |
+        Q(action__icontains='shipment request') |
+        Q(message__icontains='reconciliation') |
+        Q(message__icontains='retention') |
+        Q(message__icontains='approval') |
+        Q(message__icontains='tape request') |
+        Q(message__icontains='shipment request')
+    )
+
+    unread_alert_count = AuditLog.objects.filter(notification_filter, is_read=False).count()
+    notification_qs = AuditLog.objects.filter(notification_filter).order_by('-timestamp')[:10]
+    notification_items = []
+    for item in notification_qs:
+        target_url = None
+        target_panel = None
+        target_label = 'View'
+        action_text = (item.action or '').lower()
+        message_text = (item.message or '').lower()
+        name_text = (item.name or '')
+
+        if 'shipment request' in action_text or 'shipment request' in message_text or 'Shipment Request' in name_text:
+            target_url = reverse('shipment-approvals')
+            target_panel = '#shipment_approvals'
+            target_label = 'Review shipment request'
+        elif 'tape request' in action_text or 'tape request' in message_text or 'Tape Request' in name_text:
+            target_url = reverse('shipment-approvals')
+            target_panel = '#shipment_approvals'
+            target_label = 'Review tape request'
+        elif 'reconciliation' in action_text or 'reconciliation' in message_text or 'Reconciliation' in name_text:
+            target_panel = '#reconciliation_review'
+            target_label = 'Review reconciliation'
+        elif 'retention' in action_text or 'retention' in message_text or 'Retention' in name_text:
+            target_panel = '#compliance_monitoring'
+            target_label = 'Review retention'
+        elif 'approval' in action_text or 'approval' in message_text or 'Approval' in name_text:
+            target_url = reverse('shipment-approvals')
+            target_panel = '#shipment_approvals'
+            target_label = 'Review approval'
+
+        notification_items.append({
+            'notification': item,
+            'target_url': target_url,
+            'target_panel': target_panel,
+            'target_label': target_label,
+        })
+
     show_profile_panel = False
     profile_edit_mode = False
     show_notifications_panel = False
     profile_form = UserProfileForm(instance=request.user)
 
     if request.method == 'GET' and request.GET.get('mark_notifications_read') == '1':
-        AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).update(is_read=True, read_at=timezone.now())
+        AuditLog.objects.filter(notification_filter, is_read=False).update(is_read=True, read_at=timezone.now())
         unread_alert_count = 0
+
+    tape_request_form = TapeRequestForm(request.POST or None)
+    shipment_request_form = AuditorShipmentRequestForm(request.POST or None)
+
+    show_reports_panel = request.GET.get('show_reports') in {'1', 'reports'} or 'show_reports' in request.GET
+    report_categories = get_report_categories()
+    current_month = timezone.localdate().strftime('%Y-%m')
+    report_category = request.GET.get('report_category')
+    report_period = request.GET.get('report_period') or request.GET.get(f'report_period_{report_category}') or current_month
+    report_type = request.GET.get('report_type', 'monthly')
+    report_search = request.GET.get(f'report_search_{report_category}', '')
+    report_filter_status = request.GET.get(f'report_filter_status_{report_category}', '')
+    report_sort = request.GET.get(f'report_sort_{report_category}', '')
+    report_order = (request.GET.get(f'report_order_{report_category}', 'asc') or 'asc').lower()
+    if report_order not in {'asc', 'desc'}:
+        report_order = 'asc'
+
+    inventory_report_tapes = []
+    shipment_report_rows = []
+    report_table_columns = []
+    report_paginator = None
+    report_page_obj = None
+    report_title = 'Reports'
+    report_subtitle = 'Monthly inventory, shipment, and compliance reporting'
+
+    if show_reports_panel and report_category and report_period:
+        report_month = get_first_day_of_month(report_period) or get_first_day_of_month(current_month)
+        if report_month:
+            if report_category == 'inventory':
+                qs = Tape.objects.filter(date_registered__gte=report_month, date_registered__lt=get_next_month(report_month)).order_by('volser')
+                if report_search:
+                    qs = qs.filter(
+                        Q(volser__icontains=report_search) |
+                        Q(barcode__icontains=report_search) |
+                        Q(rfid_tag__icontains=report_search) |
+                        Q(tape_type__icontains=report_search) |
+                        Q(status__icontains=report_search) |
+                        Q(current_location__icontains=report_search)
+                    )
+                if report_filter_status:
+                    qs = qs.filter(status__iexact=report_filter_status)
+                if report_sort in {'volser', 'status', 'retention_end_date', 'date_registered', 'current_location'}:
+                    if report_order == 'desc':
+                        qs = qs.order_by(f'-{report_sort}')
+                    else:
+                        qs = qs.order_by(report_sort)
+                inventory_report_tapes = list(qs)
+                for tape in inventory_report_tapes:
+                    tape.latest_custodian = get_latest_custodian_for_tape(tape) or tape.current_location or '-'
+                report_table_columns = [
+                    {'key': 'volser', 'label': 'VolSER'},
+                    {'key': 'barcode', 'label': 'Barcode'},
+                    {'key': 'status', 'label': 'Status'},
+                    {'key': 'current_location', 'label': 'Current Location'},
+                    {'key': 'latest_custodian', 'label': 'Custodian'},
+                ]
+                report_title = 'Inventory Report'
+                report_subtitle = f'Inventory records for {report_month.strftime("%B %Y")}'
+            elif report_category == 'shipment':
+                qs = Shipment.objects.filter(shipment_date__gte=report_month, shipment_date__lt=get_next_month(report_month)).order_by('-shipment_date')
+                if report_search:
+                    qs = qs.filter(
+                        Q(shipment_id__icontains=report_search) |
+                        Q(destination_location__icontains=report_search) |
+                        Q(status__icontains=report_search) |
+                        Q(courier_name__icontains=report_search)
+                    )
+                if report_filter_status:
+                    qs = qs.filter(status__iexact=report_filter_status)
+                shipment_report_rows = list(qs)
+                report_table_columns = [
+                    {'key': 'shipment_id', 'label': 'Shipment ID'},
+                    {'key': 'status', 'label': 'Status'},
+                    {'key': 'destination_location', 'label': 'Destination'},
+                    {'key': 'shipment_date', 'label': 'Dispatch Date'},
+                ]
+                report_title = 'Shipment Report'
+                report_subtitle = f'Shipment activity for {report_month.strftime("%B %Y")}'
+
+    if request.method == 'POST' and request.POST.get('form_type') == 'submit_tape_request':
+        if tape_request_form.is_valid():
+            tape_request = tape_request_form.save(commit=False)
+            tape_request.requested_by = request.user
+            tape_request.save()
+            AuditLog.objects.create(
+                name='Tape Request Submitted',
+                action=f'{request.user.username} requested tape {tape_request.tape.volser}',
+                user=request.user,
+                severity='info',
+            )
+            messages.success(request, 'Tape request submitted successfully.')
+            return redirect(f'{reverse("operations-dashboard")}?show_requests=1')
+        messages.error(request, 'Please correct the tape request form and try again.')
+
+    if request.method == 'POST' and request.POST.get('form_type') == 'submit_shipment_request':
+        if shipment_request_form.is_valid():
+            branch_name = shipment_request_form.cleaned_data['branch_name'].strip()
+            request_details = shipment_request_form.cleaned_data['request_details'].strip()
+            shipment = Shipment.objects.create(
+                shipment_date=timezone.localdate(),
+                shipment_type='Off-Site Transfer',
+                status='Pending',
+                source_location=branch_name,
+                releasing_custodian=request.user.get_full_name() or request.user.username,
+                receiving_organization='Pending review',
+                approval_remarks=request_details,
+                created_by=request.user,
+                last_updated_by=request.user,
+            )
+            AuditLog.objects.create(
+                name='Shipment Request Submitted',
+                action=f'Shipment request {shipment.shipment_id} created for {branch_name} by {request.user.username}',
+                user=request.user,
+                severity='info',
+            )
+            messages.success(request, 'Shipment request submitted to the backup administrator.')
+            return redirect(reverse('operations-dashboard'))
+        messages.error(request, 'Please provide both the branch name and request details.')
 
     if request.method == 'POST' and request.POST.get('form_type') == 'edit_profile':
         profile_form = UserProfileForm(request.POST, instance=request.user)
@@ -2005,6 +3004,8 @@ def operations_dashboard(request):
     reconciliation_accuracy = int(max(0, min(100, 100 - (open_exceptions * 1.2))))
 
     pending_shipments = shipments.filter(status__iexact='Pending').order_by('-shipment_date')[:6]
+    pending_tape_requests = TapeRequest.objects.select_related('tape', 'requested_by', 'approved_by').filter(status='Pending').order_by('-request_date')[:8]
+    my_tape_requests = TapeRequest.objects.select_related('tape', 'approved_by').filter(requested_by=request.user).order_by('-request_date')[:8]
     monitoring_shipments = shipments.order_by('-shipment_date')[:12]
     latest_reconciliations = reconciliations
     open_discrepancies = reconciliation_results.filter(resolution_status__in=['Open', 'Under Investigation']).order_by('-created_at')[:6]
@@ -2138,6 +3139,8 @@ def operations_dashboard(request):
         'monthly_exceptions_json': json.dumps(monthly_exceptions),
     }
 
+    report_only = request.GET.get('report_only') in {'1', 'true', 'True'}
+
     context = {
         'dashboard_tabs': OPERATIONS_FEATURE_TABS,
         'current_datetime': timezone.localtime(),
@@ -2180,10 +3183,34 @@ def operations_dashboard(request):
         'show_profile_panel': show_profile_panel,
         'profile_edit_mode': profile_edit_mode,
         'show_notifications_panel': show_notifications_panel,
+        'show_reports_panel': show_reports_panel,
+        'report_categories': report_categories,
+        'current_month': current_month,
+        'report_category': report_category,
+        'report_period': report_period,
+        'report_type': report_type,
+        'report_search': report_search,
+        'report_filter_status': report_filter_status,
+        'report_sort': report_sort,
+        'report_order': report_order,
+        'report_title': report_title,
+        'report_subtitle': report_subtitle,
+        'inventory_report_tapes': inventory_report_tapes,
+        'shipment_report_rows': shipment_report_rows,
+        'report_table_columns': report_table_columns,
+        'report_paginator': report_paginator,
+        'report_page_obj': report_page_obj,
         'unread_alert_count': unread_alert_count,
         'notification_items': notification_items,
+        'tape_request_form': tape_request_form,
+        'shipment_request_form': shipment_request_form,
+        'pending_tape_requests': pending_tape_requests,
+        'my_tape_requests': my_tape_requests,
         **chart_data,
     }
+    if report_only and report_category:
+        context['report_only'] = True
+        return render(request, 'operations_dashboard.html', context)
     return render(request, 'operations_dashboard.html', context)
 
 
@@ -2294,6 +3321,7 @@ def shipment_approvals(request):
 @login_required(login_url='signin')
 def shipment_detail(request, shipment_pk):
     shipment = get_object_or_404(Shipment.objects.prefetch_related('tapes', 'approval_history'), pk=shipment_pk)
+    receipt_form = OperatorReceiptCompletionForm(request.POST or None)
     approval_form = ShipmentApprovalDecisionForm(request.POST or None, initial={'shipment_pk': shipment.pk})
     manifest_search_form = ManifestSearchForm(request.GET or None)
     manifest_tapes = shipment.tapes.all()
@@ -2310,7 +3338,31 @@ def shipment_detail(request, shipment_pk):
     partial_request = request.GET.get('partial') == '1'
 
     if request.method == 'POST':
-        if approval_form.is_valid():
+        if request.POST.get('form_type') == 'operator_receipt_completion':
+            if receipt_form.is_valid():
+                receiving_custodian = receipt_form.cleaned_data.get('receiving_custodian', '').strip()
+                receipt_notes = receipt_form.cleaned_data.get('receipt_notes', '').strip()
+                shipment.status = 'Completed'
+                shipment.received_by = receiving_custodian or request.user.get_full_name() or request.user.username
+                shipment.delivery_date = timezone.localdate()
+                shipment.delivery_time = timezone.localtime().time()
+                shipment.delivery_status = 'Delivered'
+                shipment.delivery_notes = receipt_notes
+                shipment.last_updated_by = request.user
+                shipment.save(update_fields=['status', 'received_by', 'delivery_date', 'delivery_time', 'delivery_status', 'delivery_notes', 'last_updated_by', 'last_updated_at'])
+
+                AuditLog.objects.create(
+                    name='Shipment Received',
+                    action=f'Shipment {shipment.shipment_id} was received and marked complete',
+                    user=request.user,
+                    severity='success',
+                )
+
+                messages.success(request, 'Shipment has been received and marked as completed.')
+                approval_form = ShipmentApprovalDecisionForm(initial={'shipment_pk': shipment.pk})
+            else:
+                messages.error(request, 'Please provide a receiving custodian before completing the shipment.')
+        elif approval_form.is_valid():
             decision = approval_form.cleaned_data.get('decision')
             comments = approval_form.cleaned_data.get('comments', '').strip()
             action_map = {
@@ -2354,6 +3406,8 @@ def shipment_detail(request, shipment_pk):
                 if not partial_request:
                     return redirect('shipment-detail', shipment_pk=shipment.pk)
 
+    template = 'shipment_detail_fragment.html' if partial_request else 'shipment_detail.html'
+
     compliance_checks = shipment.compliance_checks()
     compliance_checks_display = [
         (key.replace('_', ' ').title(), value)
@@ -2363,6 +3417,7 @@ def shipment_detail(request, shipment_pk):
         'dashboard_tabs': OPERATIONS_FEATURE_TABS,
         'shipment': shipment,
         'approval_form': approval_form,
+        'receipt_form': receipt_form,
         'manifest_search_form': manifest_search_form,
         'manifest_tapes': manifest_tapes,
         'compliance_checks': compliance_checks,
@@ -2373,7 +3428,6 @@ def shipment_detail(request, shipment_pk):
         'risk_recommendation': shipment.risk_recommendation(),
         'history': shipment.approval_history.all(),
     }
-    template = 'shipment_detail_fragment.html' if partial_request else 'shipment_detail.html'
     return render(request, template, context)
 
 

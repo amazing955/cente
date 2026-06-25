@@ -1,0 +1,23 @@
+{% extends 'auditor_dashboard.html' %}
+{% block content %}
+<div class="card p-4">
+    <h3 class="fw-semibold mb-3">Audit Trail Review</h3>
+    <form method="get" class="row g-2 mb-3">
+        <div class="col-md-2"><input class="form-control" name="search" value="{{ filters.search }}" placeholder="Search"></div>
+        <div class="col-md-2"><input class="form-control" name="module" value="{{ filters.module }}" placeholder="Module"></div>
+        <div class="col-md-2"><input class="form-control" name="action_type" value="{{ filters.action_type }}" placeholder="Action"></div>
+        <div class="col-md-2"><input class="form-control" name="severity" value="{{ filters.severity }}" placeholder="Severity"></div>
+        <div class="col-md-2"><input class="form-control" type="date" name="date_from" value="{{ filters.date_from }}"></div>
+        <div class="col-md-2"><input class="form-control" type="date" name="date_to" value="{{ filters.date_to }}"></div>
+        <div class="col-12"><button class="btn btn-primary btn-sm">Apply Filters</button></div>
+    </form>
+    <table class="table table-striped">
+        <thead><tr><th>Timestamp</th><th>User</th><th>Action</th><th>Severity</th><th>Module</th></tr></thead>
+        <tbody>
+            {% for entry in audit_logs %}
+            <tr><td>{{ entry.timestamp|date:'Y-m-d H:i' }}</td><td>{{ entry.user.username|default:'System' }}</td><td>{{ entry.action }}</td><td>{{ entry.severity }}</td><td>{{ entry.name }}</td></tr>
+            {% empty %}<tr><td colspan="5" class="text-muted">No audit logs.</td></tr>{% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

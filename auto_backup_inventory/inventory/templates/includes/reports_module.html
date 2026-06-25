@@ -1,0 +1,173 @@
+<div class="card shadow-sm mb-4" style="min-height:70vh;">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <div>
+      <h5 class="mb-0">{{ report_title|default:'Reports' }}</h5>
+      <small class="text-muted">{{ report_subtitle|default:'Monthly inventory, shipment, and compliance reporting' }}</small>
+    </div>
+    {% if report_category %}
+      <a href="{% if request.path == '/backup-dashboard/' %}{% url 'backup-dashboard' %}{% else %}{% url 'operations-dashboard' %}{% endif %}?show_reports=reports&report_category={{ report_category }}&report_period={{ report_period|default:current_month }}&report_type=monthly{% if request.GET.report_only %}&report_only={{ request.GET.report_only }}{% endif %}" class="btn btn-sm btn-outline-primary">
+        <i class="bi bi-file-earmark-spreadsheet me-1"></i> Export CSV
+      </a>
+    {% endif %}
+  </div>
+
+  <div class="card-body p-0">
+    {% if report_categories %}
+      <div class="p-3 border-bottom">
+        <h6 class="mb-2">Report types</h6>
+        <div class="table-responsive">
+          <table class="table table-hover table-sm align-middle mb-0">
+            <thead class="table-light">
+              <tr>
+                <th scope="col">Report Name</th>
+                <th scope="col">Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for report in report_categories %}
+                <tr>
+                  <td class="fw-semibold">
+                    <a href="{% if request.path == '/backup-dashboard/' %}{% url 'backup-dashboard' %}{% else %}{% url 'operations-dashboard' %}{% endif %}?show_reports=reports&report_category={{ report.slug }}&report_period={{ current_month }}&report_type=monthly&report_only=1" class="text-decoration-none">
+                      {{ report.name }}
+                    </a>
+                  </td>
+                  <td class="small text-muted">{{ report.description }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if report_category %}
+      <div class="p-3 border-bottom bg-light">
+        <form method="get" action="{% if request.path == '/backup-dashboard/' %}{% url 'backup-dashboard' %}{% else %}{% url 'operations-dashboard' %}{% endif %}" class="row g-2 align-items-end">
+          <input type="hidden" name="show_reports" value="reports">
+          <input type="hidden" name="report_category" value="{{ report_category }}">
+          <input type="hidden" name="report_type" value="monthly">
+          <input type="hidden" name="report_only" value="1">
+          <div class="col-md-3">
+            <label class="form-label small mb-1">Month</label>
+            <input type="month" class="form-control form-control-sm" name="report_period_{{ report_category }}" value="{{ report_period|default:current_month }}">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small mb-1">Search</label>
+            <input type="text" class="form-control form-control-sm" name="report_search_{{ report_category }}" value="{{ report_search }}" placeholder="Search records">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label small mb-1">Status</label>
+            <select class="form-select form-select-sm" name="report_filter_status_{{ report_category }}">
+              <option value="">All</option>
+              <option value="Open" {% if report_filter_status == 'Open' %}selected{% endif %}>Open</option>
+              <option value="Resolved" {% if report_filter_status == 'Resolved' %}selected{% endif %}>Resolved</option>
+              <option value="Completed" {% if report_filter_status == 'Completed' %}selected{% endif %}>Completed</option>
+              <option value="Active" {% if report_filter_status == 'Active' %}selected{% endif %}>Active</option>
+            </select>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label small mb-1">Sort</label>
+            <select class="form-select form-select-sm" name="report_sort_{{ report_category }}">
+              <option value="">Default</option>
+              <option value="volser" {% if report_sort == 'volser' %}selected{% endif %}>VolSER</option>
+              <option value="status" {% if report_sort == 'status' %}selected{% endif %}>Status</option>
+            </select>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label small mb-1">Order</label>
+            <select class="form-select form-select-sm" name="report_order_{{ report_category }}">
+              <option value="asc" {% if report_order == 'asc' %}selected{% endif %}>Asc</option>
+              <option value="desc" {% if report_order == 'desc' %}selected{% endif %}>Desc</option>
+            </select>
+          </div>
+          <div class="col-md-2">
+            <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+          </div>
+          <div class="col-md-2">
+            <button class="btn btn-sm btn-outline-primary" type="submit" name="export_csv_{{ report_category }}" value="1">Export CSV</button>
+          </div>
+          <div class="col-md-2">
+            <button class="btn btn-sm btn-outline-secondary" type="submit" name="export_pdf_{{ report_category }}" value="1">Export PDF</button>
+          </div>
+          <div class="col-md-2">
+            <button class="btn btn-sm btn-outline-success" type="submit" name="export_excel_{{ report_category }}" value="1">Export Excel</button>
+          </div>
+        </form>
+      </div>
+
+      {% if report_category == 'inventory' %}
+        {% if inventory_report_tapes %}
+          <div class="table-responsive">
+            <table class="table table-striped table-hover mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>VolSER</th>
+                  <th>Barcode</th>
+                  <th>Status</th>
+                  <th>Current Location</th>
+                  <th>Custodian</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for tape in inventory_report_tapes %}
+                  <tr>
+                    <td>{{ tape.volser }}</td>
+                    <td>{{ tape.barcode }}</td>
+                    <td>{{ tape.status }}</td>
+                    <td>{{ tape.current_location|default:'-' }}</td>
+                    <td>{{ tape.latest_custodian|default:'-' }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="p-4 text-muted">No inventory data available for the selected month.</div>
+        {% endif %}
+      {% elif report_category == 'shipment' %}
+        {% if shipment_report_rows %}
+          <div class="table-responsive">
+            <table class="table table-striped table-hover mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Shipment ID</th>
+                  <th>Status</th>
+                  <th>Destination</th>
+                  <th>Dispatch Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for shipment in shipment_report_rows %}
+                  <tr>
+                    <td>{{ shipment.shipment_id }}</td>
+                    <td>{{ shipment.status }}</td>
+                    <td>{{ shipment.destination_location|default:'-' }}</td>
+                    <td>{{ shipment.shipment_date|date:'Y-m-d' }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="p-4 text-muted">No shipment data available for the selected month.</div>
+        {% endif %}
+      {% else %}
+        <div class="p-4 text-muted">Select a report type to display its data.</div>
+      {% endif %}
+
+      {% if report_paginator and report_paginator.num_pages > 1 %}
+        <div class="d-flex justify-content-between align-items-center p-3 border-top">
+          <small class="text-muted">Page {{ report_page_obj.number }} of {{ report_paginator.num_pages }}</small>
+          <div class="d-flex gap-2">
+            {% if report_page_obj.has_previous %}
+              <a class="btn btn-sm btn-outline-secondary" href="{{ request.get_full_path }}{% if '?' in request.get_full_path %}&{% else %}?{% endif %}report_page_{{ report_category }}={{ report_page_obj.previous_page_number }}">Previous</a>
+            {% endif %}
+            {% if report_page_obj.has_next %}
+              <a class="btn btn-sm btn-outline-secondary" href="{{ request.get_full_path }}{% if '?' in request.get_full_path %}&{% else %}?{% endif %}report_page_{{ report_category }}={{ report_page_obj.next_page_number }}">Next</a>
+            {% endif %}
+          </div>
+        </div>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
