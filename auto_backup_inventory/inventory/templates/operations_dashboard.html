@@ -896,20 +896,12 @@ body {
                                 </tr>
                             </thead>
                             <tbody>
-                                {% for item in notification_items %}
+                                {% for notification in notification_items %}
                                 <tr>
-                                    <td>{{ item.notification.severity|title }}</td>
-                                    <td>{{ item.notification.timestamp|date:'M d, Y H:i' }}</td>
-                                    <td>{{ item.notification.message|default:item.notification.action|default:item.notification.name }}</td>
-                                    <td>
-                                        {% if item.target_url %}
-                                            <a href="{{ item.target_url }}" class="btn btn-sm btn-outline-primary notification-link" data-panel="{{ item.target_panel }}">{{ item.target_label }}</a>
-                                        {% elif item.target_panel %}
-                                            <a href="{{ item.target_panel }}" class="btn btn-sm btn-outline-primary notification-link" data-panel="{{ item.target_panel }}">{{ item.target_label }}</a>
-                                        {% else %}
-                                            <span class="badge bg-secondary">View</span>
-                                        {% endif %}
-                                    </td>
+                                    <td>{{ notification.severity|title }}</td>
+                                    <td>{{ notification.timestamp|date:'M d, Y H:i' }}</td>
+                                    <td>{{ notification.message|default:notification.action|default:notification.name }}</td>
+                                    <td><span class="badge bg-secondary">View</span></td>
                                 </tr>
                                 {% empty %}
                                 <tr><td colspan="4" class="text-center">No notifications available.</td></tr>

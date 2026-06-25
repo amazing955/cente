@@ -9,7 +9,7 @@ from django.test import TestCase
 from django.urls import reverse
 from openpyxl import Workbook
 
-from .models import Reconciliation, Shipment, Tape, TapeRequest
+from .models import AuditLog, Reconciliation, Shipment, Tape, TapeRequest
 
 
 class AuditorDashboardTests(TestCase):
@@ -240,6 +240,65 @@ class OperationsDashboardShipmentRequestTests(TestCase):
         self.assertEqual(shipment.status, 'Pending')
         self.assertEqual(shipment.source_location, 'Mombasa Branch')
         self.assertEqual(shipment.approval_remarks, 'Please arrange a secure shipment for backup tapes.')
+
+
+class BackupDashboardNotificationTests(TestCase):
+    def test_admin_notifications_only_include_relevant_event_links(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        user = get_user_model().objects.create_user(
+            username='backup-admin-notify',
+            email='backup-admin-notify@example.com',
+            password='pass1234',
+        )
+        user.groups.add(backup_group)
+
+        shipment = Shipment.objects.create(
+            shipment_date=date(2026, 6, 20),
+            shipment_type='Off-Site Transfer',
+            status='Pending',
+            source_location='Nairobi Branch',
+            receiving_organization='Pending review',
+            created_by=user,
+            last_updated_by=user,
+        )
+        tape = Tape.objects.create(
+            volser='TAPE-200',
+            barcode='BAR-200',
+            tape_type='LTO-8',
+            retention_end_date=date(2025, 1, 1),
+            status='Active',
+            current_location='Vault A',
+        )
+        TapeRequest.objects.create(
+            tape=tape,
+            requested_by=user,
+            quantity=1,
+            destination_location='DR Site',
+            receiving_organization='Ops Team',
+            reason='Need this urgently.',
+            status='Pending',
+        )
+        Reconciliation.objects.create(location='HQ Vault', status='Open')
+        AuditLog.objects.create(
+            name='Generic Alert',
+            action='This should not appear in the dashboard notification list.',
+            user=user,
+            severity='warning',
+        )
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('backup-dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'New shipment approval request')
+        self.assertContains(response, 'New tape request')
+        self.assertContains(response, 'Reconciliation due')
+        self.assertContains(response, 'Retention date is outdated')
+        self.assertContains(response, f'href="{reverse("backup-dashboard")}?show_shipments=1&edit_shipment_pk={shipment.id}"')
+        self.assertContains(response, f'href="{reverse("backup-dashboard")}?show_shipments=1"')
+        self.assertContains(response, f'href="{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={Reconciliation.objects.first().id}"')
+        self.assertContains(response, f'href="{reverse("backup-dashboard")}?show_tape_inventory=1"')
+        self.assertNotContains(response, 'This should not appear in the dashboard notification list.')
 
 
 class OperationsDashboardReportsTests(TestCase):

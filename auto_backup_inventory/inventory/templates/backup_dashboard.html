@@ -368,13 +368,12 @@ footer{
     <div class="card-body">
         {% if recent_alerts %}
             {% for alert in recent_alerts %}
-                {% if alert.severity == 'error' %}
-                    <div class="alert alert-danger">
-                {% else %}
-                    <div class="alert alert-warning">
-                {% endif %}
-                        {{ alert.action|default:alert.name }}
+                <a href="{{ alert.url|default:'#!'|safe }}" class="text-decoration-none">
+                    <div class="alert {% if alert.severity == 'error' %}alert-danger{% else %}alert-warning{% endif %} mb-2">
+                        <div class="fw-semibold">{{ alert.title|default:alert.message }}</div>
+                        <div class="small">{{ alert.message }}</div>
                     </div>
+                </a>
             {% endfor %}
         {% else %}
             <div class="alert alert-secondary">
@@ -2112,13 +2111,12 @@ footer{
 
         {% if recent_alerts %}
             {% for alert in recent_alerts %}
-                {% if alert.severity == 'error' %}
-                    <div class="alert alert-danger">
-                {% else %}
-                    <div class="alert alert-warning">
-                {% endif %}
-                        {{ alert.action|default:alert.name }}
+                <a href="{{ alert.url|default:'#!'|safe }}" class="text-decoration-none">
+                    <div class="alert {% if alert.severity == 'error' %}alert-danger{% else %}alert-warning{% endif %} mb-2">
+                        <div class="fw-semibold">{{ alert.title|default:alert.message }}</div>
+                        <div class="small">{{ alert.message }}</div>
                     </div>
+                </a>
             {% endfor %}
         {% else %}
             <div class="alert alert-secondary">
