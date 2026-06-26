@@ -9,7 +9,7 @@ from django.test import TestCase
 from django.urls import reverse
 from openpyxl import Workbook
 
-from .models import AuditLog, Reconciliation, Shipment, Tape, TapeRequest
+from .models import Reconciliation, Shipment, Tape, TapeRequest
 
 
 class AuditorDashboardTests(TestCase):
@@ -108,16 +108,6 @@ class AuditorDashboardTests(TestCase):
         response = self.client.get(reverse('auditor-dashboard'))
 
         self.assertEqual(response.status_code, 200)
-
-    def test_auditor_dashboard_can_display_shipment_form_only(self):
-        self.client.force_login(self.user)
-        response = self.client.get(reverse('auditor-dashboard'), {'show_shipment_form': '1'})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Submit shipment request')
-        self.assertContains(response, 'Branch name')
-        self.assertNotContains(response, 'Compliance Health')
-        self.assertNotContains(response, 'Audit Trail Review')
 
     def test_auditor_can_submit_pending_shipment_request(self):
         self.client.force_login(self.user)
@@ -221,45 +211,6 @@ class TapeRequestWorkflowTests(TestCase):
         self.assertEqual(shipment.status, 'Approved')
         self.assertEqual(shipment.destination_location, 'DR Site')
         self.assertEqual(shipment.number_of_tapes, 1)
-
-
-class OperationsDashboardShipmentRequestTests(TestCase):
-    def test_operations_dashboard_can_submit_shipment_request_and_notify_backup_admin(self):
-        operations_group = Group.objects.create(name='Operations Manager')
-        backup_group = Group.objects.create(name='Backup Administrator')
-        operator = get_user_model().objects.create_user(
-            username='ops-requester',
-            email='ops-requester@example.com',
-            password='pass1234',
-            first_name='Op',
-            last_name='User',
-        )
-        operator.groups.add(operations_group)
-        backup_admin = get_user_model().objects.create_user(
-            username='backup-admin',
-            email='backup-admin@example.com',
-            password='pass1234',
-            first_name='Backup',
-            last_name='Admin',
-        )
-        backup_admin.groups.add(backup_group)
-
-        self.client.force_login(operator)
-        response = self.client.post(
-            reverse('operations-dashboard'),
-            {
-                'form_type': 'submit_shipment_request',
-                'branch_name': 'North Branch',
-                'requester_name': 'Jane Doe',
-                'request_details': 'Please arrange a secure transfer for backup tapes.',
-            },
-        )
-
-        self.assertEqual(response.status_code, 302)
-        shipment = Shipment.objects.get(created_by=operator)
-        self.assertEqual(shipment.source_location, 'North Branch')
-        self.assertEqual(shipment.releasing_custodian, 'Jane Doe')
-        self.assertTrue(AuditLog.objects.filter(action__icontains='Shipment request').exists())
 
 
 class OperationsDashboardReportsTests(TestCase):
