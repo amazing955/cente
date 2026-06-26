@@ -45,6 +45,14 @@
             font-weight: bold;
         }
 
+        .otp-box{
+            width: 3rem;
+            height: 3.5rem;
+            font-size: 1.25rem;
+            text-align: center;
+            padding: 0;
+        }
+
         @keyframes slideUp{
             from{
                 opacity: 0;
@@ -82,25 +90,44 @@
         <form method="POST">
             {% csrf_token %}
 
-            <div class="mb-3">
-                <label class="form-label">Username</label>
-                <input
-                    type="text"
-                    name="username"
-                    class="form-control"
-                    placeholder="Enter Username"
-                    required>
-            </div>
+            {% if pending_2fa %}
+                <div class="mb-3">
+                    <label class="form-label">Verification Code</label>
+                    <div class="d-flex justify-content-between gap-2">
+                        {% for i in '123456' %}
+                        <input
+                            type="text"
+                            class="form-control otp-box"
+                            inputmode="numeric"
+                            autocomplete="one-time-code"
+                            maxlength="1"
+                            pattern="[0-9]"
+                            aria-label="OTP digit {{ forloop.counter }}">
+                        {% endfor %}
+                    </div>
+                    <input type="hidden" name="otp_code" id="otp_code_hidden">
+                </div>
+            {% else %}
+                <div class="mb-3">
+                    <label class="form-label">Username</label>
+                    <input
+                        type="text"
+                        name="username"
+                        class="form-control"
+                        placeholder="Enter Username"
+                        required>
+                </div>
 
-            <div class="mb-3">
-                <label class="form-label">Password</label>
-                <input
-                    type="password"
-                    name="password"
-                    class="form-control"
-                    placeholder="Enter Password"
-                    required>
-            </div>
+                <div class="mb-3">
+                    <label class="form-label">Password</label>
+                    <input
+                        type="password"
+                        name="password"
+                        class="form-control"
+                        placeholder="Enter Password"
+                        required>
+                </div>
+            {% endif %}
 
             <div class="mb-3 form-check">
                 <input
@@ -113,7 +140,7 @@
             </div>
 
             <button type="submit" class="btn btn-primary btn-login">
-                Sign In
+                {% if pending_2fa %}Verify Code{% else %}Sign In{% endif %}
             </button>
 
         </form>
@@ -131,6 +158,67 @@
     </div>
 
 </div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const otpBoxes = Array.from(document.querySelectorAll('.otp-box'));
+        const hiddenOtp = document.getElementById('otp_code_hidden');
+        const form = document.querySelector('form');
+
+        if (!otpBoxes.length || !hiddenOtp || !form) {
+            return;
+        }
+
+        function syncOtp() {
+            hiddenOtp.value = otpBoxes.map((box) => box.value).join('');
+        }
+
+        otpBoxes.forEach((box, index) => {
+            box.addEventListener('input', function (event) {
+                const value = event.target.value.replace(/\D/g, '').slice(0, 1);
+                event.target.value = value;
+                syncOtp();
+
+                if (value && index < otpBoxes.length - 1) {
+                    otpBoxes[index + 1].focus();
+                }
+            });
+
+            box.addEventListener('keydown', function (event) {
+                if (event.key === 'Backspace' && !box.value && index > 0) {
+                    otpBoxes[index - 1].focus();
+                    otpBoxes[index - 1].value = '';
+                    syncOtp();
+                } else if (event.key === 'ArrowLeft' && index > 0) {
+                    otpBoxes[index - 1].focus();
+                } else if (event.key === 'ArrowRight' && index < otpBoxes.length - 1) {
+                    otpBoxes[index + 1].focus();
+                }
+            });
+
+            box.addEventListener('paste', function (event) {
+                const pasted = (event.clipboardData || window.clipboardData).getData('text').replace(/\D/g, '').slice(0, otpBoxes.length);
+                if (!pasted) {
+                    return;
+                }
+
+                pasted.split('').forEach((char, offset) => {
+                    const targetIndex = index + offset;
+                    if (otpBoxes[targetIndex]) {
+                        otpBoxes[targetIndex].value = char;
+                    }
+                });
+
+                const nextIndex = Math.min(index + pasted.length, otpBoxes.length - 1);
+                otpBoxes[nextIndex].focus();
+                syncOtp();
+                event.preventDefault();
+            });
+        });
+
+        form.addEventListener('submit', syncOtp);
+    });
+</script>
 
 </body>
 </html>

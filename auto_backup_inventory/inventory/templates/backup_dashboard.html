@@ -214,9 +214,11 @@ footer{
         </button>
         <a href="{% url 'backup-dashboard' %}?show_alerts=1" class="btn btn-light position-relative me-3 text-decoration-none text-dark">
             <i class="bi bi-bell"></i>
+            {% if alert_count > 0 %}
             <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger">
                 {{ alert_count }}
             </span>
+            {% endif %}
             <span class="visually-hidden">View notifications</span>
         </a>
 
@@ -366,21 +368,88 @@ footer{
         Recent Alerts
     </div>
     <div class="card-body">
-        {% if recent_alerts %}
-            {% for alert in recent_alerts %}
-                {% if alert.severity == 'error' %}
-                    <div class="alert alert-danger">
-                {% else %}
-                    <div class="alert alert-warning">
-                {% endif %}
-                        {{ alert.action|default:alert.name }}
+        {% if approval_shipment %}
+        <div class="card border-primary mb-4">
+            <div class="card-body">
+                <h6 class="fw-semibold mb-2">Approve shipment request {{ approval_shipment.shipment_id }}</h6>
+                <p class="small text-muted mb-3">{{ approval_shipment.source_location|default:'-' }} → {{ approval_shipment.destination_location|default:'Pending review' }}</p>
+                <p class="mb-3">{{ approval_shipment.approval_remarks|default:'No request details have been provided yet.' }}</p>
+                <form method="post" action="{% url 'backup-dashboard' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="form_type" value="backup_admin_assignment">
+                    <input type="hidden" name="shipment_id" value="{{ approval_shipment.id }}">
+                    {% if assignment_form.non_field_errors %}
+                        <div class="alert alert-danger">{{ assignment_form.non_field_errors }}</div>
+                    {% endif %}
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Scan or enter tape barcode</label>
+                            {{ assignment_form.barcode }}
+                            {% if assignment_form.barcode.errors %}<div class="text-danger small mt-1">{{ assignment_form.barcode.errors|join:", " }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">Courier</label>
+                            {{ assignment_form.courier }}
+                            {% if assignment_form.courier.errors %}<div class="text-danger small mt-1">{{ assignment_form.courier.errors|join:", " }}</div>{% endif %}
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">Decision</label>
+                            <div class="d-flex flex-wrap gap-2">
+                                <button class="btn btn-success" type="submit" name="submit_action" value="approve">Approve and assign</button>
+                                <button class="btn btn-outline-danger" type="submit" name="submit_action" value="reject">Reject request</button>
+                            </div>
+                            <div class="form-text">Add a comment below so the sender can see why the request was approved or rejected.</div>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">Comments</label>
+                            {{ assignment_form.comments }}
+                        </div>
                     </div>
-            {% endfor %}
-        {% else %}
-            <div class="alert alert-secondary">
-                No alerts to show.
+                </form>
             </div>
+        </div>
         {% endif %}
+
+        <div class="mb-4">
+            <h6 class="fw-semibold mb-3">Pending shipment requests</h6>
+            {% if pending_approval_shipments %}
+                <div class="list-group">
+                    {% for shipment in pending_approval_shipments %}
+                        <a class="list-group-item list-group-item-action d-flex justify-content-between align-items-start" href="{% url 'backup-dashboard' %}?show_alerts=1&approve_shipment={{ shipment.id }}">
+                            <div>
+                                <div class="fw-semibold">{{ shipment.shipment_id }}</div>
+                                <div class="small text-muted">{{ shipment.source_location|default:'-' }} → {{ shipment.destination_location|default:'Pending review' }}</div>
+                            </div>
+                            <span class="badge bg-warning text-dark">Pending</span>
+                        </a>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <div class="alert alert-secondary">No pending shipment requests.</div>
+            {% endif %}
+        </div>
+
+        <div>
+            <h6 class="fw-semibold mb-3">Recent alerts</h6>
+            {% if recent_alerts %}
+                {% for alert in recent_alerts %}
+                    {% if alert.severity == 'error' %}
+                        <div class="alert alert-danger d-flex justify-content-between align-items-start">
+                    {% else %}
+                        <div class="alert alert-warning d-flex justify-content-between align-items-start">
+                    {% endif %}
+                        <span>{{ alert.action|default:alert.name }}</span>
+                        {% if alert.is_new %}
+                            <span class="badge bg-primary">New</span>
+                        {% endif %}
+                    </div>
+                {% endfor %}
+            {% else %}
+                <div class="alert alert-secondary">
+                    No alerts to show.
+                </div>
+            {% endif %}
+        </div>
     </div>
 </div>
 {% elif show_reconciliation_panel %}
@@ -2113,12 +2182,15 @@ footer{
         {% if recent_alerts %}
             {% for alert in recent_alerts %}
                 {% if alert.severity == 'error' %}
-                    <div class="alert alert-danger">
+                    <div class="alert alert-danger d-flex justify-content-between align-items-start">
                 {% else %}
-                    <div class="alert alert-warning">
+                    <div class="alert alert-warning d-flex justify-content-between align-items-start">
                 {% endif %}
-                        {{ alert.action|default:alert.name }}
-                    </div>
+                    <span>{{ alert.action|default:alert.name }}</span>
+                    {% if alert.is_new %}
+                        <span class="badge bg-primary">New</span>
+                    {% endif %}
+                </div>
             {% endfor %}
         {% else %}
             <div class="alert alert-secondary">

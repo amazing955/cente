@@ -58,6 +58,7 @@
                 {% endfor %}
             </div>
             {% endif %}
+            {% block content %}
             {% if active_view == 'dashboard' or active_view == None %}
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <div>
@@ -146,11 +147,6 @@
                 </div>
                 {% endfor %}
             </div>
-
-            
-                </div>
-                
-            </div>
             {% endif %}
 
             {% if active_view == 'reports' %}
@@ -176,6 +172,7 @@
                     {% include 'reconciliation_review.html' %}
                 </div>
             {% endif %}
+            {% endblock %}
         </main>
     </div>
 </div>

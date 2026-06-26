@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="row justify-content-center">
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                    <div>
+                        <h3 class="h5 mb-1">Start a shipment request</h3>
+                        <p class="mb-0 small">Send the request to the backup administrator for review and assignment.</p>
+                    </div>
+                    <a href="{% url 'operations-dashboard' %}" class="btn btn-outline-light btn-sm">Back to dashboard</a>
+                </div>
+                <div class="card-body">
+                    {% if messages %}
+                        {% for message in messages %}
+                            <div class="alert alert-{{ message.tags }}">{{ message }}</div>
+                        {% endfor %}
+                    {% endif %}
+                    <form method="post">
+                        {% csrf_token %}
+                        <div class="mb-3">
+                            <label for="id_branch_name" class="form-label">Branch name</label>
+                            {{ form.branch_name }}
+                            {% if form.branch_name.errors %}
+                                <div class="text-danger small mt-1">{{ form.branch_name.errors|join:", " }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="mb-3">
+                            <label for="id_requester_name" class="form-label">Requester name</label>
+                            {{ form.requester_name }}
+                            {% if form.requester_name.errors %}
+                                <div class="text-danger small mt-1">{{ form.requester_name.errors|join:", " }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="mb-3">
+                            <label for="id_request_details" class="form-label">Request details</label>
+                            {{ form.request_details }}
+                            {% if form.request_details.errors %}
+                                <div class="text-danger small mt-1">{{ form.request_details.errors|join:", " }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="d-flex justify-content-end gap-2">
+                            <a href="{% url 'operations-dashboard' %}" class="btn btn-outline-secondary">Cancel</a>
+                            <button type="submit" class="btn btn-primary">Send to backup administrator</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

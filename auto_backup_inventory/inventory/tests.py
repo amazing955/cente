@@ -9,7 +9,19 @@ from django.test import TestCase
 from django.urls import reverse
 from openpyxl import Workbook
 
-from .models import Reconciliation, Shipment, Tape, TapeRequest
+from .forms import BackupShipmentAssignmentForm
+from .models import (
+    AuditLog,
+    CourierProfile,
+    DeliveryConfirmation,
+    Reconciliation,
+    Shipment,
+    ShipmentApprovalHistory,
+    ShipmentReceipt,
+    ShipmentTransportEvent,
+    Tape,
+    TapeRequest,
+)
 
 
 class AuditorDashboardTests(TestCase):
@@ -95,6 +107,28 @@ class AuditorDashboardTests(TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertContains(response, expected_text)
                 self.assertContains(response, 'IT Compliance Auditor Dashboard')
+
+    def test_audit_logs_render_inside_auditor_dashboard(self):
+        self.client.force_login(self.user)
+        AuditLog.objects.create(
+            name='System',
+            action='Tape inventory reconciliation completed',
+            user=self.user,
+            severity='info',
+        )
+
+        response = self.client.get(reverse('auditor-dashboard'), {'view': 'audit-logs'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Tape inventory reconciliation completed')
+        self.assertContains(response, 'Audit Trail Review')
+
+    def test_unknown_page_uses_custom_404_template(self):
+        response = self.client.get('/definitely-not-a-real-page/')
+
+        self.assertEqual(response.status_code, 404)
+        self.assertContains(response, 'Page not found', status_code=404)
+        self.assertContains(response, 'Return home', status_code=404)
 
     def test_user_with_auditor_group_name_can_access_dashboard(self):
         group = Group.objects.create(name='Auditor')
@@ -213,6 +247,252 @@ class TapeRequestWorkflowTests(TestCase):
         self.assertEqual(shipment.number_of_tapes, 1)
 
 
+class ShipmentWorkflowTests(TestCase):
+    def test_start_shipment_request_renders_embedded_fragment_when_requested_partially(self):
+        operations_group = Group.objects.create(name='Operations Manager')
+        user = get_user_model().objects.create_user(
+            username='operator-fragment',
+            email='operator-fragment@example.com',
+            password='pass1234',
+        )
+        user.groups.add(operations_group)
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('start-shipment-request'), {'partial': '1'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'start_shipment_request_fragment.html')
+        self.assertContains(response, 'Start a shipment request')
+        self.assertNotContains(response, '<!DOCTYPE html>')
+
+    def test_operator_shipment_request_stores_branch_name_as_destination(self):
+        operations_group = Group.objects.create(name='Operations Manager')
+        user = get_user_model().objects.create_user(
+            username='operator-destination',
+            email='operator-destination@example.com',
+            password='pass1234',
+        )
+        user.groups.add(operations_group)
+
+        self.client.force_login(user)
+        response = self.client.post(
+            reverse('operations-dashboard'),
+            {
+                'form_type': 'submit_shipment_request',
+                'branch_name': 'Nairobi Branch',
+                'requester_name': 'Operator One',
+                'request_details': 'Move tapes to Nairobi Branch.',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        shipment = Shipment.objects.get(created_by=user)
+        self.assertEqual(shipment.destination_location, 'Nairobi Branch')
+
+    def test_operator_shipment_request_flow_reaches_courier_acceptance(self):
+        operations_group = Group.objects.create(name='Operations Manager')
+        backup_group = Group.objects.create(name='Backup Administrator')
+        courier_group = Group.objects.create(name='Courier')
+
+        operator = get_user_model().objects.create_user(
+            username='operator-flow',
+            email='operator-flow@example.com',
+            password='pass1234',
+            first_name='Op',
+            last_name='User',
+        )
+        operator.groups.add(operations_group)
+
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-flow',
+            email='backup-flow@example.com',
+            password='pass1234',
+            first_name='Backup',
+            last_name='Admin',
+        )
+        backup_admin.groups.add(backup_group)
+
+        courier_user = get_user_model().objects.create_user(
+            username='courier-flow',
+            email='courier-flow@example.com',
+            password='pass1234',
+            first_name='Courier',
+            last_name='Guy',
+        )
+        courier_user.groups.add(courier_group)
+        courier_profile = CourierProfile.objects.create(
+            user=courier_user,
+            courier_id='CR-100',
+            full_name='Courier Guy',
+            phone_number='555-1000',
+            email='courier-flow@example.com',
+        )
+
+        tape = Tape.objects.create(
+            volser='TAPE-900',
+            barcode='BAR-900',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+            status='Active',
+            current_location='Vault A',
+        )
+
+        self.client.force_login(operator)
+        response = self.client.post(
+            reverse('operations-dashboard'),
+            {
+                'form_type': 'submit_shipment_request',
+                'branch_name': 'Nairobi Branch',
+                'request_details': 'Need transfer of tapes to DR site.',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        shipment = Shipment.objects.get(created_by=operator)
+        self.assertEqual(shipment.status, 'Pending')
+        self.assertEqual(shipment.source_location, 'Nairobi Branch')
+
+        self.client.force_login(backup_admin)
+        response = self.client.post(
+            reverse('shipment-approvals'),
+            {
+                'form_type': 'backup_admin_decision',
+                'shipment_id': shipment.pk,
+                'tape_id': tape.pk,
+                'courier_id': courier_profile.pk,
+                'decision': 'approve',
+                'comments': 'Approved for dispatch.',
+            },
+        )
+
+        shipment.refresh_from_db()
+        self.assertEqual(shipment.status, 'Approved')
+        self.assertEqual(shipment.tapes.count(), 1)
+        self.assertEqual(shipment.courier_name, 'Courier Guy')
+
+        self.client.force_login(courier_user)
+        response = self.client.post(
+            reverse('pickup-confirmation', args=[shipment.pk]),
+            {
+                'manifest_reference': 'MANIFEST-1',
+                'pickup_date': '2026-06-26',
+                'pickup_time': '09:00',
+                'pickup_location': 'Vault A',
+                'notes': 'Pickup confirmed',
+                'all_tapes_scanned': 'on',
+                'manifest_verified': 'on',
+                'tape_count_matched': 'on',
+                'no_damaged_tapes': 'on',
+                'custody_accepted': 'on',
+            },
+        )
+
+        shipment.refresh_from_db()
+        self.assertEqual(shipment.status, 'Picked Up')
+
+
+
+
+class OperationsDashboardCustodyGovernanceTests(TestCase):
+    def test_custody_governance_cards_use_receipt_and_delivery_records(self):
+        operations_group = Group.objects.create(name='Operations Manager')
+        user = get_user_model().objects.create_user(
+            username='ops-custody-metrics',
+            email='ops-custody-metrics@example.com',
+            password='pass1234',
+        )
+        user.groups.add(operations_group)
+
+        courier = CourierProfile.objects.create(
+            courier_id='CR-200',
+            full_name='Test Courier',
+            email='courier@example.com',
+        )
+
+        open_transfer = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Picked Up',
+            source_location='Vault A',
+            destination_location='Nairobi Branch',
+            created_by=user,
+        )
+        ShipmentReceipt.objects.create(
+            shipment=open_transfer,
+            courier=courier,
+            pickup_location='Vault A',
+            custody_confirmed=True,
+            custody_accepted=True,
+        )
+
+        missing_handoff = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Dispatched',
+            source_location='Vault A',
+            destination_location='Nairobi Branch',
+            created_by=user,
+        )
+
+        delivered_without_confirmation = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Delivered',
+            source_location='Vault A',
+            destination_location='Nairobi Branch',
+            created_by=user,
+        )
+
+        completed_transfer = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Delivered',
+            source_location='Vault A',
+            destination_location='Nairobi Branch',
+            created_by=user,
+        )
+        DeliveryConfirmation.objects.create(
+            shipment=completed_transfer,
+            courier=courier,
+            destination_location='Nairobi Branch',
+            receiving_custodian='Ops Lead',
+            delivery_status='Delivered',
+            manifest_matched=True,
+            all_tapes_delivered=True,
+            discrepancies_resolved=True,
+        )
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('operations-dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['custody_transfers_open'], 1)
+        self.assertEqual(response.context['custody_transfers_completed'], 1)
+        self.assertEqual(response.context['missing_handoffs'], 1)
+        self.assertEqual(response.context['unverified_deliveries'], 1)
+
+
+class OperationsDashboardNotificationsTests(TestCase):
+    def test_notification_view_links_render_with_target_url_hooks(self):
+        operations_group = Group.objects.create(name='Operations Manager')
+        user = get_user_model().objects.create_user(
+            username='ops-notifications',
+            email='ops-notifications@example.com',
+            password='pass1234',
+        )
+        user.groups.add(operations_group)
+        AuditLog.objects.create(
+            name='Shipment Request Submitted',
+            action='Shipment request was submitted for review.',
+            user=user,
+            severity='warning',
+            is_read=False,
+        )
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('operations-dashboard'), {'show_notifications': '1'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'notification-view-link')
+        self.assertContains(response, 'data-target-url=')
+
+
 class OperationsDashboardReportsTests(TestCase):
     def setUp(self):
         self.group = Group.objects.create(name='Operations Manager')
@@ -290,6 +570,430 @@ class OperationsDashboardReportsTests(TestCase):
         self.assertContains(response, 'Report types')
         self.assertContains(response, 'Inventory Report')
         self.assertContains(response, 'showReportsPanel();')
+
+
+class TwoFactorLoginTests(TestCase):
+    def test_signin_sends_terminal_otp_and_completes_login(self):
+        operations_group = Group.objects.create(name='Operations Manager')
+        user = get_user_model().objects.create_user(
+            username='otp-user',
+            email='otp-user@example.com',
+            password='pass1234',
+        )
+        user.groups.add(operations_group)
+
+        with patch('builtins.print') as mocked_print:
+            response = self.client.post(reverse('signin'), {'username': 'otp-user', 'password': 'pass1234'})
+
+            self.assertEqual(response.status_code, 200)
+            self.assertContains(response, 'Verification Code')
+            self.assertTrue(self.client.session.get('pending_2fa_user_id'))
+            otp_code = self.client.session.get('pending_2fa_otp')
+            self.assertTrue(otp_code)
+            mocked_print.assert_called()
+
+            final_response = self.client.post(reverse('signin'), {'otp_code': otp_code})
+
+            self.assertEqual(final_response.status_code, 302)
+            self.assertRedirects(final_response, reverse('operations-dashboard'))
+            self.assertIn('_auth_user_id', self.client.session)
+
+
+class BackupDashboardShipmentApprovalTests(TestCase):
+    def test_backup_dashboard_alert_bell_counts_only_unread_alerts(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-bell-count',
+            email='backup-bell-count@example.com',
+            password='pass1234',
+            first_name='Backup',
+            last_name='Admin',
+        )
+        backup_admin.groups.add(backup_group)
+
+        AuditLog.objects.create(
+            name='Shipment Rejected',
+            action='An alert arrived for review.',
+            user=backup_admin,
+            severity='warning',
+            is_read=False,
+        )
+        AuditLog.objects.create(
+            name='Shipment Approved',
+            action='A previous alert was already reviewed.',
+            user=backup_admin,
+            severity='error',
+            is_read=True,
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.get(reverse('backup-dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['alert_count'], 1)
+
+    def test_backup_dashboard_marks_alerts_read_when_panel_is_opened(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-new-badge',
+            email='backup-new-badge@example.com',
+            password='pass1234',
+            first_name='Backup',
+            last_name='Admin',
+        )
+        backup_admin.groups.add(backup_group)
+
+        alert = AuditLog.objects.create(
+            name='Shipment Rejected',
+            action='Shipment REQ-100 was rejected by the backup administrator.',
+            user=backup_admin,
+            severity='warning',
+            is_read=False,
+        )
+
+        self.client.force_login(backup_admin)
+        initial_response = self.client.get(reverse('backup-dashboard'))
+        self.assertEqual(initial_response.status_code, 200)
+        self.assertContains(initial_response, '<span class="badge bg-primary">New</span>')
+        self.assertContains(initial_response, alert.action)
+
+        panel_response = self.client.get(reverse('backup-dashboard'), {'show_alerts': '1'})
+        self.assertEqual(panel_response.status_code, 200)
+        self.assertNotContains(panel_response, '<span class="badge bg-primary">New</span>')
+        alert.refresh_from_db()
+        self.assertTrue(alert.is_read)
+        self.assertIsNotNone(alert.read_at)
+
+    def test_backup_admin_can_approve_pending_shipment_from_dashboard_with_barcode_and_courier(self):
+        operations_group = Group.objects.create(name='Operations Manager')
+        backup_group = Group.objects.create(name='Backup Administrator')
+        courier_group = Group.objects.create(name='Courier')
+
+        operator = get_user_model().objects.create_user(
+            username='operator-approve',
+            email='operator-approve@example.com',
+            password='pass1234',
+            first_name='Op',
+            last_name='User',
+        )
+        operator.groups.add(operations_group)
+
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-approve',
+            email='backup-approve@example.com',
+            password='pass1234',
+            first_name='Backup',
+            last_name='Admin',
+        )
+        backup_admin.groups.add(backup_group)
+
+        courier_user = get_user_model().objects.create_user(
+            username='courier-approve',
+            email='courier-approve@example.com',
+            password='pass1234',
+            first_name='Courier',
+            last_name='Guy',
+        )
+        courier_user.groups.add(courier_group)
+        courier_profile = CourierProfile.objects.create(
+            user=courier_user,
+            courier_id='CR-200',
+            full_name='Courier Guy',
+            phone_number='555-2000',
+            email='courier-approve@example.com',
+        )
+
+        tape = Tape.objects.create(
+            volser='TAPE-777',
+            barcode='BAR-777',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+            status='Active',
+            current_location='Vault A',
+        )
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            status='Pending',
+            releasing_custodian='Op User',
+            created_by=operator,
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.post(
+            reverse('backup-dashboard'),
+            {
+                'form_type': 'backup_admin_assignment',
+                'shipment_id': shipment.pk,
+                'barcode': tape.barcode,
+                'courier': courier_profile.pk,
+                'decision': 'approve',
+                'comments': 'Approved for dispatch.',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        shipment.refresh_from_db()
+        self.assertEqual(shipment.status, 'Approved')
+        self.assertTrue(shipment.tapes.filter(pk=tape.pk).exists())
+        self.assertEqual(shipment.courier_name, 'Courier Guy')
+        self.assertTrue(
+            shipment.created_by and
+            ShipmentApprovalHistory.objects.filter(shipment=shipment, action='Approved').exists()
+        )
+        self.assertTrue(
+            AuditLog.objects.filter(user=operator, action__icontains='approved').exists()
+        )
+        self.assertTrue(
+            AuditLog.objects.filter(user=courier_user, action__icontains='approved').exists()
+        )
+
+    def test_assignment_form_includes_courier_group_user_without_existing_profile(self):
+        courier_group = Group.objects.create(name='Courier')
+        courier_user = get_user_model().objects.create_user(
+            username='carrier-no-profile',
+            email='carrier-no-profile@example.com',
+            password='pass1234',
+            first_name='Carrier',
+            last_name='User',
+        )
+        courier_user.groups.add(courier_group)
+
+        form = BackupShipmentAssignmentForm()
+        choices = dict(form.fields['courier'].choices)
+
+        self.assertIn(f'user:{courier_user.pk}', choices)
+        self.assertEqual(choices[f'user:{courier_user.pk}'], 'Carrier User')
+
+    def test_assignment_form_includes_user_with_courier_role_even_without_group(self):
+        courier_user = get_user_model().objects.create_user(
+            username='role-courier',
+            email='role-courier@example.com',
+            password='pass1234',
+            first_name='Courier',
+            last_name='Role',
+        )
+        courier_user.role = 'courier'
+        courier_user.save(update_fields=['role'])
+
+        form = BackupShipmentAssignmentForm()
+        choices = dict(form.fields['courier'].choices)
+
+        self.assertIn(f'user:{courier_user.pk}', choices)
+        self.assertEqual(choices[f'user:{courier_user.pk}'], 'Courier Role')
+
+    def test_assignment_form_renders_courier_options_in_select(self):
+        courier_group = Group.objects.create(name='Courier')
+        courier_user = get_user_model().objects.create_user(
+            username='rendered-courier',
+            email='rendered-courier@example.com',
+            password='pass1234',
+            first_name='Rendered',
+            last_name='Courier',
+        )
+        courier_user.groups.add(courier_group)
+
+        form = BackupShipmentAssignmentForm()
+        rendered = form['courier'].as_widget()
+
+        self.assertIn('Rendered Courier', rendered)
+
+    def test_assigned_shipments_page_shows_shipments_for_courier_user(self):
+        courier_group = Group.objects.create(name='Courier')
+        courier_user = get_user_model().objects.create_user(
+            username='assigned-courier',
+            email='assigned-courier@example.com',
+            password='pass1234',
+            first_name='Assigned',
+            last_name='Courier',
+        )
+        courier_user.groups.add(courier_group)
+
+        operator_user = get_user_model().objects.create_user(
+            username='operator-assignee',
+            email='operator-assignee@example.com',
+            password='pass1234',
+            first_name='Operator',
+            last_name='Assignee',
+        )
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            destination_location='Mombasa Branch',
+            status='Approved',
+            releasing_custodian='Ops User',
+            created_by=operator_user,
+            courier_name='Assigned Courier',
+            courier_contact='assigned-courier@example.com',
+        )
+
+        self.client.force_login(courier_user)
+        response = self.client.get(reverse('assigned-shipments'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, shipment.shipment_id)
+        self.assertContains(response, 'Mombasa Branch')
+
+    def test_pickup_confirmation_works_for_courier_group_user_without_profile(self):
+        courier_group = Group.objects.create(name='Courier')
+        courier_user = get_user_model().objects.create_user(
+            username='pickup-no-profile',
+            email='pickup-no-profile@example.com',
+            password='pass1234',
+            first_name='Pickup',
+            last_name='Courier',
+        )
+        courier_user.groups.add(courier_group)
+
+        operator = get_user_model().objects.create_user(
+            username='pickup-operator',
+            email='pickup-operator@example.com',
+            password='pass1234',
+            first_name='Pickup',
+            last_name='Operator',
+        )
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            status='Approved',
+            releasing_custodian='Ops User',
+            created_by=operator,
+        )
+
+        self.client.force_login(courier_user)
+        response = self.client.post(
+            reverse('pickup-confirmation', args=[shipment.pk]),
+            {
+                'manifest_reference': 'MANIFEST-2',
+                'pickup_date': '2026-06-26',
+                'pickup_time': '09:00',
+                'pickup_location': 'Vault A',
+                'notes': 'Pickup confirmed',
+                'all_tapes_scanned': 'on',
+                'manifest_verified': 'on',
+                'tape_count_matched': 'on',
+                'no_damaged_tapes': 'on',
+                'custody_accepted': 'on',
+            },
+        )
+
+        shipment.refresh_from_db()
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(shipment.status, 'Picked Up')
+        self.assertTrue(CourierProfile.objects.filter(user=courier_user).exists())
+
+    def test_courier_dashboard_activity_log_shows_pickup_for_specific_user(self):
+        courier_group = Group.objects.create(name='Courier')
+        courier_user = get_user_model().objects.create_user(
+            username='activity-courier',
+            email='activity-courier@example.com',
+            password='pass1234',
+            first_name='Activity',
+            last_name='Courier',
+        )
+        courier_user.groups.add(courier_group)
+
+        operator = get_user_model().objects.create_user(
+            username='activity-operator',
+            email='activity-operator@example.com',
+            password='pass1234',
+            first_name='Activity',
+            last_name='Operator',
+        )
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            status='Approved',
+            releasing_custodian='Ops User',
+            created_by=operator,
+        )
+
+        self.client.force_login(courier_user)
+        self.client.post(
+            reverse('pickup-confirmation', args=[shipment.pk]),
+            {
+                'manifest_reference': 'MANIFEST-ACT',
+                'pickup_date': '2026-06-26',
+                'pickup_time': '09:00',
+                'pickup_location': 'Vault A',
+                'notes': 'Pickup confirmed',
+                'all_tapes_scanned': 'on',
+                'manifest_verified': 'on',
+                'tape_count_matched': 'on',
+                'no_damaged_tapes': 'on',
+                'custody_accepted': 'on',
+            },
+        )
+
+        dashboard_response = self.client.get(reverse('courier-dashboard'))
+        self.assertEqual(dashboard_response.status_code, 200)
+        self.assertContains(dashboard_response, 'Picked Up')
+        self.assertTrue(
+            ShipmentTransportEvent.objects.filter(
+                shipment=shipment,
+                courier__user=courier_user,
+                event_type='Picked Up',
+            ).exists()
+        )
+
+    def test_backup_admin_can_reject_pending_shipment_with_comment_and_notify_operator(self):
+        operations_group = Group.objects.create(name='Operations Manager')
+        backup_group = Group.objects.create(name='Backup Administrator')
+
+        operator = get_user_model().objects.create_user(
+            username='operator-reject',
+            email='operator-reject@example.com',
+            password='pass1234',
+            first_name='Op',
+            last_name='User',
+        )
+        operator.groups.add(operations_group)
+
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-reject',
+            email='backup-reject@example.com',
+            password='pass1234',
+            first_name='Backup',
+            last_name='Admin',
+        )
+        backup_admin.groups.add(backup_group)
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            status='Pending',
+            releasing_custodian='Op User',
+            created_by=operator,
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.post(
+            reverse('backup-dashboard'),
+            {
+                'form_type': 'backup_admin_assignment',
+                'shipment_id': shipment.pk,
+                'submit_action': 'reject',
+                'comments': 'Please resubmit with the full shipment details.',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        shipment.refresh_from_db()
+        self.assertEqual(shipment.status, 'Rejected')
+        self.assertEqual(shipment.approval_remarks, 'Please resubmit with the full shipment details.')
+        self.assertTrue(
+            ShipmentApprovalHistory.objects.filter(shipment=shipment, action='Rejected').exists()
+        )
+        self.assertTrue(
+            AuditLog.objects.filter(user=operator, action__icontains='rejected').exists()
+        )
+        self.assertTrue(
+            AuditLog.objects.filter(user=operator, action__icontains='Please resubmit').exists()
+        )
 
 
 class ShipmentOperationsWorkflowTests(TestCase):

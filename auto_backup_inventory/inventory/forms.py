@@ -1,4 +1,5 @@
 from django import forms
+from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Group
 from django.core.validators import validate_email
@@ -231,16 +232,151 @@ class AddTapeForm(forms.ModelForm):
             tape.save()
         return tape
 
-class AuditorShipmentRequestForm(forms.Form):
+class ShipmentRequestSubmissionForm(forms.Form):
     branch_name = forms.CharField(
         max_length=200,
         label='Branch Name',
         widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter branch or site name'})
     )
+    requester_name = forms.CharField(
+        max_length=200,
+        label='Requester Name',
+        required=False,
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Leave blank to use your name'})
+    )
     request_details = forms.CharField(
         label='Request Details',
         widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Describe the shipment request'})
     )
+
+
+class AuditorShipmentRequestForm(ShipmentRequestSubmissionForm):
+    pass
+
+
+class BackupShipmentAssignmentForm(forms.Form):
+    barcode = forms.CharField(
+        required=False,
+        label='Tape Barcode',
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Scan or enter tape barcode'})
+    )
+    tape = forms.ModelChoiceField(
+        queryset=Tape.objects.filter(status='Active').order_by('volser'),
+        label='Available Tape',
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        required=False,
+    )
+    courier = forms.ChoiceField(
+        label='Courier',
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        required=False,
+    )
+    decision = forms.ChoiceField(
+        choices=[('approve', 'Approve Shipment'), ('reject', 'Reject Shipment')],
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        label='Decision',
+        required=False,
+    )
+    comments = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Add comments for the approval or rejection'}),
+        label='Comments',
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['tape'].queryset = Tape.objects.filter(status='Active').order_by('volser')
+
+        profile_couriers = CourierProfile.objects.filter(active_status=True).order_by('full_name')
+        courier_group = Group.objects.filter(name__iexact='Courier').first()
+        courier_user_qs = get_user_model().objects.all()
+        if courier_group:
+            courier_user_qs = courier_user_qs.filter(Q(groups=courier_group) | Q(role='courier'))
+        else:
+            courier_user_qs = courier_user_qs.filter(Q(role='courier'))
+        courier_users = courier_user_qs.distinct().order_by('username')
+        courier_choices = [('', 'Select a courier')]
+        seen_values = set()
+        seen_user_ids = set()
+
+        for profile in profile_couriers:
+            profile_value = str(profile.pk)
+            for value, label in ((f'profile:{profile_value}', str(profile)), (profile_value, str(profile))):
+                if value in seen_values:
+                    continue
+                seen_values.add(value)
+                courier_choices.append((value, label))
+
+        for user in courier_users:
+            if user.pk in seen_user_ids:
+                continue
+            seen_user_ids.add(user.pk)
+            user_value = str(user.pk)
+            display_name = user.get_full_name() or user.username
+            for value, label in ((f'user:{user_value}', display_name), (user_value, display_name)):
+                if value in seen_values:
+                    continue
+                seen_values.add(value)
+                courier_choices.append((value, label))
+
+        self.fields['courier'].choices = courier_choices
+
+    def clean_courier(self):
+        courier_value = self.cleaned_data.get('courier')
+        if not courier_value:
+            return ''
+
+        if isinstance(courier_value, str):
+            if courier_value.startswith(('profile:', 'user:')):
+                return courier_value
+            if courier_value.isdigit():
+                profile = CourierProfile.objects.filter(pk=int(courier_value)).first()
+                if profile:
+                    return f'profile:{profile.pk}'
+                user = get_user_model().objects.filter(pk=int(courier_value)).first()
+                if user:
+                    return f'user:{user.pk}'
+            try:
+                profile = CourierProfile.objects.filter(pk=courier_value).first()
+                if profile:
+                    return f'profile:{profile.pk}'
+                user = get_user_model().objects.filter(pk=courier_value).first()
+                if user:
+                    return f'user:{user.pk}'
+            except Exception:
+                pass
+
+        return courier_value
+
+    def clean(self):
+        cleaned_data = super().clean()
+        submit_action = (self.data.get('submit_action') or cleaned_data.get('decision') or 'approve').lower()
+        barcode = (cleaned_data.get('barcode') or '').strip()
+        tape = cleaned_data.get('tape')
+        courier = cleaned_data.get('courier')
+
+        if not tape and barcode:
+            tape = Tape.objects.filter(barcode__iexact=barcode).first() or Tape.objects.filter(volser__iexact=barcode).first()
+            if tape:
+                cleaned_data['tape'] = tape
+
+        if submit_action == 'reject':
+            return cleaned_data
+
+        if not tape:
+            raise forms.ValidationError('Please provide a valid tape by scanning its barcode or selecting one from the list.')
+
+        if not courier:
+            if self.data.get('courier'):
+                cleaned_data['courier'] = self.data.get('courier')
+                courier = cleaned_data['courier']
+            else:
+                raise forms.ValidationError('Please select a courier before approving the shipment.')
+
+        if courier and not isinstance(courier, str):
+            cleaned_data['courier'] = str(courier)
+
+        return cleaned_data
 
 
 class TapeRequestForm(forms.ModelForm):

@@ -135,6 +135,7 @@ body {
                 <p class="small-note mb-0">Automated Backup Tape Inventory Management System — Banking Operations Command Center</p>
             </div>
         <div class="d-flex align-items-center gap-3">
+            <a href="{% url 'start-shipment-request' %}" class="btn btn-outline-primary btn-sm partial-load" id="startShipmentBtn" data-url="{% url 'start-shipment-request' %}?partial=1" data-panel="#shipment_approvals"><i class="bi bi-truck"></i> Start a shipment</a>
             <button class="btn btn-outline-secondary btn-sm position-relative" id="notificationBellBtn" title="Notifications">
                 <i class="bi bi-bell"></i>
                 <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger{% if unread_alert_count == 0 %} d-none{% endif %}" id="notificationBadge">{{ unread_alert_count }}</span>
@@ -146,7 +147,6 @@ body {
                     <div class="small-note">Operations Manager</div>
                     
                 </div>
-              <button type="button" class="btn btn-outline-primary btn-sm mt-2" data-bs-toggle="modal" data-bs-target="#shipmentRequestModal"><i class="bi bi-truck"></i> Start a shipment</button>
             </div>
             <div class="text-end d-none d-md-block">
                 <div class="small-note">Current Date</div>
@@ -157,6 +157,48 @@ body {
                 <div class="small-note"><a class="nav-link text-danger mt-3" href="{% url 'signout' %}"><i class="bi bi-box-arrow-right"></i> Logout</a></div>
                 
             </div>
+        </div>
+    </div>
+
+    <div class="modal fade" id="shipmentRequestModal" tabindex="-1" aria-labelledby="shipmentRequestModalLabel" aria-hidden="true">
+        <div class="modal-dialog">
+            <form method="post" action="{% url 'operations-dashboard' %}">
+                {% csrf_token %}
+                <input type="hidden" name="form_type" value="submit_shipment_request">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="shipmentRequestModalLabel">Submit shipment request</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label for="id_branch_name" class="form-label">Branch name</label>
+                            {{ shipment_request_form.branch_name }}
+                            {% if shipment_request_form.branch_name.errors %}
+                                <div class="text-danger small mt-1">{{ shipment_request_form.branch_name.errors|join:", " }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="mb-3">
+                            <label for="id_requester_name" class="form-label">Requester name</label>
+                            {{ shipment_request_form.requester_name }}
+                            {% if shipment_request_form.requester_name.errors %}
+                                <div class="text-danger small mt-1">{{ shipment_request_form.requester_name.errors|join:", " }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="mb-3">
+                            <label for="id_request_details" class="form-label">Request details</label>
+                            {{ shipment_request_form.request_details }}
+                            {% if shipment_request_form.request_details.errors %}
+                                <div class="text-danger small mt-1">{{ shipment_request_form.request_details.errors|join:", " }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Send to backup administrator</button>
+                    </div>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -795,7 +837,7 @@ body {
                                 <td>{{ alert.date|date:'M d, Y' }}</td>
                                 <td>{{ alert.description }}</td>
                                 <td>
-                                    <a href="{% if alert.target_url %}{{ alert.target_url }}{% else %}{% url 'operations-dashboard' %}?show_notifications=1{% endif %}" class="text-decoration-none">
+                                    <a href="{% if alert.target_url %}{{ alert.target_url }}{% else %}{% url 'operations-dashboard' %}?show_notifications=1{% endif %}" class="text-decoration-none notification-view-link" data-target-url="{% if alert.target_url %}{{ alert.target_url }}{% else %}{% url 'operations-dashboard' %}?show_notifications=1{% endif %}" onclick="handleNotificationAction(this); return false;">
                                         {{ alert.action }}
                                     </a>
                                 </td>
@@ -871,7 +913,7 @@ body {
                                     <td>{{ notification.timestamp|date:'M d, Y H:i' }}</td>
                                     <td>{{ notification.message|default:notification.action|default:'View notification' }}</td>
                                     <td>
-                                        <a href="{% if notification.target_url %}{{ notification.target_url }}{% else %}{% url 'operations-dashboard' %}?show_notifications=1{% endif %}" class="text-decoration-none">
+                                        <a href="{% if notification.target_url %}{{ notification.target_url }}{% else %}{% url 'operations-dashboard' %}?show_notifications=1{% endif %}" class="text-decoration-none notification-view-link" data-target-url="{% if notification.target_url %}{{ notification.target_url }}{% else %}{% url 'operations-dashboard' %}?show_notifications=1{% endif %}" onclick="handleNotificationAction(this); return false;">
                                             <span class="badge bg-secondary">View</span>
                                         </a>
                                     </td>
@@ -1679,6 +1721,42 @@ document.querySelectorAll('a.partial-load').forEach(link => {
     });
 });
 
+function handleNotificationAction(link) {
+    const targetUrl = link.dataset.targetUrl || link.getAttribute('href');
+    if (!targetUrl) {
+        return;
+    }
+
+    const url = new URL(targetUrl, window.location.origin);
+    const params = url.searchParams;
+
+    if (params.get('show_notifications') === '1' || params.get('show_notifications') === 'true') {
+        showNotificationsPanel();
+        window.history.pushState({}, '', url.pathname + url.search);
+        return;
+    }
+
+    if (params.get('show_reports') || params.get('report_category')) {
+        showReportsPanel();
+        window.history.pushState({}, '', url.pathname + url.search);
+        return;
+    }
+
+    if (params.get('show_profile') === '1' || params.get('edit_profile') === '1') {
+        showProfilePanel();
+        window.history.pushState({}, '', url.pathname + url.search);
+        return;
+    }
+
+    if (params.get('show_settings') === '1') {
+        showSettingsPanel();
+        window.history.pushState({}, '', url.pathname + url.search);
+        return;
+    }
+
+    window.location.assign(targetUrl);
+}
+
 document.getElementById('markAllNotificationsReadBtn')?.addEventListener('click', event => {
     event.preventDefault();
     markNotificationsRead();
@@ -1799,6 +1877,7 @@ if (complianceCtx) {
         }
     });
 }
+
 const exceptionCtx = document.getElementById('exceptionChart');
 if (exceptionCtx) {
     new Chart(exceptionCtx, {
