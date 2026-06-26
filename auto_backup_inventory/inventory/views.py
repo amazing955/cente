@@ -1019,13 +1019,14 @@ def auditor_dashboard(request):
     if request.method == 'POST' and request.POST.get('form_type') == 'submit_shipment_request':
         if shipment_request_form.is_valid():
             branch_name = shipment_request_form.cleaned_data['branch_name'].strip()
+            requester_name = shipment_request_form.cleaned_data['requester_name'].strip() or (request.user.get_full_name() or request.user.username)
             request_details = shipment_request_form.cleaned_data['request_details'].strip()
             shipment = Shipment.objects.create(
                 shipment_date=timezone.localdate(),
                 shipment_type='Off-Site Transfer',
                 status='Pending',
                 source_location=branch_name,
-                releasing_custodian=request.user.get_full_name() or request.user.username,
+                releasing_custodian=requester_name,
                 receiving_organization='Pending review',
                 approval_remarks=request_details,
                 created_by=request.user,
@@ -1037,6 +1038,25 @@ def auditor_dashboard(request):
                 user=request.user,
                 severity='info',
             )
+            backup_admins = get_user_model().objects.filter(groups__name='Backup Administrator')
+            for admin in backup_admins:
+                AuditLog.objects.create(
+                    name='Shipment Request Received',
+                    action=f'New shipment request {shipment.shipment_id} from {requester_name} for {branch_name}',
+                    user=admin,
+                    message=request_details,
+                    severity='warning',
+                    is_read=False,
+                )
+            if not backup_admins.exists():
+                AuditLog.objects.create(
+                    name='Shipment Request Received',
+                    action=f'New shipment request {shipment.shipment_id} from {requester_name} for {branch_name}',
+                    user=request.user,
+                    message=request_details,
+                    severity='warning',
+                    is_read=False,
+                )
             messages.success(request, 'Shipment request submitted to the backup administrator.')
             return redirect(reverse('auditor-dashboard'))
 
@@ -2807,6 +2827,52 @@ def operations_dashboard(request):
         AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).update(is_read=True, read_at=timezone.now())
         unread_alert_count = 0
 
+    shipment_request_form = AuditorShipmentRequestForm(request.POST or None)
+    if request.method == 'POST' and request.POST.get('form_type') == 'submit_shipment_request':
+        if shipment_request_form.is_valid():
+            branch_name = shipment_request_form.cleaned_data['branch_name'].strip()
+            requester_name = shipment_request_form.cleaned_data['requester_name'].strip() or (request.user.get_full_name() or request.user.username)
+            request_details = shipment_request_form.cleaned_data['request_details'].strip()
+            shipment = Shipment.objects.create(
+                shipment_date=timezone.localdate(),
+                shipment_type='Off-Site Transfer',
+                status='Pending',
+                source_location=branch_name,
+                releasing_custodian=requester_name,
+                receiving_organization='Pending review',
+                approval_remarks=request_details,
+                created_by=request.user,
+                last_updated_by=request.user,
+            )
+            AuditLog.objects.create(
+                name='Shipment Request Submitted',
+                action=f'Shipment request {shipment.shipment_id} created for {branch_name} by {request.user.username}',
+                user=request.user,
+                severity='info',
+            )
+            backup_admins = get_user_model().objects.filter(groups__name='Backup Administrator')
+            for admin in backup_admins:
+                AuditLog.objects.create(
+                    name='Shipment Request Received',
+                    action=f'New shipment request {shipment.shipment_id} from {requester_name} for {branch_name}',
+                    user=admin,
+                    message=request_details,
+                    severity='warning',
+                    is_read=False,
+                )
+            if not backup_admins.exists():
+                AuditLog.objects.create(
+                    name='Shipment Request Received',
+                    action=f'New shipment request {shipment.shipment_id} from {requester_name} for {branch_name}',
+                    user=request.user,
+                    message=request_details,
+                    severity='warning',
+                    is_read=False,
+                )
+            messages.success(request, 'Shipment request submitted to the backup administrator.')
+            return redirect(f'{reverse("operations-dashboard")}#dashboard')
+        messages.error(request, 'Please provide the branch name and request details.')
+
     tape_request_form = TapeRequestForm(request.POST or None)
 
     show_reports_panel = request.GET.get('show_reports') in {'1', 'reports'} or 'show_reports' in request.GET
@@ -3105,6 +3171,7 @@ def operations_dashboard(request):
         'overdue_count': overdue_count,
         'has_results': total_shipments > 0,
         'profile_form': profile_form,
+        'shipment_request_form': shipment_request_form,
         'show_profile_panel': show_profile_panel,
         'profile_edit_mode': profile_edit_mode,
         'show_notifications_panel': show_notifications_panel,

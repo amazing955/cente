@@ -237,6 +237,12 @@ class AuditorShipmentRequestForm(forms.Form):
         label='Branch Name',
         widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter branch or site name'})
     )
+    requester_name = forms.CharField(
+        max_length=200,
+        required=False,
+        label="Requester's Name",
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': "Enter requester's name"})
+    )
     request_details = forms.CharField(
         label='Request Details',
         widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Describe the shipment request'})

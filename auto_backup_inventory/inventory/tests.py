@@ -109,6 +109,16 @@ class AuditorDashboardTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
 
+    def test_auditor_dashboard_can_display_shipment_form_only(self):
+        self.client.force_login(self.user)
+        response = self.client.get(reverse('auditor-dashboard'), {'show_shipment_form': '1'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Submit shipment request')
+        self.assertContains(response, 'Branch name')
+        self.assertNotContains(response, 'Compliance Health')
+        self.assertNotContains(response, 'Audit Trail Review')
+
     def test_auditor_can_submit_pending_shipment_request(self):
         self.client.force_login(self.user)
         response = self.client.post(
