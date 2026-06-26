@@ -189,7 +189,7 @@
         new Chart(ctx, {
             type: 'line',
             data: {
-                labels: {{ chart_labels|safe ,}},
+                labels: {{ chart_labels|safe }},
                 datasets: [{
                     label: 'Compliance Index',
                     data: {{ chart_counts|safe }},

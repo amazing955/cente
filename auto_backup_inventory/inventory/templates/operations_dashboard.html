@@ -148,41 +148,6 @@ body {
                 </div>
               <button type="button" class="btn btn-outline-primary btn-sm mt-2" data-bs-toggle="modal" data-bs-target="#shipmentRequestModal"><i class="bi bi-truck"></i> Start a shipment</button>
             </div>
-
-            <div class="modal fade" id="shipmentRequestModal" tabindex="-1" aria-labelledby="shipmentRequestModalLabel" aria-hidden="true">
-                <div class="modal-dialog">
-                    <form method="post" action="{% url 'operations-dashboard' %}">
-                        {% csrf_token %}
-                        <input type="hidden" name="form_type" value="submit_shipment_request">
-                        <div class="modal-content">
-                            <div class="modal-header">
-                                <h5 class="modal-title" id="shipmentRequestModalLabel">Submit shipment request</h5>
-                                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                            </div>
-                            <div class="modal-body">
-                                <div class="mb-3">
-                                    <label for="id_branch_name" class="form-label">Branch name</label>
-                                    {{ shipment_request_form.branch_name }}
-                                    {% if shipment_request_form.branch_name.errors %}
-                                        <div class="text-danger small mt-1">{{ shipment_request_form.branch_name.errors|join:", " }}</div>
-                                    {% endif %}
-                                </div>
-                                <div class="mb-3">
-                                    <label for="id_request_details" class="form-label">Request details</label>
-                                    {{ shipment_request_form.request_details }}
-                                    {% if shipment_request_form.request_details.errors %}
-                                        <div class="text-danger small mt-1">{{ shipment_request_form.request_details.errors|join:", " }}</div>
-                                    {% endif %}
-                                </div>
-                            </div>
-                            <div class="modal-footer">
-                                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
-                                <button type="submit" class="btn btn-primary">Send to backup administrator</button>
-                            </div>
-                        </div>
-                    </form>
-                </div>
-            </div>
             <div class="text-end d-none d-md-block">
                 <div class="small-note">Current Date</div>
                 <div class="fw-semibold">{{ current_datetime|date:'M d, Y H:i' }}</div>
@@ -824,12 +789,16 @@ body {
                         </thead>
                         <tbody>
                             {% for alert in alert_items %}
-                            <tr>
+                            <tr class="clickable-row">
                                 <td>{{ alert.severity }}</td>
                                 <td>{{ alert.severity }}</td>
                                 <td>{{ alert.date|date:'M d, Y' }}</td>
                                 <td>{{ alert.description }}</td>
-                                <td>{{ alert.action }}</td>
+                                <td>
+                                    <a href="{% if alert.target_url %}{{ alert.target_url }}{% else %}{% url 'operations-dashboard' %}?show_notifications=1{% endif %}" class="text-decoration-none">
+                                        {{ alert.action }}
+                                    </a>
+                                </td>
                             </tr>
                             {% empty %}
                             <tr><td colspan="5" class="text-center">No compliance alerts at this time.</td></tr>
@@ -897,11 +866,15 @@ body {
                             </thead>
                             <tbody>
                                 {% for notification in notification_items %}
-                                <tr>
+                                <tr class="clickable-row">
                                     <td>{{ notification.severity|title }}</td>
                                     <td>{{ notification.timestamp|date:'M d, Y H:i' }}</td>
-                                    <td>{{ notification.message|default:notification.action|default:notification.name }}</td>
-                                    <td><span class="badge bg-secondary">View</span></td>
+                                    <td>{{ notification.message|default:notification.action|default:'View notification' }}</td>
+                                    <td>
+                                        <a href="{% if notification.target_url %}{{ notification.target_url }}{% else %}{% url 'operations-dashboard' %}?show_notifications=1{% endif %}" class="text-decoration-none">
+                                            <span class="badge bg-secondary">View</span>
+                                        </a>
+                                    </td>
                                 </tr>
                                 {% empty %}
                                 <tr><td colspan="4" class="text-center">No notifications available.</td></tr>

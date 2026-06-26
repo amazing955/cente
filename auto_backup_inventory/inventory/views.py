@@ -1712,8 +1712,7 @@ def dashboard(request):
     archived_tapes = tapes.filter(status="Retained").count()
     retention_due = tapes.filter(retention_end_date__lte=timezone.localdate()).count()
     pending_shipments = shipments.filter(status__iexact="Pending").count()
-    notification_items = _build_admin_notification_items()
-    alert_count = len(notification_items)
+    alert_count = AuditLog.objects.filter(severity__in=["warning", "error"]).count()
 
     dashboard_tabs = get_dashboard_tabs(request.user, ADMIN_FEATURE_TABS)
 
@@ -1749,94 +1748,8 @@ def dashboard(request):
     return render(request, "dashboard.html", context)
 
 
-def _build_admin_notification_items():
-    def to_sortable_timestamp(value):
-        if isinstance(value, datetime):
-            if timezone.is_aware(value):
-                return value
-            return timezone.make_aware(value, timezone.get_current_timezone())
-        if isinstance(value, date):
-            return timezone.make_aware(datetime.combine(value, datetime.min.time()), timezone.get_current_timezone())
-        return timezone.now()
-
-    notifications = []
-    today = timezone.localdate()
-
-    pending_shipments = Shipment.objects.filter(status__iexact='Pending').order_by('-shipment_date')
-    for shipment in pending_shipments[:3]:
-        notifications.append({
-            'id': f'shipment-{shipment.id}',
-            'title': 'New shipment approval request',
-            'message': f"Shipment {shipment.shipment_id} is waiting for backup administrator approval.",
-            'url': f"{reverse('backup-dashboard')}?show_shipments=1&edit_shipment_pk={shipment.id}",
-            'timestamp': shipment.shipment_date or timezone.now(),
-            'severity': 'warning',
-            'category': 'shipment',
-        })
-
-    pending_tape_requests = TapeRequest.objects.select_related('tape').filter(status='Pending').order_by('-request_date')
-    for request_item in pending_tape_requests[:3]:
-        notifications.append({
-            'id': f'tape-request-{request_item.id}',
-            'title': 'New tape request',
-            'message': f"{request_item.requested_by.username} requested tape {request_item.tape.volser} for {request_item.destination_location or 'approval'}.",
-            'url': f"{reverse('backup-dashboard')}?show_shipments=1",
-            'timestamp': request_item.request_date or timezone.now(),
-            'severity': 'warning',
-            'category': 'tape',
-        })
-
-    due_reconciliations = Reconciliation.objects.filter(status__in=['Open', 'In Progress']).order_by('-created_at')
-    for reconciliation in due_reconciliations[:3]:
-        notifications.append({
-            'id': f'reconciliation-{reconciliation.id}',
-            'title': 'Reconciliation due',
-            'message': f"Reconciliation {reconciliation.reconciliation_id} at {reconciliation.location} still needs review.",
-            'url': f"{reverse('backup-dashboard')}?show_reconciliation=1&reconciliation_pk={reconciliation.id}",
-            'timestamp': reconciliation.created_at or timezone.now(),
-            'severity': 'warning',
-            'category': 'reconciliation',
-        })
-
-    outdated_retention = Tape.objects.filter(retention_end_date__lt=today).order_by('retention_end_date')
-    for tape in outdated_retention[:3]:
-        notifications.append({
-            'id': f'retention-{tape.id}',
-            'title': 'Retention date is outdated',
-            'message': f"Tape {tape.volser} has an expired retention date of {tape.retention_end_date}.",
-            'url': f"{reverse('backup-dashboard')}?show_tape_inventory=1",
-            'timestamp': tape.date_registered or timezone.now(),
-            'severity': 'warning',
-            'category': 'retention',
-        })
-
-    approval_items = list(pending_shipments[:1]) + list(pending_tape_requests[:1])
-    for item in approval_items:
-        if isinstance(item, Shipment):
-            notifications.append({
-                'id': f'approval-{item.id}',
-                'title': 'Pending approval',
-                'message': f"Shipment {item.shipment_id} still requires administrator approval.",
-                'url': f"{reverse('backup-dashboard')}?show_shipments=1&edit_shipment_pk={item.id}",
-                'timestamp': item.shipment_date or timezone.now(),
-                'severity': 'warning',
-                'category': 'approval',
-            })
-        else:
-            notifications.append({
-                'id': f'approval-{item.id}',
-                'title': 'Pending approval',
-                'message': f"Tape request {item.tape.volser} is waiting for approval.",
-                'url': f"{reverse('backup-dashboard')}?show_shipments=1",
-                'timestamp': item.request_date or timezone.now(),
-                'severity': 'warning',
-                'category': 'approval',
-            })
-
-    notifications.sort(key=lambda item: to_sortable_timestamp(item['timestamp']), reverse=True)
-    return notifications[:10]
-
-
+@user_passes_test(lambda u: u.is_superuser or is_backup_administrator(u), login_url='signin')
+@login_required(login_url='signin')
 def backup_dashboard(request):
     tape_form = AddTapeForm(request.POST or None)
     tape_action_form = None
@@ -2327,11 +2240,9 @@ def backup_dashboard(request):
         reconciliation.total_issues = reconciliation.results.count()
         reconciliation.open_issues = reconciliation.results.filter(resolution_status__in=['Open', 'Under Investigation']).count()
     reconciliation_results = selected_reconciliation.results.order_by('-updated_at') if selected_reconciliation else ReconciliationResult.objects.none()
-    notification_items = _build_admin_notification_items()
-    audit_log_queryset = AuditLog.objects.order_by('-timestamp').exclude(name__iexact='Generic Alert').exclude(action__icontains='should not appear')
-    recent_activities = audit_log_queryset[:6]
-    recent_alerts = notification_items[:5]
-    audit_logs = audit_log_queryset
+    recent_activities = AuditLog.objects.order_by('-timestamp')[:6]
+    recent_alerts = AuditLog.objects.filter(severity__in=['warning', 'error']).order_by('-timestamp')[:5]
+    audit_logs = AuditLog.objects.order_by('-timestamp')
 
     inventory_report_tapes = []
     shipment_report_rows = []
@@ -2786,11 +2697,10 @@ def backup_dashboard(request):
         'archived_tapes': archived_tapes,
         'retention_due': retention_due,
         'pending_shipments': shipments.filter(status__iexact='Pending').count(),
-        'alert_count': len(notification_items),
+        'alert_count': AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).count(),
         'shipments': shipments,
         'pending_users': pending_users,
         'pending_user_count': pending_users.count(),
-        'notification_items': notification_items,
         'recent_activities': recent_activities,
         'recent_alerts': recent_alerts,
         'audit_logs': audit_logs,
@@ -2878,7 +2788,16 @@ def operations_dashboard(request):
     audit_logs = AuditLog.objects.order_by('-timestamp')[:12]
 
     unread_alert_count = AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).count()
-    notification_items = AuditLog.objects.filter(severity__in=['warning', 'error']).order_by('-timestamp')[:10]
+    notification_items = []
+    for item in AuditLog.objects.filter(severity__in=['warning', 'error']).order_by('-timestamp')[:10]:
+        notification_items.append({
+            'severity': item.severity,
+            'timestamp': item.timestamp,
+            'message': item.message or item.action or item.name,
+            'action': 'View',
+            'target_url': f"{reverse('operations-dashboard')}?show_notifications=1",
+            'is_read': item.is_read,
+        })
     show_profile_panel = False
     profile_edit_mode = False
     show_notifications_panel = False
@@ -2889,7 +2808,6 @@ def operations_dashboard(request):
         unread_alert_count = 0
 
     tape_request_form = TapeRequestForm(request.POST or None)
-    shipment_request_form = AuditorShipmentRequestForm(request.POST or None)
 
     show_reports_panel = request.GET.get('show_reports') in {'1', 'reports'} or 'show_reports' in request.GET
     report_categories = get_report_categories()
@@ -2980,31 +2898,6 @@ def operations_dashboard(request):
             messages.success(request, 'Tape request submitted successfully.')
             return redirect(f'{reverse("operations-dashboard")}?show_requests=1')
         messages.error(request, 'Please correct the tape request form and try again.')
-
-    if request.method == 'POST' and request.POST.get('form_type') == 'submit_shipment_request':
-        if shipment_request_form.is_valid():
-            branch_name = shipment_request_form.cleaned_data['branch_name'].strip()
-            request_details = shipment_request_form.cleaned_data['request_details'].strip()
-            shipment = Shipment.objects.create(
-                shipment_date=timezone.localdate(),
-                shipment_type='Off-Site Transfer',
-                status='Pending',
-                source_location=branch_name,
-                releasing_custodian=request.user.get_full_name() or request.user.username,
-                receiving_organization='Pending review',
-                approval_remarks=request_details,
-                created_by=request.user,
-                last_updated_by=request.user,
-            )
-            AuditLog.objects.create(
-                name='Shipment Request Submitted',
-                action=f'Shipment request {shipment.shipment_id} created for {branch_name} by {request.user.username}',
-                user=request.user,
-                severity='info',
-            )
-            messages.success(request, 'Shipment request submitted to the backup administrator.')
-            return redirect(reverse('operations-dashboard'))
-        messages.error(request, 'Please provide both the branch name and request details.')
 
     if request.method == 'POST' and request.POST.get('form_type') == 'edit_profile':
         profile_form = UserProfileForm(request.POST, instance=request.user)
@@ -3150,6 +3043,7 @@ def operations_dashboard(request):
             'date': item.timestamp,
             'description': item.action or item.name or item.message,
             'action': 'Review',
+            'target_url': f"{reverse('operations-dashboard')}?show_notifications=1",
         })
     reconciliation_alerts = reconciliation_results.filter(issue_type__in=['Missing', 'Damaged', 'Unexpected']).order_by('-created_at')[:3]
     for result in reconciliation_alerts:
@@ -3158,6 +3052,7 @@ def operations_dashboard(request):
             'date': result.created_at,
             'description': f'{result.issue_type} tape detected for reconciliation {result.reconciliation.reconciliation_id}',
             'action': 'Investigate',
+            'target_url': f"{reverse('operations-dashboard')}?show_reports=reports&report_category=reconciliation&report_type=monthly",
         })
 
     chart_data = {
@@ -3233,7 +3128,6 @@ def operations_dashboard(request):
         'unread_alert_count': unread_alert_count,
         'notification_items': notification_items,
         'tape_request_form': tape_request_form,
-        'shipment_request_form': shipment_request_form,
         'pending_tape_requests': pending_tape_requests,
         'my_tape_requests': my_tape_requests,
         **chart_data,

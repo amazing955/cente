@@ -214,91 +214,42 @@ class TapeRequestWorkflowTests(TestCase):
 
 
 class OperationsDashboardShipmentRequestTests(TestCase):
-    def test_operations_dashboard_can_submit_pending_shipment_request(self):
-        group = Group.objects.create(name='Operations Manager')
-        user = get_user_model().objects.create_user(
-            username='ops-requestor',
-            email='ops-requestor@example.com',
+    def test_operations_dashboard_can_submit_shipment_request_and_notify_backup_admin(self):
+        operations_group = Group.objects.create(name='Operations Manager')
+        backup_group = Group.objects.create(name='Backup Administrator')
+        operator = get_user_model().objects.create_user(
+            username='ops-requester',
+            email='ops-requester@example.com',
             password='pass1234',
             first_name='Op',
             last_name='User',
         )
-        user.groups.add(group)
+        operator.groups.add(operations_group)
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-admin',
+            email='backup-admin@example.com',
+            password='pass1234',
+            first_name='Backup',
+            last_name='Admin',
+        )
+        backup_admin.groups.add(backup_group)
 
-        self.client.force_login(user)
+        self.client.force_login(operator)
         response = self.client.post(
             reverse('operations-dashboard'),
             {
                 'form_type': 'submit_shipment_request',
-                'branch_name': 'Mombasa Branch',
-                'request_details': 'Please arrange a secure shipment for backup tapes.',
+                'branch_name': 'North Branch',
+                'requester_name': 'Jane Doe',
+                'request_details': 'Please arrange a secure transfer for backup tapes.',
             },
         )
 
         self.assertEqual(response.status_code, 302)
-        shipment = Shipment.objects.get(created_by=user)
-        self.assertEqual(shipment.status, 'Pending')
-        self.assertEqual(shipment.source_location, 'Mombasa Branch')
-        self.assertEqual(shipment.approval_remarks, 'Please arrange a secure shipment for backup tapes.')
-
-
-class BackupDashboardNotificationTests(TestCase):
-    def test_admin_notifications_only_include_relevant_event_links(self):
-        backup_group = Group.objects.create(name='Backup Administrator')
-        user = get_user_model().objects.create_user(
-            username='backup-admin-notify',
-            email='backup-admin-notify@example.com',
-            password='pass1234',
-        )
-        user.groups.add(backup_group)
-
-        shipment = Shipment.objects.create(
-            shipment_date=date(2026, 6, 20),
-            shipment_type='Off-Site Transfer',
-            status='Pending',
-            source_location='Nairobi Branch',
-            receiving_organization='Pending review',
-            created_by=user,
-            last_updated_by=user,
-        )
-        tape = Tape.objects.create(
-            volser='TAPE-200',
-            barcode='BAR-200',
-            tape_type='LTO-8',
-            retention_end_date=date(2025, 1, 1),
-            status='Active',
-            current_location='Vault A',
-        )
-        TapeRequest.objects.create(
-            tape=tape,
-            requested_by=user,
-            quantity=1,
-            destination_location='DR Site',
-            receiving_organization='Ops Team',
-            reason='Need this urgently.',
-            status='Pending',
-        )
-        Reconciliation.objects.create(location='HQ Vault', status='Open')
-        AuditLog.objects.create(
-            name='Generic Alert',
-            action='This should not appear in the dashboard notification list.',
-            user=user,
-            severity='warning',
-        )
-
-        self.client.force_login(user)
-        response = self.client.get(reverse('backup-dashboard'))
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'New shipment approval request')
-        self.assertContains(response, 'New tape request')
-        self.assertContains(response, 'Reconciliation due')
-        self.assertContains(response, 'Retention date is outdated')
-        self.assertContains(response, f'href="{reverse("backup-dashboard")}?show_shipments=1&edit_shipment_pk={shipment.id}"')
-        self.assertContains(response, f'href="{reverse("backup-dashboard")}?show_shipments=1"')
-        self.assertContains(response, f'href="{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={Reconciliation.objects.first().id}"')
-        self.assertContains(response, f'href="{reverse("backup-dashboard")}?show_tape_inventory=1"')
-        self.assertNotContains(response, 'This should not appear in the dashboard notification list.')
+        shipment = Shipment.objects.get(created_by=operator)
+        self.assertEqual(shipment.source_location, 'North Branch')
+        self.assertEqual(shipment.releasing_custodian, 'Jane Doe')
+        self.assertTrue(AuditLog.objects.filter(action__icontains='Shipment request').exists())
 
 
 class OperationsDashboardReportsTests(TestCase):
