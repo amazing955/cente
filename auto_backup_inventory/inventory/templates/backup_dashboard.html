@@ -711,12 +711,23 @@ footer{
 <div class="card shadow-sm mb-4" style="min-height:70vh;">
     <div class="card-header d-flex justify-content-between align-items-center">
         <div>
-            <h5 class="mb-0">Inventory Report</h5>
-            <small class="text-muted">Monthly inventory view</small>
+            <h5 class="mb-0">{% if report_category == 'exception' %}Exception Report{% else %}Inventory Report{% endif %}</h5>
+            <small class="text-muted">{% if report_category == 'exception' %}Exceptions and tape issues for the selected period{% else %}Monthly inventory view{% endif %}</small>
         </div>
+        {% if report_category == 'exception' %}
+        <div class="btn-group">
+            <a href="{% url 'backup-dashboard' %}?show_print_barcodes=1" class="btn btn-sm btn-info">
+                <i class="bi bi-printer me-1"></i> Reprint Barcode
+            </a>
+            <a href="{% url 'backup-dashboard' %}?show_tape_inventory=1" class="btn btn-sm btn-danger">
+                <i class="bi bi-trash3 me-1"></i> Retire Tape
+            </a>
+        </div>
+        {% else %}
         <a href="{% url 'backup-dashboard' %}?show_reports=reports&report_category=inventory&report_period={{ current_month }}&report_type=monthly&export_csv=inventory" class="btn btn-sm btn-outline-primary">
             <i class="bi bi-file-earmark-spreadsheet me-1"></i> Export CSV
         </a>
+        {% endif %}
     </div>
     <div class="card-body p-0">
         {% if not report_category %}
@@ -1431,6 +1442,9 @@ footer{
         <div class="btn-group gap-2" role="group">
             <a href="{% url 'backup-dashboard' %}?show_add_tape=1" class="btn btn-sm btn-primary">
                 <i class="bi bi-plus-circle me-1"></i> Add Tape
+            </a>
+            <a href="{% url 'backup-dashboard' %}?show_reports=reports&report_category=exception" class="btn btn-sm btn-warning">
+                <i class="bi bi-exclamation-triangle me-1"></i> Exceptions
             </a>
             <a href="{% url 'backup-dashboard' %}?show_print_barcodes=1" class="btn btn-sm btn-info">
                 <i class="bi bi-printer me-1"></i> Print Barcodes
@@ -2173,32 +2187,7 @@ footer{
 
 <div class="card shadow-sm mt-4">
 
-    <div class="card-header">
-        Recent Alerts
-    </div>
-
-    <div class="card-body">
-
-        {% if recent_alerts %}
-            {% for alert in recent_alerts %}
-                {% if alert.severity == 'error' %}
-                    <div class="alert alert-danger d-flex justify-content-between align-items-start">
-                {% else %}
-                    <div class="alert alert-warning d-flex justify-content-between align-items-start">
-                {% endif %}
-                    <span>{{ alert.action|default:alert.name }}</span>
-                    {% if alert.is_new %}
-                        <span class="badge bg-primary">New</span>
-                    {% endif %}
-                </div>
-            {% endfor %}
-        {% else %}
-            <div class="alert alert-secondary">
-                No alerts to show.
-            </div>
-        {% endif %}
-
-    </div>
+   
 
 </div>
 
