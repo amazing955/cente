@@ -159,15 +159,14 @@ STATICFILES_DIRS = [
     BASE_DIR / 'inventory' / 'static',
 ]
 
-JAZZMIN_SETTINGS = {        
+JAZZMIN_SETTINGS = {
     'site_title': 'Backup Inventory Admin',
     'site_header': 'System Admin',
     'site_brand': 'Backup Inventory',
-    "site_logo": "inventory/round.jpg",
-    "login_logo": "inventory/round.jpg",
-    "site_logo_classes": "img-circle",
+    'site_logo': 'inventory/round.jpg',
+    'login_logo': 'inventory/round.jpg',
+    'site_logo_classes': 'img-circle',
     'welcome_sign': 'Welcome to System Admin',
-    
     'show_sidebar': True,
     'navigation_expanded': True,
     'hide_apps': [],
@@ -179,11 +178,11 @@ JAZZMIN_SETTINGS = {
         'inventory.tape': 'fas fa-archive',
         'inventory.shipment': 'fas fa-shipping-fast',
     },
+    'footer_text': '',
 }
 
 JAZZMIN_UI_TWEAKS = {
     'theme': 'cosmo',
-    
 }
 
 

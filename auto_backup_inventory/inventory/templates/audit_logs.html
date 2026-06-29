@@ -2,11 +2,13 @@
 {% block content %}
 <div class="card p-4">
     <h3 class="fw-semibold mb-3">Audit Trail Review</h3>
-    <form method="get" class="row g-2 mb-3">
+    <form method="get" action="{% url 'auditor-dashboard' %}" class="row g-2 mb-3">
+        <input type="hidden" name="view" value="audit-logs">
         <div class="col-md-2"><input class="form-control" name="search" value="{{ filters.search }}" placeholder="Search"></div>
         <div class="col-md-2"><input class="form-control" name="module" value="{{ filters.module }}" placeholder="Module"></div>
         <div class="col-md-2"><input class="form-control" name="action_type" value="{{ filters.action_type }}" placeholder="Action"></div>
         <div class="col-md-2"><input class="form-control" name="severity" value="{{ filters.severity }}" placeholder="Severity"></div>
+        <div class="col-md-2"><input class="form-control" name="user" value="{{ filters.user }}" placeholder="User"></div>
         <div class="col-md-2"><input class="form-control" type="date" name="date_from" value="{{ filters.date_from }}"></div>
         <div class="col-md-2"><input class="form-control" type="date" name="date_to" value="{{ filters.date_to }}"></div>
         <div class="col-12"><button class="btn btn-primary btn-sm">Apply Filters</button></div>

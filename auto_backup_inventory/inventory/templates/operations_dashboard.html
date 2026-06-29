@@ -903,7 +903,6 @@ body {
                                     <th>Status</th>
                                     <th>Date</th>
                                     <th>Description</th>
-                                    <th>Action</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -912,14 +911,9 @@ body {
                                     <td>{{ notification.severity|title }}</td>
                                     <td>{{ notification.timestamp|date:'M d, Y H:i' }}</td>
                                     <td>{{ notification.message|default:notification.action|default:'View notification' }}</td>
-                                    <td>
-                                        <a href="{% if notification.target_url %}{{ notification.target_url }}{% else %}{% url 'operations-dashboard' %}?show_notifications=1{% endif %}" class="text-decoration-none notification-view-link" data-target-url="{% if notification.target_url %}{{ notification.target_url }}{% else %}{% url 'operations-dashboard' %}?show_notifications=1{% endif %}" onclick="handleNotificationAction(this); return false;">
-                                            <span class="badge bg-secondary">View</span>
-                                        </a>
-                                    </td>
                                 </tr>
                                 {% empty %}
-                                <tr><td colspan="4" class="text-center">No notifications available.</td></tr>
+                                <tr><td colspan="3" class="text-center">No notifications available.</td></tr>
                                 {% endfor %}
                             </tbody>
                         </table>

@@ -1,11 +1,13 @@
+# Core web framework
 Django==6.0.6
-django-jazzmin
-Pillow
-openpyxl
-pandas
-python-dateutil
-qrcode
-python-barcode
-reportlab
-requests
-psycopg2-binary
+
+# Admin theme
+django-jazzmin==3.0.4
+
+# File and report generation
+Pillow==12.2.0
+openpyxl==3.1.5
+reportlab==5.0.0
+
+# Database driver
+psycopg2-binary==2.9.12

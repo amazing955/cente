@@ -123,6 +123,14 @@ class AuditorDashboardTests(TestCase):
         self.assertContains(response, 'Tape inventory reconciliation completed')
         self.assertContains(response, 'Audit Trail Review')
 
+    def test_audit_logs_filter_form_submits_audit_logs_view_param(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('auditor-dashboard'), {'view': 'audit-logs'})
+
+        self.assertContains(response, 'name="view"')
+        self.assertContains(response, 'value="audit-logs"')
+
     def test_unknown_page_uses_custom_404_template(self):
         response = self.client.get('/definitely-not-a-real-page/')
 
