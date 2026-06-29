@@ -1,0 +1,11 @@
+Django==6.0.6
+django-jazzmin
+Pillow
+openpyxl
+pandas
+python-dateutil
+qrcode
+python-barcode
+reportlab
+requests
+psycopg2-binary

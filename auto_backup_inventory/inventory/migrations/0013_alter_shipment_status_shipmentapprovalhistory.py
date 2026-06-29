@@ -9,7 +9,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('inventory', '0012_alter_applicationsetting_id_alter_auditlog_id_and_more'),
+        ('inventory', '0012b_uuid_primary_keys'),
     ]
 
     operations = [
