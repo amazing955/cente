@@ -104,6 +104,18 @@ body {
 .profile-widget {
     cursor: pointer;
 }
+.feature-nav-link {
+    color: #1f3c88;
+    text-decoration: none;
+    padding: 0.35rem 0.7rem;
+    border-radius: 999px;
+    background: #f4f7ff;
+    font-size: 0.92rem;
+}
+.feature-nav-link:hover {
+    background: #e6edff;
+    color: #102a5e;
+}
 </style>
 </head>
 <body>
@@ -115,15 +127,14 @@ body {
     </div>
     <nav class="nav flex-column gap-2">
         <a class="nav-link active" href="#dashboard" id="dashboardNavLink"><i class="bi bi-speedometer2"></i> Dashboard</a>
-        <a class="nav-link partial-load" href="#shipment_approvals" data-url="{% url 'shipment-approvals' %}"><i class="bi bi-check2-square"></i> Shipment Approvals</a>
-        <a class="nav-link analytics-toggle" href="#analytics"><i class="bi bi-graph-up"></i> Analytics</a>
-        <a class="nav-link" href="#shipment_monitoring"><i class="bi bi-truck"></i> Shipment Monitoring</a>
-        <a class="nav-link" href="#exception_management"><i class="bi bi-exclamation-triangle"></i> Exception Management</a>
-        <a class="nav-link" href="#custody_governance"><i class="bi bi-shield-lock"></i> Custody Governance</a>
-        <a class="nav-link" href="#reconciliation_review"><i class="bi bi-arrow-repeat"></i> Reconciliation Review</a>
-        <a class="nav-link" href="#compliance_monitoring"><i class="bi bi-file-earmark-check"></i> Compliance Monitoring</a>
-        <a class="nav-link" href="#reports"><i class="bi bi-bar-chart-line"></i> Reports</a>
-        
+            <a class="nav-link partial-load" href="#shipment_approvals" data-url="{% url 'shipment-approvals' %}"><i class="bi bi-check2-square"></i> Shipment Approvals</a>
+            <a class="nav-link analytics-toggle" href="#analytics"><i class="bi bi-graph-up"></i> Analytics</a>
+            <a class="nav-link" href="#shipment_monitoring"><i class="bi bi-truck"></i> Shipment Monitoring</a>
+            <a class="nav-link" href="#exception_management"><i class="bi bi-exclamation-triangle"></i> Exception Management</a>
+            <a class="nav-link" href="#custody_governance"><i class="bi bi-shield-lock"></i> Custody Governance</a>
+            <a class="nav-link" href="#reconciliation_review"><i class="bi bi-arrow-repeat"></i> Reconciliation Review</a>
+            <a class="nav-link" href="#compliance_monitoring"><i class="bi bi-file-earmark-check"></i> Compliance Monitoring</a>
+            <a class="nav-link" href="#reports"><i class="bi bi-bar-chart-line"></i> Reports</a>
     </nav>
 </div>
 <div class="main-content" id="dashboard">
@@ -132,9 +143,21 @@ body {
         <div class="top-navbar d-flex align-items-center justify-content-between mb-4">
             <div>
                 <h1 class="h4 dashboard-title mb-1">Operations Manager Dashboard</h1>
-                <p class="small-note mb-0">Automated Backup Tape Inventory Management System — Banking Operations Command Center</p>
+                <p class="small-note mb-0">Banking Operations Command Center</p>
             </div>
         <div class="d-flex align-items-center gap-3">
+            {% if dashboard_features %}
+                <div class="dropdown">
+                    <button class="btn btn-outline-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                        <i class="bi bi-plus-circle"></i> New
+                    </button>
+                    <ul class="dropdown-menu">
+                        {% for entry in dashboard_features %}
+                            <li><a class="dropdown-item" href="{{ entry.target_url }}"><i class="{{ entry.icon }}"></i> {{ entry.name }}</a></li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endif %}
             <a href="{% url 'start-shipment-request' %}" class="btn btn-outline-primary btn-sm partial-load" id="startShipmentBtn" data-url="{% url 'start-shipment-request' %}?partial=1" data-panel="#shipment_approvals"><i class="bi bi-truck"></i> Start a shipment</a>
             <button class="btn btn-outline-secondary btn-sm position-relative" id="notificationBellBtn" title="Notifications">
                 <i class="bi bi-bell"></i>
@@ -1138,6 +1161,23 @@ body {
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+function getCookie(name) {
+    const cookieValue = document.cookie.match('(?:^|; )' + name + '=([^;]*)');
+    return cookieValue ? decodeURIComponent(cookieValue[1]) : null;
+}
+
+function getCsrfHeaders(form, method) {
+    const headers = { 'X-Requested-With': 'XMLHttpRequest' };
+    if (method !== 'GET') {
+        const hiddenToken = form?.querySelector('input[name="csrfmiddlewaretoken"]');
+        const token = hiddenToken?.value || getCookie('csrftoken');
+        if (token) {
+            headers['X-CSRFToken'] = token;
+        }
+    }
+    return headers;
+}
+
 function updateSidebarActiveLink(targetHref) {
     document.querySelectorAll('.sidebar .nav-link').forEach(link => {
         link.classList.toggle('active', link.getAttribute('href') === targetHref);
@@ -1191,7 +1231,8 @@ function submitEmbeddedApprovalForm(form) {
     const method = (form.method || 'GET').toUpperCase();
     const options = {
         method,
-        headers: { 'X-Requested-With': 'XMLHttpRequest' },
+        headers: getCsrfHeaders(form, method),
+        credentials: 'same-origin',
     };
 
     if (method === 'GET') {

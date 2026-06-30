@@ -51,6 +51,7 @@ ALLOWED_HOSTS = [host.strip() for host in os.getenv('ALLOWED_HOSTS', '').split('
 # Application definition
 
 INSTALLED_APPS = [
+    'rest_framework',
     'jazzmin',
     'django.contrib.admin',
     'django.contrib.auth',
@@ -86,6 +87,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'inventory.context_processors.dashboard_features',
             ],
         },
     },
@@ -184,5 +186,4 @@ JAZZMIN_SETTINGS = {
 JAZZMIN_UI_TWEAKS = {
     'theme': 'cosmo',
 }
-
 

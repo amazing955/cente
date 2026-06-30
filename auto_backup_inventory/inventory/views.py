@@ -4,6 +4,7 @@ from django.contrib.auth.models import Group
 from django.conf import settings
 import random
 import string
+from django.core.exceptions import ValidationError
 from django.core.mail import EmailMessage, send_mail
 from django.core.paginator import Paginator
 from django.template.loader import render_to_string
@@ -19,7 +20,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from django.contrib import messages
 from django.db.models import Q, Count
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
@@ -28,6 +29,86 @@ from django.utils import timezone
 def custom_page_not_found(request, exception=None):
     return render(request, '404.html', status=404)
 from django.utils.dateparse import parse_date
+
+
+# REST API helpers used by the dashboard and external integrations.
+def api_dashboard_summary(request):
+    if not request.user.is_authenticated:
+        return JsonResponse({'detail': 'Authentication required.'}, status=401)
+
+    summary = {
+        'tape_count': Tape.objects.count(),
+        'shipment_count': Shipment.objects.count(),
+        'audit_log_count': AuditLog.objects.count(),
+        'pending_shipments': Shipment.objects.filter(status__iexact='Pending').count(),
+    }
+    return JsonResponse(summary)
+
+
+def api_tape_list(request):
+    if not request.user.is_authenticated:
+        return JsonResponse({'detail': 'Authentication required.'}, status=401)
+
+    tapes = Tape.objects.order_by('-date_registered')[:20]
+    payload = {
+        'count': tapes.count(),
+        'results': [
+            {
+                'id': str(tape.id),
+                'volser': tape.volser,
+                'barcode': tape.barcode,
+                'status': tape.status,
+                'location': tape.current_location,
+                'retention_end_date': tape.retention_end_date.isoformat(),
+            }
+            for tape in tapes
+        ],
+    }
+    return JsonResponse(payload)
+
+
+def api_shipment_list(request):
+    if not request.user.is_authenticated:
+        return JsonResponse({'detail': 'Authentication required.'}, status=401)
+
+    shipments = Shipment.objects.order_by('-shipment_date', '-created_at')[:20]
+    payload = {
+        'count': shipments.count(),
+        'results': [
+            {
+                'id': str(shipment.id),
+                'shipment_id': shipment.shipment_id,
+                'status': shipment.status,
+                'shipment_type': shipment.shipment_type,
+                'source_location': shipment.source_location,
+                'destination_location': shipment.destination_location,
+                'priority_level': shipment.priority_level,
+            }
+            for shipment in shipments
+        ],
+    }
+    return JsonResponse(payload)
+
+
+def api_audit_log_list(request):
+    if not request.user.is_authenticated:
+        return JsonResponse({'detail': 'Authentication required.'}, status=401)
+
+    logs = AuditLog.objects.order_by('-timestamp')[:20]
+    payload = {
+        'count': logs.count(),
+        'results': [
+            {
+                'id': str(log.id),
+                'name': log.name,
+                'action': log.action,
+                'severity': log.severity,
+                'timestamp': log.timestamp.isoformat() if log.timestamp else None,
+            }
+            for log in logs
+        ],
+    }
+    return JsonResponse(payload)
 
 from .forms import *
 from .models import *
@@ -47,6 +128,22 @@ def get_object_by_uuid_pk(model, pk_value):
     if not is_valid_uuid(pk_value):
         return None
     return model.objects.filter(pk=pk_value).first()
+
+
+def get_feature_panel_state(feature_key):
+    if not feature_key:
+        return {}
+
+    mapping = {
+        'add_tape': {'show_add_tape_panel': True},
+        'tape_inventory': {'show_tape_inventory_panel': True},
+        'shipments': {'show_shipments_panel': True},
+        'reconciliation': {'show_reconciliation_panel': True},
+        'reports': {'show_reports_panel': True},
+        'audit_logs': {'show_audit_panel': True},
+        'backup_dashboard': {},
+    }
+    return mapping.get(feature_key, {})
 
 
 def is_courier(user):
@@ -804,12 +901,48 @@ def index(request):
     return render(request, "index.html")
 
 
+def has_dashboard_feature_access(user, feature_key):
+    if not user or not user.is_authenticated or not feature_key:
+        return False
+    if user.is_superuser:
+        return True
+
+    if DashboardFeatureExemption.objects.filter(user=user, feature_key=feature_key, is_active=True).exists():
+        return False
+
+    group_ids = list(user.groups.values_list('id', flat=True))
+    if not group_ids:
+        return False
+
+    return DashboardFeaturePermission.objects.filter(
+        role_id__in=group_ids,
+        feature_key=feature_key,
+        can_view=True,
+    ).exists()
+
+
 def is_backup_administrator(user):
-    return user.is_authenticated and user.groups.filter(name='Backup Administrator').exists()
+    return user.is_authenticated and (
+        user.is_superuser or
+        user.groups.filter(name='Backup Administrator').exists() or
+        has_dashboard_feature_access(user, 'backup_dashboard') or
+        has_dashboard_feature_access(user, 'add_tape') or
+        has_dashboard_feature_access(user, 'tape_inventory') or
+        has_dashboard_feature_access(user, 'shipments') or
+        has_dashboard_feature_access(user, 'reconciliation') or
+        has_dashboard_feature_access(user, 'reports') or
+        has_dashboard_feature_access(user, 'audit_logs')
+    )
 
 
 def is_operations_manager(user):
-    return user.is_authenticated and user.groups.filter(name='Operations Manager').exists()
+    return user.is_authenticated and (
+        user.is_superuser or
+        user.groups.filter(name='Operations Manager').exists() or
+        has_dashboard_feature_access(user, 'operations_dashboard') or
+        has_dashboard_feature_access(user, 'shipment_approvals') or
+        has_dashboard_feature_access(user, 'exception_management')
+    )
 
 
 def is_it_compliance_auditor(user):
@@ -1859,6 +1992,22 @@ def backup_dashboard(request):
     profile_form = None
     show_profile_panel = False
 
+    active_feature_key = request.GET.get('feature_key') or request.POST.get('feature_key')
+    feature_panel_state = get_feature_panel_state(active_feature_key)
+    if feature_panel_state:
+        if feature_panel_state.get('show_add_tape_panel'):
+            show_add_tape_panel = True
+        if feature_panel_state.get('show_tape_inventory_panel'):
+            show_tape_inventory_panel = True
+        if feature_panel_state.get('show_shipments_panel'):
+            show_shipments_panel = True
+        if feature_panel_state.get('show_reconciliation_panel'):
+            show_reconciliation_panel = True
+        if feature_panel_state.get('show_reports_panel'):
+            show_reports_panel = True
+        if feature_panel_state.get('show_audit_panel'):
+            show_audit_panel = True
+
     selected_tape_id = request.GET.get('selected_tape') or request.POST.get('selected_tape')
     if selected_tape_id:
         selected_tape = get_object_by_uuid_pk(Tape, selected_tape_id)
@@ -2097,6 +2246,22 @@ def backup_dashboard(request):
                         severity='success',
                     )
                     messages.success(request, f'Location updated for {selected_tape.volser}.')
+                    return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
+                elif action == 'mark_scratch':
+                    try:
+                        selected_tape.status = 'Scratch Eligible'
+                        selected_tape.save()
+                    except ValidationError as exc:
+                        messages.error(request, exc.messages[0])
+                        return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
+
+                    AuditLog.objects.create(
+                        name='Tape Marked Scratch Eligible',
+                        action=f'Marked tape {selected_tape.volser} as scratch eligible',
+                        user=request.user,
+                        severity='warning',
+                    )
+                    messages.success(request, f'{selected_tape.volser} marked as scratch eligible.')
                     return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
                 elif action == 'mark_damaged':
                     selected_tape.status = 'Damaged'
@@ -2947,6 +3112,7 @@ def backup_dashboard(request):
         'show_alerts_panel': show_alerts_panel,
         'show_reports_panel': show_reports_panel,
         'show_reconciliation_reports_panel': show_reconciliation_reports_panel,
+        'active_feature_key': active_feature_key,
         'show_shipments_panel': show_shipments_panel,
         'show_add_shipment_panel': show_add_shipment_panel,
         'show_edit_shipment_panel': show_edit_shipment_panel,

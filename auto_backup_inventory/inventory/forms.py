@@ -1,7 +1,7 @@
 from django import forms
 from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import UserCreationForm
-from django.contrib.auth.models import Group
+from django.contrib.auth.models import Group, Permission
 from django.core.validators import validate_email
 from django.db.models import Q
 from django.utils import timezone
@@ -88,6 +88,20 @@ FEATURE_CHOICES = [
 ]
 
 
+def get_feature_choices():
+    choices = list(FEATURE_CHOICES)
+    permissions = Permission.objects.select_related('content_type').order_by(
+        'content_type__app_label',
+        'content_type__model',
+        'codename',
+    )
+    for permission in permissions:
+        value = f"{permission.content_type.app_label}.{permission.codename}"
+        label = f"{permission.name} ({value})"
+        choices.append((value, label))
+    return choices
+
+
 class RoleCreationForm(forms.Form):
     role_name = forms.CharField(
         max_length=150,
@@ -95,11 +109,15 @@ class RoleCreationForm(forms.Form):
         label='Role Name',
     )
     features = forms.MultipleChoiceField(
-        choices=FEATURE_CHOICES,
+        choices=get_feature_choices(),
         widget=forms.CheckboxSelectMultiple(attrs={'class': 'form-check-input'}),
         label='Features',
         required=False,
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['features'].choices = get_feature_choices()
 
 
 class RoleFeatureUpdateForm(forms.Form):
@@ -109,11 +127,15 @@ class RoleFeatureUpdateForm(forms.Form):
         label='Role',
     )
     features = forms.MultipleChoiceField(
-        choices=FEATURE_CHOICES,
+        choices=get_feature_choices(),
         widget=forms.CheckboxSelectMultiple(attrs={'class': 'form-check-input'}),
         label='Features',
         required=False,
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['features'].choices = get_feature_choices()
 
 
 class UserRoleAssignmentForm(forms.Form):
@@ -186,6 +208,18 @@ class TapeForm(forms.ModelForm):
             raise forms.ValidationError('Barcode already exists.')
         return barcode
 
+    def clean_status(self):
+        new_status = self.cleaned_data.get('status')
+        if new_status in {'Scratch', 'Scratch Eligible'}:
+            reasons = self.instance.get_scratch_block_reasons(
+                new_status,
+                legal_hold=self.cleaned_data.get('legal_hold', self.instance.legal_hold),
+                audit_hold=self.cleaned_data.get('audit_hold', self.instance.audit_hold),
+            )
+            if reasons:
+                raise forms.ValidationError(self.instance.get_scratch_rejection_message(new_status, reasons))
+        return new_status
+
 
 class AddTapeForm(forms.ModelForm):
     class Meta:
@@ -223,6 +257,18 @@ class AddTapeForm(forms.ModelForm):
         if qs.exists():
             raise forms.ValidationError('VolSER already exists.')
         return volser
+
+    def clean_status(self):
+        new_status = self.cleaned_data.get('status')
+        if new_status in {'Scratch', 'Scratch Eligible'}:
+            reasons = self.instance.get_scratch_block_reasons(
+                new_status,
+                legal_hold=self.cleaned_data.get('legal_hold', self.instance.legal_hold),
+                audit_hold=self.cleaned_data.get('audit_hold', self.instance.audit_hold),
+            )
+            if reasons:
+                raise forms.ValidationError(self.instance.get_scratch_rejection_message(new_status, reasons))
+        return new_status
 
     def save(self, commit=True):
         tape = super().save(commit=False)

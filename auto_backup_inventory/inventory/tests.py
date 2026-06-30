@@ -3,16 +3,19 @@ from io import BytesIO
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Group
+from django.contrib.auth.models import Group, Permission
+from django.contrib.contenttypes.models import ContentType
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 from openpyxl import Workbook
 
-from .forms import BackupShipmentAssignmentForm
+from .forms import BackupShipmentAssignmentForm, RoleCreationForm
 from .models import (
     AuditLog,
     CourierProfile,
+    DashboardFeatureExemption,
+    DashboardFeaturePermission,
     DeliveryConfirmation,
     Reconciliation,
     Shipment,
@@ -187,6 +190,211 @@ class ShipmentFormTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Jane Doe')
+
+
+class DashboardFeatureNavigationTests(TestCase):
+    def test_role_form_includes_django_admin_permissions_as_assignable_features(self):
+        content_type = ContentType.objects.get(app_label='inventory', model='tape')
+        permission = Permission.objects.get(content_type=content_type, codename='view_tape')
+
+        form = RoleCreationForm()
+        feature_choices = dict(form.fields['features'].choices)
+
+        self.assertIn(f'{permission.content_type.app_label}.{permission.codename}', feature_choices)
+
+    def test_dashboard_context_processor_exposes_permitted_features(self):
+        group = Group.objects.create(name='Operations Manager')
+        user = get_user_model().objects.create_user(
+            username='nav-user',
+            email='nav-user@example.com',
+            password='pass1234',
+        )
+        user.groups.add(group)
+
+        DashboardFeaturePermission.objects.create(role=group, feature_key='operations_dashboard', can_view=True)
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('operations-dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(any(entry['key'] == 'operations_dashboard' for entry in response.context['dashboard_features']))
+
+    def test_dashboard_feature_exemptions_hide_feature_for_individual_user(self):
+        group = Group.objects.create(name='Operations Manager')
+        user = get_user_model().objects.create_user(
+            username='nav-exempt',
+            email='nav-exempt@example.com',
+            password='pass1234',
+        )
+        user.groups.add(group)
+
+        DashboardFeaturePermission.objects.create(role=group, feature_key='operations_dashboard', can_view=True)
+        DashboardFeatureExemption.objects.create(user=user, feature_key='operations_dashboard', is_active=True, reason='Temporary exemption')
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('operations-dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(any(entry['key'] == 'operations_dashboard' for entry in response.context['dashboard_features']))
+
+    def test_feature_permission_allows_access_for_custom_group_name(self):
+        group = Group.objects.create(name='Warehouse Ops')
+        user = get_user_model().objects.create_user(
+            username='custom-group-user',
+            email='custom-group-user@example.com',
+            password='pass1234',
+        )
+        user.groups.add(group)
+
+        DashboardFeaturePermission.objects.create(role=group, feature_key='operations_dashboard', can_view=True)
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('operations-dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_feature_link_opens_selected_section_inside_backup_dashboard(self):
+        group = Group.objects.create(name='Backup Administrator')
+        user = get_user_model().objects.create_user(
+            username='backup-feature-user',
+            email='backup-feature-user@example.com',
+            password='pass1234',
+        )
+        user.groups.add(group)
+
+        DashboardFeaturePermission.objects.create(role=group, feature_key='tape_inventory', can_view=True)
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('backup-dashboard'), {'feature_key': 'tape_inventory'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['show_tape_inventory_panel'])
+        self.assertEqual(response.context['active_feature_key'], 'tape_inventory')
+
+
+class ApiEndpointTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username='api-user',
+            email='api-user@example.com',
+            password='pass1234',
+        )
+        self.client.force_login(self.user)
+
+    def test_dashboard_summary_api_returns_counts(self):
+        Tape.objects.create(
+            volser='TAPE-001',
+            barcode='BAR-001',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+        )
+        Shipment.objects.create(
+            shipment_id='SHP-1001',
+            source_location='HQ',
+            destination_location='DR',
+            shipment_type='Off-Site Transfer',
+            priority_level='Normal',
+            status='Pending',
+            created_by=self.user,
+        )
+        AuditLog.objects.create(
+            name='System',
+            action='API endpoint tested',
+            user=self.user,
+            severity='info',
+        )
+
+        response = self.client.get('/api/dashboard-summary/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['tape_count'], 1)
+        self.assertEqual(response.json()['shipment_count'], 1)
+        self.assertEqual(response.json()['audit_log_count'], 1)
+
+    def test_tape_list_api_returns_tape_payload(self):
+        Tape.objects.create(
+            volser='TAPE-002',
+            barcode='BAR-002',
+            tape_type='LTO-9',
+            retention_end_date=date(2031, 1, 1),
+        )
+
+        response = self.client.get('/api/tapes/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['count'], 1)
+        self.assertEqual(response.json()['results'][0]['volser'], 'TAPE-002')
+
+    def test_shipments_api_returns_collection(self):
+        Shipment.objects.create(
+            shipment_id='SHP-2001',
+            source_location='HQ',
+            destination_location='DR',
+            shipment_type='Off-Site Transfer',
+            priority_level='Normal',
+            status='Pending',
+            created_by=self.user,
+        )
+
+        response = self.client.get('/api/shipments/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['count'], 1)
+        self.assertEqual(response.json()['results'][0]['shipment_id'], 'SHP-2001')
+
+    def test_audit_logs_api_returns_collection(self):
+        AuditLog.objects.create(
+            name='System',
+            action='Audit log fetched through API',
+            user=self.user,
+            severity='info',
+        )
+
+        response = self.client.get('/api/audit-logs/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['count'], 1)
+        self.assertEqual(response.json()['results'][0]['action'], 'Audit log fetched through API')
+
+
+class TapeStatusProtectionTests(TestCase):
+    def test_scratch_status_change_is_rejected_for_tape_on_legal_hold(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-admin-protect',
+            email='backup-admin-protect@example.com',
+            password='pass1234',
+        )
+        backup_admin.groups.add(backup_group)
+        tape = Tape.objects.create(
+            volser='TAPE-200',
+            barcode='BAR-200',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+            status='Active',
+            current_location='Vault A',
+            legal_hold=True,
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.post(
+            reverse('backup-dashboard'),
+            {
+                'form_type': 'tape_action',
+                'selected_tape': tape.pk,
+                'action': 'edit_details',
+                'volser': tape.volser,
+                'barcode': tape.barcode,
+                'current_location': tape.current_location,
+                'retention_end_date': '2030-01-01',
+                'status': 'Scratch Eligible',
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Cannot mark tape as Scratch')
+        tape.refresh_from_db()
+        self.assertEqual(tape.status, 'Active')
 
 
 class TapeRequestWorkflowTests(TestCase):

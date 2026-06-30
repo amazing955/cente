@@ -2,12 +2,14 @@ import uuid
 from datetime import time, timedelta
 
 from django.conf import settings
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, Group
+from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
 from django.db import models
 from django.db.models import Count
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
 
@@ -136,6 +138,30 @@ class Tape(models.Model):
     class Meta:
         ordering = ['-date_registered']
 
+    def get_scratch_block_reasons(self, new_status, legal_hold=None, audit_hold=None):
+        if new_status not in {'Scratch', 'Scratch Eligible'}:
+            return []
+
+        if legal_hold is None:
+            legal_hold = self.legal_hold
+        if audit_hold is None:
+            audit_hold = self.audit_hold
+
+        reasons = []
+        if legal_hold:
+            reasons.append('legal hold')
+        if audit_hold:
+            reasons.append('audit hold')
+        if self.requests.filter(status__in=['Pending', 'Approved']).exists():
+            reasons.append('ongoing restore dependency')
+        if self.exceptions.exists() or self.reconciliation_results.exclude(resolution_status__in=['Resolved', 'Closed']).exists():
+            reasons.append('unresolved exception')
+        return reasons
+
+    def get_scratch_rejection_message(self, new_status, reasons):
+        reason_text = ', '.join(reasons)
+        return f"Cannot mark tape as {new_status} while it is under {reason_text}."
+
     def generate_barcode(self):
         normalized_volser = self.volser.strip().upper().replace(' ', '').replace('-', '')
         parts = [normalized_volser]
@@ -169,6 +195,16 @@ class Tape(models.Model):
     def save(self, *args, **kwargs):
         if not self.barcode:
             self.barcode = self.generate_barcode()
+
+        previous_status = None
+        if self.pk:
+            previous_status = Tape.objects.filter(pk=self.pk).values_list('status', flat=True).first()
+
+        if self.status in {'Scratch', 'Scratch Eligible'} and (not self.pk or previous_status != self.status):
+            reasons = self.get_scratch_block_reasons(self.status, legal_hold=self.legal_hold, audit_hold=self.audit_hold)
+            if reasons:
+                raise ValidationError(self.get_scratch_rejection_message(self.status, reasons))
+
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -756,3 +792,174 @@ def send_auditlog_email_notification(sender, instance, created, **kwargs):
         f"Timestamp: {instance.timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n"
     )
     send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=True)
+
+
+DASHBOARD_FEATURE_CATALOG = [
+    {
+        'key': 'backup_dashboard',
+        'name': 'Dashboard',
+        'icon': 'bi bi-speedometer2',
+        'url_name': 'backup-dashboard',
+        'scope': 'backup',
+        'description': 'Backup administrator overview',
+        'url_params': {},
+    },
+    {
+        'key': 'add_tape',
+        'name': 'Add Tape',
+        'icon': 'bi bi-plus-circle',
+        'url_name': 'backup-dashboard',
+        'scope': 'backup',
+        'description': 'Create a new tape record',
+        'url_params': {'show_add_tape': '1'},
+    },
+    {
+        'key': 'tape_inventory',
+        'name': 'Tape Inventory',
+        'icon': 'bi bi-hdd-stack',
+        'url_name': 'backup-dashboard',
+        'scope': 'backup',
+        'description': 'Browse tape inventory',
+        'url_params': {'show_tape_inventory': '1'},
+    },
+    {
+        'key': 'shipments',
+        'name': 'Shipments',
+        'icon': 'bi bi-truck',
+        'url_name': 'backup-dashboard',
+        'scope': 'backup',
+        'description': 'Shipment management',
+        'url_params': {'show_shipments': '1'},
+    },
+    {
+        'key': 'reconciliation',
+        'name': 'Reconciliation',
+        'icon': 'bi bi-arrow-repeat',
+        'url_name': 'backup-dashboard',
+        'scope': 'backup',
+        'description': 'Perform reconciliation reviews',
+        'url_params': {'show_reconciliation': '1'},
+    },
+    {
+        'key': 'reports',
+        'name': 'Reports',
+        'icon': 'bi bi-file-earmark-bar-graph',
+        'url_name': 'backup-dashboard',
+        'scope': 'backup',
+        'description': 'Backup reporting',
+        'url_params': {'show_reports': 'reports'},
+    },
+    {
+        'key': 'audit_logs',
+        'name': 'Audit Logs',
+        'icon': 'bi bi-shield-check',
+        'url_name': 'backup-dashboard',
+        'scope': 'backup',
+        'description': 'Review system audit logs',
+        'url_params': {'show_audit': '1'},
+    },
+    {
+        'key': 'operations_dashboard',
+        'name': 'Operations Dashboard',
+        'icon': 'bi bi-speedometer2',
+        'url_name': 'operations-dashboard',
+        'scope': 'operations',
+        'description': 'Operations overview',
+        'url_params': {},
+    },
+    {
+        'key': 'shipment_approvals',
+        'name': 'Shipment Approvals',
+        'icon': 'bi bi-check2-square',
+        'url_name': 'shipment-approvals',
+        'scope': 'operations',
+        'description': 'Approve shipment requests',
+        'url_params': {},
+    },
+    {
+        'key': 'exception_management',
+        'name': 'Exception Management',
+        'icon': 'bi bi-exclamation-triangle',
+        'url_name': 'operations-dashboard',
+        'scope': 'operations',
+        'description': 'Review shipment exceptions',
+        'url_params': {'show_reports': 'reports', 'report_category': 'reconciliation'},
+    },
+]
+
+DASHBOARD_FEATURE_CHOICES = [(entry['key'], entry['name']) for entry in DASHBOARD_FEATURE_CATALOG]
+
+
+def get_dashboard_feature_catalog(scope=None):
+    features = []
+    for entry in DASHBOARD_FEATURE_CATALOG:
+        if scope and entry['scope'] != scope:
+            continue
+        features.append({
+            'key': entry['key'],
+            'name': entry['name'],
+            'icon': entry['icon'],
+            'url_name': entry['url_name'],
+            'url_params': entry.get('url_params', {}),
+            'scope': entry['scope'],
+            'description': entry['description'],
+        })
+    return features
+
+
+class DashboardFeaturePermission(models.Model):
+
+    role = models.ForeignKey(
+        Group,
+        on_delete=models.CASCADE,
+        related_name='dashboard_feature_permissions',
+        verbose_name='Group'
+    )
+    feature_key = models.CharField(
+        max_length=100,
+        choices=DASHBOARD_FEATURE_CHOICES,
+        verbose_name='Feature'
+    )
+    can_view = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = 'Dashboard Feature Permission'
+        verbose_name_plural = 'Dashboard Feature Permissions'
+        ordering = ['role__name', 'feature_key']
+
+    def __str__(self):
+        feature_name = dict(DASHBOARD_FEATURE_CHOICES).get(self.feature_key, self.feature_key)
+        return f"{feature_name} → {self.role.name}"
+
+    def get_feature(self):
+        for entry in DASHBOARD_FEATURE_CATALOG:
+            if entry['key'] == self.feature_key:
+                return entry
+        return None
+
+
+class DashboardFeatureExemption(models.Model):
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='dashboard_feature_exemptions',
+        verbose_name='User'
+    )
+    feature_key = models.CharField(
+        max_length=100,
+        choices=DASHBOARD_FEATURE_CHOICES,
+        verbose_name='Feature'
+    )
+    is_active = models.BooleanField(default=True)
+    reason = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Dashboard Feature Exemption'
+        verbose_name_plural = 'Dashboard Feature Exemptions'
+        ordering = ['user__username', 'feature_key']
+
+    def __str__(self):
+        feature_name = dict(DASHBOARD_FEATURE_CHOICES).get(self.feature_key, self.feature_key)
+        return f"{self.user.username} exempted from {feature_name}"

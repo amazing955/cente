@@ -151,6 +151,18 @@ footer{
     .sidebar, .navbar, .main-content > div:not(#printArea), footer, .modal {
         display: none !important;
     }
+    .feature-nav-link {
+        color: #1f3c88;
+        text-decoration: none;
+        padding: 0.35rem 0.7rem;
+        border-radius: 999px;
+        background: #f4f7ff;
+        font-size: 0.92rem;
+    }
+    .feature-nav-link:hover {
+        background: #e6edff;
+        color: #102a5e;
+    }
     #printArea {
         display: block !important;
         margin: 0;
@@ -208,7 +220,20 @@ footer{
         
     </div>
 
-    <div class="ms-auto d-flex align-items-center">
+    <div class="ms-auto d-flex align-items-center flex-wrap gap-2">
+        {% if dashboard_features %}
+            <div class="dropdown">
+                <button class="btn btn-outline-primary btn-sm mt-2 dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                    <i class="bi bi-plus-circle"></i> New
+                </button>
+                <ul class="dropdown-menu">
+                    {% for entry in dashboard_features %}
+                        <li><a class="dropdown-item" href="{{ entry.target_url }}"><i class="{{ entry.icon }}"></i> {{ entry.name }}</a></li>
+                    {% endfor %}
+                </ul>
+            </div>
+        {% endif %}
+        <!-- API-backed actions are surfaced here so the dashboard can use REST endpoints for summary data and inventory lookups. -->
         <button type="button" class="btn btn-outline-primary btn-sm mt-2" data-bs-toggle="modal" data-bs-target="#uploadInventoryModal">
             <i class="bi bi-download"></i> Upload data
         </button>

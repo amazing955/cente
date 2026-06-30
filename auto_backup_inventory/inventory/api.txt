@@ -1,0 +1,51 @@
+# API endpoint reference
+
+The application now exposes a small REST API layer for dashboard and inventory data.
+
+## Authentication
+All listed endpoints require an authenticated user session.
+
+## Endpoints
+
+### GET /api/dashboard-summary/
+Returns a lightweight summary payload used by the dashboard UI.
+
+Fields:
+- tape_count: total number of tape records
+- shipment_count: total number of shipment records
+- audit_log_count: total number of audit log entries
+- pending_shipments: number of shipments still pending
+
+### GET /api/tapes/
+Returns the latest tape inventory records for the dashboard and external integrations.
+
+Fields per item:
+- id: tape UUID
+- volser: tape volume serial
+- barcode: tape barcode
+- status: current tape status
+- location: current tape location
+- retention_end_date: retention end date in ISO format
+
+### GET /api/shipments/
+Returns the latest shipment records for workflow monitoring and external integrations.
+
+Fields per item:
+- id: shipment UUID
+- shipment_id: shipment identifier
+- status: current shipment workflow status
+- shipment_type: shipment category
+- source_location: originating location
+- destination_location: destination location
+- priority_level: urgency level
+
+### GET /api/audit-logs/
+Returns the latest audit trail entries for compliance and monitoring use cases.
+
+Fields per item:
+- id: audit log UUID
+- name: audit log source name
+- action: audit action description
+- severity: log severity level
+- timestamp: event timestamp in ISO format
+

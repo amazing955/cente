@@ -4,6 +4,9 @@ Django==6.0.6
 # Admin theme
 django-jazzmin==3.0.4
 
+# REST API support
+djangorestframework==3.15.2
+
 # File and report generation
 Pillow==12.2.0
 openpyxl==3.1.5

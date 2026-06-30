@@ -1,7 +1,19 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from .models import AuditLog, CustomUser, MonthlyReport, ReportTemplate, Reconciliation, ReconciliationResult, Shipment, TapeInventory, Tape
+from .models import (
+    AuditLog,
+    CustomUser,
+    DashboardFeatureExemption,
+    DashboardFeaturePermission,
+    MonthlyReport,
+    ReportTemplate,
+    Reconciliation,
+    ReconciliationResult,
+    Shipment,
+    TapeInventory,
+    Tape,
+)
 
 
 @admin.register(CustomUser)
@@ -15,6 +27,20 @@ class CustomUserAdmin(UserAdmin):
     )
     list_display = ('username', 'email', 'first_name', 'last_name', 'role', 'is_staff', 'is_active')
     list_filter = ('role', 'is_staff', 'is_active', 'groups')
+
+
+@admin.register(DashboardFeaturePermission)
+class DashboardFeaturePermissionAdmin(admin.ModelAdmin):
+    list_display = ('role', 'feature_key', 'can_view')
+    list_filter = ('role', 'can_view', 'feature_key')
+    search_fields = ('role__name', 'feature_key')
+
+
+@admin.register(DashboardFeatureExemption)
+class DashboardFeatureExemptionAdmin(admin.ModelAdmin):
+    list_display = ('user', 'feature_key', 'is_active', 'reason')
+    list_filter = ('is_active', 'feature_key')
+    search_fields = ('user__username', 'user__email', 'feature_key', 'reason')
 
 
 @admin.register(TapeInventory)
