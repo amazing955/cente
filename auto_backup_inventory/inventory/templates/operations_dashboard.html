@@ -1974,6 +1974,7 @@ document.addEventListener('click', async (event) => {
         event.preventDefault();
         const apiUrl = link.dataset.apiUrl;
         const fallbackUrl = link.dataset.targetUrl;
+        const panel = link.dataset.panel || '#shipment_approvals';
 
         if (!apiUrl) {
             if (fallbackUrl) {
@@ -1990,6 +1991,11 @@ document.addEventListener('click', async (event) => {
             });
             const payload = await response.json();
             if (response.ok && payload.target_url) {
+                const shouldRenderInline = Boolean(payload.fragment_url && payload.fragment_url !== payload.target_url);
+                if (shouldRenderInline) {
+                    loadEmbeddedFragment(payload.fragment_url, panel);
+                    return;
+                }
                 window.location.assign(payload.target_url);
             } else if (fallbackUrl) {
                 window.location.assign(fallbackUrl);

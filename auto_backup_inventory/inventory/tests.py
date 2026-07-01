@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import connection
 from django.http import HttpResponseForbidden
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import path, reverse
@@ -27,9 +28,11 @@ from .models import (
     ShipmentTransportEvent,
     Tape,
     TapeRequest,
+    SchemaChangeLog,
+    get_dashboard_feature_catalog,
 )
 from .serializer import TapeSerializer
-from .views import custom_permission_denied
+from .views import custom_permission_denied, is_backup_administrator, is_operations_manager
 
 
 def forbidden_view(request):
@@ -251,6 +254,86 @@ class ShipmentFormTests(TestCase):
         self.assertContains(response, 'Jane Doe')
 
 
+class ExcelSchemaSynchronizationTests(TestCase):
+    def test_uploading_excel_with_new_columns_shows_schema_preview(self):
+        user = get_user_model().objects.create_superuser(
+            username='excel-preview-admin',
+            email='excel-preview-admin@example.com',
+            password='pass1234',
+        )
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(['volser', 'barcode', 'tape_type', 'status', 'current_location', 'retention_end_date', 'manufacturer', 'RFID Tag', 'Vault Number'])
+        sheet.append(['TAPE-001', 'BC-001', 'LTO-8', 'Active', 'Vault A', '2026-12-31', 'IBM', 'RFID-001', 'V1'])
+
+        excel_file = SimpleUploadedFile(
+            'inventory_template.xlsx',
+            b'',
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        excel_file.file = BytesIO()
+        workbook.save(excel_file.file)
+        excel_file.file.seek(0)
+        excel_file.content = excel_file.file.getvalue()
+
+        self.client.force_login(user)
+        response = self.client.post(
+            reverse('backup-dashboard'),
+            {'form_type': 'upload_inventory_excel', 'inventory_file': excel_file},
+            format='multipart',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('schema_preview', response.context)
+        self.assertEqual(response.context['schema_preview']['table_name'], 'inventory_tape')
+        self.assertEqual(len(response.context['schema_preview']['new_columns']), 2)
+        self.assertContains(response, 'Schema Synchronization Preview')
+        self.assertContains(response, 'Approve & Synchronize')
+
+    def test_approving_schema_sync_adds_columns_and_imports_rows(self):
+        user = get_user_model().objects.create_superuser(
+            username='excel-sync-admin',
+            email='excel-sync-admin@example.com',
+            password='pass1234',
+        )
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(['volser', 'barcode', 'tape_type', 'status', 'current_location', 'retention_end_date', 'manufacturer', 'RFID Tag', 'Vault Number'])
+        sheet.append(['TAPE-100', 'BC-100', 'LTO-8', 'Active', 'Vault A', '2026-12-31', 'IBM', 'RFID-100', 'V2'])
+
+        excel_file = SimpleUploadedFile(
+            'inventory_template.xlsx',
+            b'',
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        )
+        excel_file.file = BytesIO()
+        workbook.save(excel_file.file)
+        excel_file.file.seek(0)
+        excel_file.content = excel_file.file.getvalue()
+
+        self.client.force_login(user)
+        self.client.post(
+            reverse('backup-dashboard'),
+            {'form_type': 'upload_inventory_excel', 'inventory_file': excel_file},
+            format='multipart',
+        )
+
+        response = self.client.post(
+            reverse('backup-dashboard'),
+            {'form_type': 'approve_excel_schema_sync'},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        with connection.cursor() as cursor:
+            columns = [column[1] for column in connection.introspection.get_columns(cursor, 'inventory_tape')]
+        self.assertIn('rfid_tag', columns)
+        self.assertIn('vault_number', columns)
+        self.assertTrue(SchemaChangeLog.objects.filter(status='applied').exists())
+        self.assertTrue(Tape.objects.filter(volser='TAPE-100').exists())
+
+
 class DashboardFeatureNavigationTests(TestCase):
     def test_role_form_includes_django_admin_permissions_as_assignable_features(self):
         content_type = ContentType.objects.get(app_label='inventory', model='tape')
@@ -316,6 +399,14 @@ class DashboardFeatureNavigationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertFalse(any(entry['key'] == 'operations_dashboard' for entry in response.context['dashboard_features']))
 
+    def test_feature_catalog_uses_feature_module_routes_instead_of_dashboard_urls(self):
+        features = get_dashboard_feature_catalog()
+
+        self.assertTrue(features)
+        for feature in features:
+            self.assertEqual(feature['url_name'], 'feature-module')
+            self.assertEqual(feature['url_kwargs']['feature_key'], feature['key'])
+
     def test_feature_navigation_api_returns_standalone_page_payload_for_features(self):
         group = Group.objects.create(name='Operations Manager')
         user = get_user_model().objects.create_user(
@@ -333,8 +424,22 @@ class DashboardFeatureNavigationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload['load_mode'], 'page')
-        self.assertIn(reverse('shipment-approvals'), payload['target_url'])
+        self.assertIn(reverse('feature-module', kwargs={'feature_key': 'shipment_approvals'}), payload['target_url'])
         self.assertNotIn('partial=1', payload['target_url'])
+        self.assertIn('partial=1', payload['fragment_url'])
+
+    def test_feature_permission_does_not_confer_backup_admin_role(self):
+        group = Group.objects.create(name='Operations Manager')
+        user = get_user_model().objects.create_user(
+            username='feature-role-ops',
+            email='feature-role-ops@example.com',
+            password='pass1234',
+        )
+        user.groups.add(group)
+        DashboardFeaturePermission.objects.create(role=group, feature_key='tape_inventory', can_view=True)
+
+        self.assertTrue(is_operations_manager(user))
+        self.assertFalse(is_backup_administrator(user))
 
     def test_feature_page_hides_sidebar_when_feature_key_is_present(self):
         group = Group.objects.create(name='Operations Manager')
@@ -352,7 +457,7 @@ class DashboardFeatureNavigationTests(TestCase):
         self.assertNotContains(response, 'class="app-sidebar')
         self.assertNotContains(response, 'id="sidebarPanel"')
 
-    def test_feature_permission_allows_access_for_custom_group_name(self):
+    def test_feature_permission_does_not_grant_dashboard_access_for_custom_group_name(self):
         group = Group.objects.create(name='Warehouse Ops')
         user = get_user_model().objects.create_user(
             username='custom-group-user',
@@ -366,7 +471,42 @@ class DashboardFeatureNavigationTests(TestCase):
         self.client.force_login(user)
         response = self.client.get(reverse('operations-dashboard'))
 
+        self.assertEqual(response.status_code, 302)
+
+    def test_feature_module_allows_feature_access_without_dashboard_role(self):
+        group = Group.objects.create(name='Warehouse Ops')
+        user = get_user_model().objects.create_user(
+            username='feature-module-user',
+            email='feature-module-user@example.com',
+            password='pass1234',
+        )
+        user.groups.add(group)
+
+        DashboardFeaturePermission.objects.create(role=group, feature_key='shipment_approvals', can_view=True)
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('feature-module', kwargs={'feature_key': 'shipment_approvals'}))
+
         self.assertEqual(response.status_code, 200)
+
+    def test_feature_module_renders_backup_feature_without_dashboard_sidebar(self):
+        group = Group.objects.create(name='Backup Administrator')
+        user = get_user_model().objects.create_user(
+            username='backup-feature-shell-user',
+            email='backup-feature-shell-user@example.com',
+            password='pass1234',
+        )
+        user.groups.add(group)
+
+        DashboardFeaturePermission.objects.create(role=group, feature_key='tape_inventory', can_view=True)
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('feature-module', kwargs={'feature_key': 'tape_inventory'}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Back to dashboard')
+        self.assertNotContains(response, 'class="sidebar"')
+        self.assertEqual(response.context['active_feature_key'], 'tape_inventory')
 
     def test_feature_link_opens_selected_section_inside_backup_dashboard(self):
         group = Group.objects.create(name='Backup Administrator')

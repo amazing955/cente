@@ -10,6 +10,7 @@ urlpatterns = [
     path('api/shipments/', views.api_shipment_list, name='api-shipments'),
     path('api/audit-logs/', views.api_audit_log_list, name='api-audit-logs'),
     path('api/features/<str:feature_key>/', views.api_feature_navigation, name='api-feature-navigation'),
+    path('features/<str:feature_key>/', views.feature_module, name='feature-module'),
     path('apis/dashboard-summary/', views.api_dashboard_summary, name='apis-dashboard-summary'),
     path('apis/tapes/', views.api_tape_list, name='apis-tapes'),
     path('apis/shipments/', views.api_shipment_list, name='apis-shipments'),

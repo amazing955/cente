@@ -71,15 +71,33 @@ Fields per item:
 - timestamp: event timestamp in ISO format
 
 ### GET /api/features/<feature_key>/
-Resolves a dashboard feature key to its navigation target URL.
+Resolves a dashboard feature key to its standalone feature-module navigation payload.
 
 Example:
 - /api/features/operations_dashboard/
 
 Response fields:
 - feature_key: requested feature key
-- target_url: dashboard URL to open for that feature
+- target_url: feature-module URL that should be opened for the selected feature
+- fragment_url: URL used to load the feature content as an embedded fragment
+- load_mode: always page for standalone feature navigation
 - scope: feature scope such as backup or operations
+
+Behavior:
+- Returns 401 Unauthorized when the user is not authenticated
+- Returns 403 Forbidden when the user lacks access to the requested feature
+- Returns 404 Not Found when the feature key does not exist
+
+Example response:
+```json
+{
+  "feature_key": "shipment_approvals",
+  "target_url": "/features/shipment_approvals/",
+  "fragment_url": "/features/shipment_approvals/?partial=1",
+  "load_mode": "page",
+  "scope": "operations"
+}
+```
 
 ### Notes
 The same endpoint behavior is also exposed under the /apis/ prefix for compatibility with existing integrations.

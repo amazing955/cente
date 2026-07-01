@@ -5,6 +5,20 @@ from django.urls import reverse
 from .models import DashboardFeatureExemption, DashboardFeaturePermission, get_dashboard_feature_catalog
 
 
+def build_feature_target_url(feature, feature_key):
+    url_params = dict(feature.get('url_params', {}))
+    if feature.get('url_name') == 'feature-module':
+        url_params.pop('feature_key', None)
+    else:
+        url_params['feature_key'] = feature_key
+
+    url_kwargs = dict(feature.get('url_kwargs', {}))
+    url_kwargs.setdefault('feature_key', feature_key)
+
+    base_url = reverse(feature['url_name'], kwargs=url_kwargs)
+    return f"{base_url}?{urlencode(url_params)}" if url_params else base_url
+
+
 def dashboard_features(request):
     user = getattr(request, 'user', None)
     if not user or not user.is_authenticated:
@@ -27,12 +41,7 @@ def dashboard_features(request):
         if not perms.filter(feature_key=feature['key']).exists():
             continue
 
-        url_params = dict(feature.get('url_params', {}))
-        url_params['feature_key'] = feature['key']
-        if url_params:
-            target_url = f"{reverse(feature['url_name'])}?{urlencode(url_params)}"
-        else:
-            target_url = reverse(feature['url_name'])
+        target_url = build_feature_target_url(feature, feature['key'])
 
         visible_features.append({
             'key': feature['key'],

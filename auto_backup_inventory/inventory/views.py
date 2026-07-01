@@ -2,6 +2,7 @@ from django.contrib.auth import authenticate, login, logout, get_user_model
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.models import Group
 from django.conf import settings
+import inspect
 import random
 import string
 from urllib.parse import urlencode
@@ -21,7 +22,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from django.contrib import messages
 from django.db.models import Q, Count
-from django.http import HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
@@ -127,24 +128,14 @@ def api_feature_navigation(request, feature_key):
     if not feature:
         return JsonResponse({'detail': 'Feature not found.'}, status=404)
 
-    url_params = dict(feature.get('url_params', {}))
-    url_params['feature_key'] = feature_key
-    base_url = reverse(feature['url_name'])
-    target_url = f"{base_url}?{urlencode(url_params)}" if url_params else base_url
-
-    fragment_url = target_url
-    load_mode = 'page'
-    if feature['url_name'] in {'operations-dashboard', 'backup-dashboard', 'shipment-approvals'}:
-        query_params = dict(url_params)
-        query_params['feature_key'] = feature_key
-        load_mode = 'page'
-        fragment_url = target_url
+    target_url = reverse('feature-module', kwargs={'feature_key': feature_key})
+    fragment_url = f"{target_url}?partial=1"
 
     return JsonResponse({
         'feature_key': feature_key,
         'target_url': target_url,
         'fragment_url': fragment_url,
-        'load_mode': load_mode,
+        'load_mode': 'page',
         'scope': feature.get('scope'),
     })
 
@@ -166,6 +157,52 @@ def get_object_by_uuid_pk(model, pk_value):
     if not is_valid_uuid(pk_value):
         return None
     return model.objects.filter(pk=pk_value).first()
+
+
+def feature_module(request, feature_key):
+    if not request.user.is_authenticated:
+        return redirect('signin')
+
+    if not has_dashboard_feature_access(request.user, feature_key):
+        raise PermissionDenied
+
+    feature = next((item for item in get_dashboard_feature_catalog() if item['key'] == feature_key), None)
+    if not feature:
+        raise Http404
+
+    def render_feature_view(view_func):
+        request.GET = request.GET.copy()
+        request.GET['feature_key'] = feature_key
+        request.POST = request.POST.copy() if request.method == 'POST' else request.POST
+        if request.method == 'POST':
+            request.POST['feature_key'] = feature_key
+        return inspect.unwrap(view_func)(request)
+
+    if feature_key == 'shipment_approvals':
+        return render_feature_view(shipment_approvals)
+
+    if feature_key == 'add_tape':
+        return render_feature_view(add_tape)
+
+    if is_backup_administrator(request.user) and feature_key in {
+        'backup_dashboard', 'add_tape', 'tape_inventory', 'shipments', 'reconciliation', 'reports', 'audit_logs'
+    }:
+        return render_feature_view(backup_dashboard)
+
+    if is_operations_manager(request.user) and feature_key in {
+        'operations_dashboard', 'shipment_approvals', 'exception_management'
+    }:
+        return render_feature_view(operations_dashboard)
+
+    if is_it_compliance_auditor(request.user) and feature_key in {
+        'audit_logs', 'reports', 'exception_management', 'operations_dashboard'
+    }:
+        return render_feature_view(audit_logs_view)
+
+    if is_courier(request.user):
+        return render_feature_view(assigned_shipments)
+
+    return render(request, 'dashboard.html', {'feature_key': feature_key, 'dashboard_features': []})
 
 
 def get_feature_panel_state(feature_key):
@@ -967,27 +1004,15 @@ def has_dashboard_feature_access(user, feature_key):
 
 
 def is_backup_administrator(user):
-    return user.is_authenticated and (
-        user.is_superuser or
-        user.groups.filter(name='Backup Administrator').exists() or
-        has_dashboard_feature_access(user, 'backup_dashboard') or
-        has_dashboard_feature_access(user, 'add_tape') or
-        has_dashboard_feature_access(user, 'tape_inventory') or
-        has_dashboard_feature_access(user, 'shipments') or
-        has_dashboard_feature_access(user, 'reconciliation') or
-        has_dashboard_feature_access(user, 'reports') or
-        has_dashboard_feature_access(user, 'audit_logs')
-    )
+    if not user or not user.is_authenticated:
+        return False
+    return user.is_superuser or user.groups.filter(name='Backup Administrator').exists()
 
 
 def is_operations_manager(user):
-    return user.is_authenticated and (
-        user.is_superuser or
-        user.groups.filter(name='Operations Manager').exists() or
-        has_dashboard_feature_access(user, 'operations_dashboard') or
-        has_dashboard_feature_access(user, 'shipment_approvals') or
-        has_dashboard_feature_access(user, 'exception_management')
-    )
+    if not user or not user.is_authenticated:
+        return False
+    return user.is_superuser or user.groups.filter(name='Operations Manager').exists()
 
 
 def is_it_compliance_auditor(user):
@@ -2036,8 +2061,11 @@ def backup_dashboard(request):
     settings_form = None
     profile_form = None
     show_profile_panel = False
+    hide_dashboard_sidebar = False
 
     active_feature_key = request.GET.get('feature_key') or request.POST.get('feature_key')
+    if active_feature_key:
+        hide_dashboard_sidebar = True
     feature_panel_state = get_feature_panel_state(active_feature_key)
     if feature_panel_state:
         if feature_panel_state.get('show_add_tape_panel'):
@@ -3153,6 +3181,7 @@ def backup_dashboard(request):
         'show_admin_panel': show_admin_panel,
         'show_profile_panel': show_profile_panel,
         'show_settings_panel': show_settings_panel,
+        'hide_dashboard_sidebar': hide_dashboard_sidebar,
         'show_audit_panel': show_audit_panel,
         'show_alerts_panel': show_alerts_panel,
         'show_reports_panel': show_reports_panel,

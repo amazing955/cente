@@ -53,6 +53,10 @@ body{
     margin-left:250px;
 }
 
+.feature-page-shell{
+    margin-left:0 !important;
+}
+
 /* Navbar */
 
 .navbar{
@@ -179,6 +183,7 @@ footer{
 
 <body>
 
+{% if not hide_dashboard_sidebar %}
 <!-- SIDEBAR -->
 
 <div class="sidebar">
@@ -199,10 +204,11 @@ footer{
     <a href="{% url 'signout' %}" class="btn btn-danger"><i class="bi bi-box-arrow-left"></i> Logout</a>
 
 </div>
+{% endif %}
 
 <!-- MAIN CONTENT -->
 
-<div class="main-content">
+<div class="main-content{% if hide_dashboard_sidebar %} feature-page-shell{% endif %}">
 
 <!-- NAVBAR -->
 
@@ -284,6 +290,15 @@ footer{
 </div>
 
 <div class="container-fluid p-4">
+
+    {% if hide_dashboard_sidebar %}
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <a href="{% url 'backup-dashboard' %}" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-arrow-left me-1"></i> Back to dashboard
+        </a>
+        <span class="small text-muted">Standalone feature view</span>
+    </div>
+    {% endif %}
 
     {% if messages %}
         {% for message in messages %}
