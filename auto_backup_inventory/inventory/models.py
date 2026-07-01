@@ -55,6 +55,58 @@ class ApplicationSetting(models.Model):
         return 'Global Application Settings'
 
 
+class BankBranch(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    STATUS_CHOICES = [
+        ('Active', 'Active'),
+        ('Inactive', 'Inactive'),
+    ]
+
+    branch_code = models.CharField(max_length=50, unique=True)
+    branch_name = models.CharField(max_length=200)
+    region = models.CharField(max_length=100, blank=True)
+    district = models.CharField(max_length=100, blank=True)
+    address = models.TextField(blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Active')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Bank Branch'
+        verbose_name_plural = 'Bank Branches'
+        ordering = ['branch_name']
+
+    def __str__(self):
+        return f"{self.branch_name} ({self.branch_code})"
+
+
+class BranchImportLog(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    STATUS_CHOICES = [
+        ('success', 'Success'),
+        ('warning', 'Warning'),
+        ('failed', 'Failed'),
+    ]
+
+    filename = models.CharField(max_length=255)
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='branch_import_logs')
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+    total_rows = models.PositiveIntegerField(default=0)
+    created_records = models.PositiveIntegerField(default=0)
+    updated_records = models.PositiveIntegerField(default=0)
+    skipped_records = models.PositiveIntegerField(default=0)
+    failed_records = models.PositiveIntegerField(default=0)
+    import_status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='success')
+
+    class Meta:
+        verbose_name = 'Branch Import Log'
+        verbose_name_plural = 'Branch Import Logs'
+        ordering = ['-uploaded_at']
+
+    def __str__(self):
+        return f"{self.filename} ({self.uploaded_at:%Y-%m-%d %H:%M})"
+
+
 class CustomUser(AbstractUser):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
@@ -212,6 +264,33 @@ class Tape(models.Model):
 
     def __str__(self):
         return f"{self.volser} ({self.barcode})"
+
+
+class SchemaChangeLog(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    column_name = models.CharField(max_length=255)
+    detected_data_type = models.CharField(max_length=50)
+    target_table = models.CharField(max_length=255)
+    source_excel_filename = models.CharField(max_length=255)
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='schema_change_logs')
+    uploaded_date = models.DateTimeField(default=timezone.now)
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='approved_schema_changes')
+    approval_timestamp = models.DateTimeField(null=True, blank=True)
+    sql_executed = models.TextField(blank=True)
+    synchronization_status = models.CharField(
+        max_length=20,
+        choices=[('pending', 'Pending'), ('applied', 'Applied'), ('failed', 'Failed'), ('cancelled', 'Cancelled')],
+        default='pending',
+    )
+    error_message = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-uploaded_date', '-created_at']
+
+    def __str__(self):
+        return f"{self.column_name} -> {self.detected_data_type}"
 
 
 class TapeRequest(models.Model):
@@ -747,8 +826,8 @@ class MonthlyReport(models.Model):
 class AuditLog(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     timestamp = models.DateTimeField(auto_now_add=True)
-    name = models.CharField(max_length=120, blank=True)
-    action = models.CharField(max_length=120, blank=True)
+    name = models.CharField(max_length=255, blank=True)
+    action = models.CharField(max_length=255, blank=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
     message = models.CharField(max_length=255, blank=True)
     severity = models.CharField(

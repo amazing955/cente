@@ -1,8 +1,11 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
+from .admin_bank_branch import BankBranchAdmin  # noqa: F401
 from .models import (
     AuditLog,
+    BankBranch,
+    BranchImportLog,
     CustomUser,
     DashboardFeatureExemption,
     DashboardFeaturePermission,

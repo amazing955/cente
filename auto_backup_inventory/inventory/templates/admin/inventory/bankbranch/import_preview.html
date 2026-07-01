@@ -1,0 +1,31 @@
+{% extends 'admin/base_site.html' %}
+{% load i18n %}
+
+{% block content %}
+<div id="content-main">
+  <h2>Import Preview</h2>
+  <p><strong>Total Rows:</strong> {{ preview.total_rows }}</p>
+  <p><strong>New Branches:</strong> {{ preview.new_branches }}</p>
+  <p><strong>Updated Branches:</strong> {{ preview.updated_branches }}</p>
+  <p><strong>Duplicate Rows:</strong> {{ preview.duplicate_rows }}</p>
+  <p><strong>Invalid Rows:</strong> {{ preview.invalid_rows }}</p>
+  <p><strong>Rows To Be Imported:</strong> {{ preview.rows_to_import }}</p>
+  {% if preview.errors %}
+    <div class="module">
+      <h3>Validation Errors</h3>
+      <ul>
+        {% for error in preview.errors %}
+          <li>{{ error }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+  <form method="post">
+    {% csrf_token %}
+    <div class="submit-row">
+      <button type="submit" name="confirm_import" value="1" class="default">Import</button>
+      <a href="{% url 'admin:inventory_bankbranch_changelist' %}" class="button cancel-link">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

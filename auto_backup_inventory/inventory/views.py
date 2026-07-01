@@ -2,8 +2,10 @@ from django.contrib.auth import authenticate, login, logout, get_user_model
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib.auth.models import Group
 from django.conf import settings
+import base64
 import inspect
 import random
+import re
 import string
 from urllib.parse import urlencode
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -21,6 +23,7 @@ from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from django.contrib import messages
+from django.db import connection, transaction
 from django.db.models import Q, Count
 from django.http import Http404, HttpResponse, JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
@@ -754,12 +757,175 @@ def export_report_pdf(report_category, report_period, rows, columns):
     return response
 
 
-def import_inventory_excel_file(uploaded_file):
+def normalize_excel_column_name(name):
+    text = str(name or '').strip().lower()
+    text = re.sub(r'[^a-z0-9]+', '_', text)
+    text = re.sub(r'_+', '_', text).strip('_')
+    if not text:
+        text = 'column'
+    if text in {'select', 'insert', 'update', 'delete', 'drop', 'from', 'where', 'union', 'table', 'create', 'alter', 'truncate'} or text[0].isdigit():
+        text = f'column_{text}'
+    return text
+
+
+def is_safe_column_name(name):
+    normalized_name = normalize_excel_column_name(name)
+    return bool(re.fullmatch(r'[a-z][a-z0-9_]{0,62}', normalized_name)) and normalized_name not in {'select', 'insert', 'update', 'delete', 'drop', 'from', 'where', 'union', 'table', 'create', 'alter', 'truncate'}
+
+
+def infer_postgres_column_type(values):
+    sample_values = [value for value in values if value not in (None, '')][:10]
+    if not sample_values:
+        return 'VARCHAR(255)'
+
+    lower_values = {str(value).strip().lower() for value in sample_values}
+    if lower_values <= {'true', 'false', 'yes', 'no', 'y', 'n', '1', '0'}:
+        return 'BOOLEAN'
+
+    try:
+        if all(str(value).strip().replace('-', '').isdigit() for value in sample_values):
+            return 'INTEGER'
+    except Exception:
+        pass
+
+    try:
+        if all(float(str(value).strip()) for value in sample_values):
+            return 'NUMERIC(12,2)'
+    except Exception:
+        pass
+
+    try:
+        for value in sample_values:
+            date.fromisoformat(str(value).strip())
+        return 'DATE'
+    except Exception:
+        pass
+
+    try:
+        for value in sample_values:
+            datetime.fromisoformat(str(value).strip())
+        return 'TIMESTAMP'
+    except Exception:
+        pass
+
+    try:
+        for value in sample_values:
+            uuid.UUID(str(value).strip())
+        return 'UUID'
+    except Exception:
+        pass
+
+    if max(len(str(value)) for value in sample_values) > 255:
+        return 'TEXT'
+    return 'VARCHAR(255)'
+
+
+def get_existing_table_columns(table_name):
+    try:
+        with connection.cursor() as cursor:
+            if connection.vendor == 'postgresql':
+                cursor.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = %s ORDER BY ordinal_position",
+                    [table_name],
+                )
+                return [row[0] for row in cursor.fetchall()]
+            return [column[1] for column in connection.introspection.get_columns(cursor, table_name)]
+    except Exception:
+        return []
+
+
+def analyze_excel_schema(uploaded_file, table_name='inventory_tape'):
     if not uploaded_file:
+        return None
+
+    try:
+        file_bytes = uploaded_file.read() if hasattr(uploaded_file, 'read') else b''
+        if hasattr(uploaded_file, 'seek'):
+            uploaded_file.seek(0)
+        workbook = load_workbook(BytesIO(file_bytes), data_only=True)
+    except Exception as exc:
+        return {'error': f'Unable to read the Excel file: {exc}'}
+
+    if not workbook.sheetnames:
+        return {'error': 'The uploaded workbook does not contain any sheets.'}
+
+    sheet = workbook[workbook.sheetnames[0]]
+    rows = list(sheet.iter_rows(values_only=True))
+    if len(rows) < 2:
+        return {'error': 'The uploaded sheet does not contain any inventory rows.'}
+
+    headers = [str(cell).strip() if cell is not None else '' for cell in rows[0]]
+    normalized_headers = [normalize_excel_column_name(name) for name in headers]
+    existing_columns = get_existing_table_columns(table_name)
+
+    existing_normalized_columns = {normalize_excel_column_name(column) for column in existing_columns if column}
+    duplicate_columns = []
+    invalid_columns = []
+    seen_names = set()
+    for index, header in enumerate(headers):
+        normalized_name = normalized_headers[index]
+        if not header:
+            invalid_columns.append({'header': header, 'normalized_name': normalized_name, 'issue': 'blank header'})
+            continue
+        if normalized_name in seen_names:
+            duplicate_columns.append({'header': header, 'normalized_name': normalized_name})
+        else:
+            seen_names.add(normalized_name)
+        if normalized_name in {'select', 'insert', 'update', 'delete', 'drop', 'from', 'where', 'union', 'table', 'create', 'alter', 'truncate'} or normalized_name[0].isdigit():
+            invalid_columns.append({'header': header, 'normalized_name': normalized_name, 'issue': 'unsafe name'})
+
+    column_values = []
+    for index, header in enumerate(headers):
+        if not header:
+            continue
+        values = [row[index] if index < len(row) else None for row in rows[1:11]]
+        column_values.append((header, normalized_headers[index], values))
+
+    new_columns = []
+    for header, normalized_name, values in column_values:
+        if not normalized_name or normalized_name in existing_normalized_columns:
+            continue
+        if normalized_name in {'select', 'insert', 'update', 'delete', 'drop', 'from', 'where', 'union', 'table', 'create', 'alter', 'truncate'}:
+            continue
+        new_columns.append({
+            'name': normalized_name,
+            'source_header': header,
+            'detected_type': infer_postgres_column_type(values),
+        })
+
+    removed_columns = [column for column in existing_columns if normalize_excel_column_name(column) not in set(normalized_headers) and normalize_excel_column_name(column) not in {'id', 'created_at', 'updated_at'}]
+    renamed_columns = []
+    for removed_column in removed_columns:
+        normalized_removed = normalize_excel_column_name(removed_column)
+        matches = [name for name in set(normalized_headers) if name and name != normalized_removed and (name.startswith(normalized_removed[:3]) or normalized_removed.startswith(name[:3]))]
+        if matches:
+            renamed_columns.append({'from': normalized_removed, 'to': matches[0]})
+
+    return {
+        'table_name': table_name,
+        'existing_columns': existing_columns,
+        'new_columns': new_columns,
+        'removed_columns': removed_columns,
+        'renamed_columns': renamed_columns,
+        'duplicate_columns': duplicate_columns,
+        'invalid_columns': invalid_columns,
+        'has_changes': bool(new_columns) or bool(removed_columns) or bool(duplicate_columns) or bool(invalid_columns),
+    }
+
+
+def import_inventory_excel_file(uploaded_file=None, workbook=None, file_name=None):
+    if not uploaded_file and workbook is None:
         return 0, 'Please choose an Excel file to import.', False
 
     try:
-        workbook = load_workbook(uploaded_file, data_only=True)
+        if workbook is None:
+            file_bytes = uploaded_file.read() if hasattr(uploaded_file, 'read') else b''
+            if hasattr(uploaded_file, 'seek'):
+                uploaded_file.seek(0)
+            workbook = load_workbook(BytesIO(file_bytes), data_only=True)
+        else:
+            if isinstance(workbook, (bytes, bytearray)):
+                workbook = load_workbook(BytesIO(workbook), data_only=True)
     except Exception as exc:
         return 0, f'Unable to read the Excel file: {exc}', False
 
@@ -772,7 +938,7 @@ def import_inventory_excel_file(uploaded_file):
         return 0, 'The uploaded sheet does not contain any inventory rows.', False
 
     headers = [str(cell).strip() if cell is not None else '' for cell in rows[0]]
-    header_map = {name.lower(): idx for idx, name in enumerate(headers) if name}
+    header_map = {normalize_excel_column_name(name): idx for idx, name in enumerate(headers) if name}
 
     required_columns = ['volser', 'barcode', 'tape_type', 'status', 'current_location', 'retention_end_date']
     missing_columns = [column for column in required_columns if column not in header_map]
@@ -784,7 +950,7 @@ def import_inventory_excel_file(uploaded_file):
         if not any(cell not in (None, '') for cell in row):
             continue
 
-        values = {header: (row[idx] if idx < len(row) else '') for header, idx in header_map.items()}
+        values = {normalize_excel_column_name(header): (row[idx] if idx < len(row) else '') for header, idx in ((header, idx) for idx, header in enumerate(headers))}
         volser = str(values.get('volser', '')).strip()
         barcode = str(values.get('barcode', '')).strip()
         tape_type = str(values.get('tape_type', '')).strip()
@@ -801,7 +967,7 @@ def import_inventory_excel_file(uploaded_file):
         except Exception:
             retention_end_date = date.today() + timedelta(days=365)
 
-        tape, created = Tape.objects.update_or_create(
+        Tape.objects.update_or_create(
             volser=volser,
             defaults={
                 'barcode': barcode,
@@ -2087,6 +2253,14 @@ def backup_dashboard(request):
         if selected_tape:
             show_tape_actions_panel = True
 
+    schema_preview = None
+    pending_schema_upload = None
+    pending_schema_file = None
+    pending_schema_key = None
+    pending_schema_session = request.session.get('pending_schema_preview', {})
+    if pending_schema_session:
+        schema_preview = pending_schema_session.get('preview')
+
     if request.method == 'POST':
         form_type = request.POST.get('form_type')
         if form_type == 'backup_admin_assignment':
@@ -2477,17 +2651,104 @@ def backup_dashboard(request):
                 messages.error(request, 'Please correct the settings form errors and try again.')
         elif form_type == 'upload_inventory_excel':
             uploaded_file = request.FILES.get('inventory_file')
-            imported_count, message, success = import_inventory_excel_file(uploaded_file)
-            if success:
-                messages.success(request, message)
-                AuditLog.objects.create(
-                    name='Inventory Import Completed',
-                    action=f'Imported {imported_count} tape records from Excel upload by {request.user.username}',
-                    user=request.user,
-                    severity='success',
-                )
+            if uploaded_file and hasattr(uploaded_file, 'read'):
+                uploaded_file.seek(0)
+                file_bytes = uploaded_file.read()
+                uploaded_file.seek(0)
+                schema_preview = analyze_excel_schema(uploaded_file, table_name='inventory_tape')
+                if schema_preview and schema_preview.get('error'):
+                    messages.error(request, schema_preview['error'])
+                    return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
+                if schema_preview and schema_preview.get('new_columns'):
+                    request.session['pending_schema_preview'] = {
+                        'file_name': uploaded_file.name,
+                        'file_bytes': base64.b64encode(file_bytes).decode('utf-8'),
+                        'preview': schema_preview,
+                    }
+                    messages.info(request, 'Schema synchronization preview is ready. Review the proposed changes before continuing.')
+                    show_tape_inventory_panel = True
+                else:
+                    imported_count, message, success = import_inventory_excel_file(uploaded_file)
+                    if success:
+                        messages.success(request, message)
+                        AuditLog.objects.create(
+                            name='Inventory Import Completed',
+                            action=f'Imported {imported_count} tape records from Excel upload by {request.user.username}',
+                            user=request.user,
+                            severity='success',
+                        )
+                    else:
+                        messages.error(request, message)
+                    return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
             else:
-                messages.error(request, message)
+                messages.error(request, 'Please choose an Excel file to import.')
+                return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
+        elif form_type == 'approve_excel_schema_sync':
+            pending_preview = request.session.pop('pending_schema_preview', None)
+            if not pending_preview:
+                messages.error(request, 'No pending schema preview was found.')
+                return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
+            if not (request.user.is_superuser or is_backup_administrator(request.user)):
+                messages.error(request, 'Only superusers and backup administrators can approve schema synchronization.')
+                return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
+
+            preview = pending_preview.get('preview', {})
+            new_columns = preview.get('new_columns', [])
+            if not new_columns:
+                messages.info(request, 'No schema changes were required.')
+                return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
+
+            sql_statements = []
+            log_entries = []
+            try:
+                with transaction.atomic():
+                    for column in new_columns:
+                        column_name = column['name']
+                        column_type = column['detected_type']
+                        if not is_safe_column_name(column_name):
+                            raise ValueError(f'Unsafe column name: {column_name}')
+                        sql_statement = f'ALTER TABLE inventory_tape ADD COLUMN IF NOT EXISTS {column_name} {column_type};'
+                        sql_statements.append(sql_statement)
+                        with connection.cursor() as cursor:
+                            cursor.execute(sql_statement)
+                        log_entries.append((column_name, column_type, sql_statement))
+
+                    for column_name, column_type, sql_statement in log_entries:
+                        SchemaChangeLog.objects.create(
+                            column_name=column_name,
+                            detected_data_type=column_type,
+                            target_table='inventory_tape',
+                            source_excel_filename=pending_preview.get('file_name', 'unknown.xlsx'),
+                            uploaded_by=request.user,
+                            approved_by=request.user,
+                            approval_timestamp=timezone.now(),
+                            sql_executed=sql_statement,
+                            synchronization_status='applied',
+                        )
+
+                    file_bytes = base64.b64decode(pending_preview.get('file_bytes', ''))
+                    workbook = load_workbook(BytesIO(file_bytes), data_only=True)
+                    imported_count, message, success = import_inventory_excel_file(workbook=workbook, file_name=pending_preview.get('file_name', 'unknown.xlsx'))
+                    if success:
+                        messages.success(request, f'Schema synchronized successfully. {len(new_columns)} new columns added. {message}')
+                        AuditLog.objects.create(
+                            name='Schema Synchronization Completed',
+                            action=f'Applied schema sync for {pending_preview.get("file_name", "unknown.xlsx")} by {request.user.username}',
+                            user=request.user,
+                            severity='success',
+                        )
+                    else:
+                        raise Exception(message)
+            except Exception as exc:
+                messages.error(request, f'Schema synchronization failed. Database rolled back. {exc}')
+                AuditLog.objects.create(
+                    name='Schema Synchronization Failed',
+                    action=f'Schema sync failed for {pending_preview.get("file_name", "unknown.xlsx")}: {exc}',
+                    user=request.user,
+                    severity='error',
+                )
+                return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
+
             return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
         elif form_type == 'edit_profile':
             profile_form = UserProfileForm(request.POST, instance=request.user)
@@ -3241,6 +3502,7 @@ def backup_dashboard(request):
         'report_date_to': report_date_to,
         'report_sort': report_sort,
         'report_order': report_order,
+        'schema_preview': schema_preview,
     }
     return render(request, 'backup_dashboard.html', context)
 
