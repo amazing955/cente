@@ -73,6 +73,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'inventory.middleware.CustomErrorResponseMiddleware',
 ]
 
 ROOT_URLCONF = 'auto_backup_inventory.urls'

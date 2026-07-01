@@ -1,6 +1,6 @@
 # API endpoint reference
 
-The application now exposes a small REST API layer for dashboard and inventory data.
+The application now exposes a lightweight REST API layer for dashboard, inventory, and feature navigation flows.
 
 ## Authentication
 All listed endpoints require an authenticated user session.
@@ -17,15 +17,35 @@ Fields:
 - pending_shipments: number of shipments still pending
 
 ### GET /api/tapes/
-Returns the latest tape inventory records for the dashboard and external integrations.
+Returns the most recent tape inventory records for dashboard and integration use.
 
 Fields per item:
 - id: tape UUID
 - volser: tape volume serial
 - barcode: tape barcode
 - status: current tape status
-- location: current tape location
+- current_location: current tape location
 - retention_end_date: retention end date in ISO format
+- tape_type: tape media type
+
+### POST /api/tapes/
+Creates a new tape record from a JSON payload.
+
+Request body example:
+```json
+{
+  "volser": "TAPE-100",
+  "barcode": "BAR-100",
+  "tape_type": "LTO-8",
+  "status": "Active",
+  "current_location": "Vault A",
+  "retention_end_date": "2035-01-01"
+}
+```
+
+Response:
+- 201 Created with the created tape payload
+- 400 Bad Request when validation fails
 
 ### GET /api/shipments/
 Returns the latest shipment records for workflow monitoring and external integrations.
@@ -38,6 +58,7 @@ Fields per item:
 - source_location: originating location
 - destination_location: destination location
 - priority_level: urgency level
+- created_at: creation timestamp in ISO format
 
 ### GET /api/audit-logs/
 Returns the latest audit trail entries for compliance and monitoring use cases.
@@ -48,4 +69,18 @@ Fields per item:
 - action: audit action description
 - severity: log severity level
 - timestamp: event timestamp in ISO format
+
+### GET /api/features/<feature_key>/
+Resolves a dashboard feature key to its navigation target URL.
+
+Example:
+- /api/features/operations_dashboard/
+
+Response fields:
+- feature_key: requested feature key
+- target_url: dashboard URL to open for that feature
+- scope: feature scope such as backup or operations
+
+### Notes
+The same endpoint behavior is also exposed under the /apis/ prefix for compatibility with existing integrations.
 

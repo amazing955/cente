@@ -4,7 +4,8 @@ from django.contrib.auth.models import Group
 from django.conf import settings
 import random
 import string
-from django.core.exceptions import ValidationError
+from urllib.parse import urlencode
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.mail import EmailMessage, send_mail
 from django.core.paginator import Paginator
 from django.template.loader import render_to_string
@@ -25,9 +26,24 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
 
+from .serializer import AuditLogSerializer, ShipmentSerializer, TapeSerializer
+
 
 def custom_page_not_found(request, exception=None):
     return render(request, '404.html', status=404)
+
+
+def custom_permission_denied(request, exception=None):
+    return render(request, '403.html', status=403)
+
+
+def custom_bad_request(request, exception=None):
+    return render(request, '400.html', status=400)
+
+
+def custom_server_error(request):
+    return render(request, '500.html', status=500)
+
 from django.utils.dateparse import parse_date
 
 
@@ -49,20 +65,29 @@ def api_tape_list(request):
     if not request.user.is_authenticated:
         return JsonResponse({'detail': 'Authentication required.'}, status=401)
 
+    if request.method == 'POST':
+        try:
+            payload = json.loads(request.body.decode('utf-8')) if request.body else {}
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON payload.'}, status=400)
+
+        form = AddTapeForm(payload)
+        if form.is_valid():
+            tape = form.save()
+            AuditLog.objects.create(
+                name='Tape Registered',
+                action=f'Registered tape {tape.volser} via API',
+                user=request.user,
+                severity='success',
+            )
+            return JsonResponse({'result': TapeSerializer(tape).data}, status=201)
+
+        return JsonResponse({'detail': 'Validation failed.', 'errors': form.errors}, status=400)
+
     tapes = Tape.objects.order_by('-date_registered')[:20]
     payload = {
         'count': tapes.count(),
-        'results': [
-            {
-                'id': str(tape.id),
-                'volser': tape.volser,
-                'barcode': tape.barcode,
-                'status': tape.status,
-                'location': tape.current_location,
-                'retention_end_date': tape.retention_end_date.isoformat(),
-            }
-            for tape in tapes
-        ],
+        'results': [TapeSerializer(tape).data for tape in tapes],
     }
     return JsonResponse(payload)
 
@@ -74,18 +99,7 @@ def api_shipment_list(request):
     shipments = Shipment.objects.order_by('-shipment_date', '-created_at')[:20]
     payload = {
         'count': shipments.count(),
-        'results': [
-            {
-                'id': str(shipment.id),
-                'shipment_id': shipment.shipment_id,
-                'status': shipment.status,
-                'shipment_type': shipment.shipment_type,
-                'source_location': shipment.source_location,
-                'destination_location': shipment.destination_location,
-                'priority_level': shipment.priority_level,
-            }
-            for shipment in shipments
-        ],
+        'results': [ShipmentSerializer(shipment).data for shipment in shipments],
     }
     return JsonResponse(payload)
 
@@ -97,18 +111,42 @@ def api_audit_log_list(request):
     logs = AuditLog.objects.order_by('-timestamp')[:20]
     payload = {
         'count': logs.count(),
-        'results': [
-            {
-                'id': str(log.id),
-                'name': log.name,
-                'action': log.action,
-                'severity': log.severity,
-                'timestamp': log.timestamp.isoformat() if log.timestamp else None,
-            }
-            for log in logs
-        ],
+        'results': [AuditLogSerializer(log).data for log in logs],
     }
     return JsonResponse(payload)
+
+
+def api_feature_navigation(request, feature_key):
+    if not request.user.is_authenticated:
+        return JsonResponse({'detail': 'Authentication required.'}, status=401)
+
+    if not has_dashboard_feature_access(request.user, feature_key):
+        return JsonResponse({'detail': 'Feature access denied.'}, status=403)
+
+    feature = next((item for item in get_dashboard_feature_catalog() if item['key'] == feature_key), None)
+    if not feature:
+        return JsonResponse({'detail': 'Feature not found.'}, status=404)
+
+    url_params = dict(feature.get('url_params', {}))
+    url_params['feature_key'] = feature_key
+    base_url = reverse(feature['url_name'])
+    target_url = f"{base_url}?{urlencode(url_params)}" if url_params else base_url
+
+    fragment_url = target_url
+    load_mode = 'page'
+    if feature['url_name'] in {'operations-dashboard', 'backup-dashboard', 'shipment-approvals'}:
+        query_params = dict(url_params)
+        query_params['feature_key'] = feature_key
+        load_mode = 'page'
+        fragment_url = target_url
+
+    return JsonResponse({
+        'feature_key': feature_key,
+        'target_url': target_url,
+        'fragment_url': fragment_url,
+        'load_mode': load_mode,
+        'scope': feature.get('scope'),
+    })
 
 from .forms import *
 from .models import *
@@ -141,7 +179,14 @@ def get_feature_panel_state(feature_key):
         'reconciliation': {'show_reconciliation_panel': True},
         'reports': {'show_reports_panel': True},
         'audit_logs': {'show_audit_panel': True},
+        'analytics': {'show_analytics_panel': True},
+        'shipment_monitoring': {'show_monitoring_panel': True},
+        'exception_management': {'show_exception_panel': True},
+        'custody_governance': {'show_custody_panel': True},
+        'reconciliation_review': {'show_reconciliation_panel': True},
+        'compliance_monitoring': {'show_compliance_panel': True},
         'backup_dashboard': {},
+        'operations_dashboard': {},
     }
     return mapping.get(feature_key, {})
 
@@ -3232,6 +3277,11 @@ def operations_dashboard(request):
     show_profile_panel = False
     profile_edit_mode = False
     show_notifications_panel = False
+    show_analytics_panel = False
+    show_monitoring_panel = False
+    show_exception_panel = False
+    show_custody_panel = False
+    show_compliance_panel = False
     profile_form = UserProfileForm(instance=request.user)
 
     if request.method == 'GET' and request.GET.get('mark_notifications_read') == '1':
@@ -3268,6 +3318,24 @@ def operations_dashboard(request):
         messages.error(request, 'Please provide the branch name, requester name, and request details.')
 
     show_reports_panel = request.GET.get('show_reports') in {'1', 'reports'} or 'show_reports' in request.GET
+    active_feature_key = request.GET.get('feature_key') or request.POST.get('feature_key')
+    feature_panel_state = get_feature_panel_state(active_feature_key)
+    if feature_panel_state:
+        if feature_panel_state.get('show_analytics_panel'):
+            show_analytics_panel = True
+        if feature_panel_state.get('show_monitoring_panel'):
+            show_monitoring_panel = True
+        if feature_panel_state.get('show_exception_panel'):
+            show_exception_panel = True
+        if feature_panel_state.get('show_custody_panel'):
+            show_custody_panel = True
+        if feature_panel_state.get('show_compliance_panel'):
+            show_compliance_panel = True
+        if feature_panel_state.get('show_reports_panel'):
+            show_reports_panel = True
+        if feature_panel_state.get('show_reconciliation_panel'):
+            show_reconciliation_panel = True
+
     report_categories = get_report_categories()
     current_month = timezone.localdate().strftime('%Y-%m')
     report_category = request.GET.get('report_category')
@@ -3575,7 +3643,13 @@ def operations_dashboard(request):
         'show_profile_panel': show_profile_panel,
         'profile_edit_mode': profile_edit_mode,
         'show_notifications_panel': show_notifications_panel,
+        'show_analytics_panel': show_analytics_panel,
+        'show_monitoring_panel': show_monitoring_panel,
+        'show_exception_panel': show_exception_panel,
+        'show_custody_panel': show_custody_panel,
+        'show_compliance_panel': show_compliance_panel,
         'show_reports_panel': show_reports_panel,
+        'active_feature_key': active_feature_key,
         'report_categories': report_categories,
         'current_month': current_month,
         'report_category': report_category,
@@ -3745,9 +3819,17 @@ def shipment_approvals(request):
         'non_compliant_count': non_compliant_count,
         'overdue_count': overdue_count,
         'has_results': total_shipments > 0,
+        'hide_sidebar': bool(request.GET.get('feature_key') or request.POST.get('feature_key')),
     }
-    if request.GET.get('partial'):
-        return render(request, 'shipment_approvals_fragment.html', context)
+    is_partial_request = request.GET.get('partial') or request.POST.get('partial')
+    is_ajax_request = request.headers.get('x-requested-with', '').lower() == 'xmlhttprequest'
+    if is_partial_request:
+        if is_ajax_request:
+            return render(request, 'shipment_approvals_fragment.html', context)
+        embedded_fragment_html = render_to_string('shipment_approvals_fragment.html', context, request=request)
+        context['embedded_fragment_html'] = embedded_fragment_html
+        context['show_embedded_content'] = True
+        return render(request, 'operations_dashboard.html', context)
     return render(request, 'shipment_approvals.html', context)
 
 
@@ -4256,3 +4338,4 @@ def reconciliation_report_detail(request, pk):
         'open_issues': open_issues,
     }
     return render(request, 'report_detail.html', context)
+

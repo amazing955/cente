@@ -138,8 +138,22 @@ body {
     </nav>
 </div>
 <div class="main-content" id="dashboard">
-    <div id="embeddedContent" class="d-none"></div>
-    <div id="dashboardBody">
+    <div id="embeddedContent" class="{% if embedded_fragment_html %}d-block{% else %}d-none{% endif %}">
+        {% if embedded_fragment_html %}
+            <div class="card shadow-sm border-0 mb-4">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                    <span class="fw-semibold">Selected Feature</span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" data-action="close-embedded-panel" aria-label="Close feature panel">
+                        <i class="bi bi-x-lg"></i>
+                    </button>
+                </div>
+                <div class="card-body">
+                    {{ embedded_fragment_html|safe }}
+                </div>
+            </div>
+        {% endif %}
+    </div>
+    <div id="dashboardBody" class="{% if show_analytics_panel or show_monitoring_panel or show_exception_panel or show_custody_panel or show_reconciliation_panel or show_compliance_panel or show_reports_panel or show_notifications_panel or show_settings_panel or show_profile_panel %}d-none{% endif %}">
         <div class="top-navbar d-flex align-items-center justify-content-between mb-4">
             <div>
                 <h1 class="h4 dashboard-title mb-1">Operations Manager Dashboard</h1>
@@ -153,7 +167,7 @@ body {
                     </button>
                     <ul class="dropdown-menu">
                         {% for entry in dashboard_features %}
-                            <li><a class="dropdown-item" href="{{ entry.target_url }}"><i class="{{ entry.icon }}"></i> {{ entry.name }}</a></li>
+                            <li><a class="dropdown-item feature-api-link" href="#" data-api-url="{{ entry.api_url }}" data-target-url="{{ entry.target_url }}"><i class="{{ entry.icon }}"></i> {{ entry.name }}</a></li>
                         {% endfor %}
                     </ul>
                 </div>
@@ -363,7 +377,7 @@ body {
                                 <span class="small-note">Chain of Custody Compliance</span>
                                 <span class="fw-semibold">{{ chain_of_custody_compliance }}%</span>
                             </div>
-                            <div class="progress" style="height: 8px;"><div class="progress-bar bg-success" style="width: {{ chain_of_custody_compliance }}%"></div></div>
+                            <div class="progress" style="height: 8px;"><div class="progress-bar bg-success" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ chain_of_custody_compliance }}" data-width="{{ chain_of_custody_compliance }}"></div></div>
                         </div>
                     </div>
                 </div>
@@ -372,7 +386,7 @@ body {
     </div>
     </div>
 
-    <div id="analyticsPanel" class="d-none">
+    <div id="analyticsPanel" class="{% if not show_analytics_panel %}d-none{% endif %}">
     <div class="row g-3 mb-4" id="analytics">
         <div class="col-12">
             <div class="section-card p-4 h-100">
@@ -452,7 +466,7 @@ body {
     </div>
     </div>
 
-    <div id="monitoringPanel" class="d-none">
+    <div id="monitoringPanel" class="{% if not show_monitoring_panel %}d-none{% endif %}">
     <div class="row g-3 mb-4" id="shipment_monitoring">
         <div class="col-12">
             <div class="section-card p-4 h-100">
@@ -538,7 +552,7 @@ body {
     </div>
     </div>
 
-    <div id="exceptionPanel" class="d-none">
+    <div id="exceptionPanel" class="{% if not show_exception_panel %}d-none{% endif %}">
     <div class="row g-3 mb-4" id="exception_management">
         <div class="col-12">
             <div class="section-card p-4 h-100">
@@ -632,7 +646,7 @@ body {
     </div>
     </div>
 
-    <div id="custodyPanel" class="d-none">
+    <div id="custodyPanel" class="{% if not show_custody_panel %}d-none{% endif %}">
     <div class="row g-3 mb-4" id="custody_governance">
         <div class="col-12">
             <div class="section-card p-4 h-100">
@@ -712,7 +726,7 @@ body {
     </div>
     </div>
 
-    <div id="reconciliationPanel" class="d-none">
+    <div id="reconciliationPanel" class="{% if not show_reconciliation_panel %}d-none{% endif %}">
     <div class="row g-3 mb-4" id="reconciliation_review">
         <div class="col-12">
             <div class="section-card p-4 h-100">
@@ -792,7 +806,7 @@ body {
     </div>
     </div>
 
-    <div id="compliancePanel" class="d-none">
+    <div id="compliancePanel" class="{% if not show_compliance_panel %}d-none{% endif %}">
     <div class="row g-3 mb-4" id="compliance_monitoring">
         <div class="col-12">
             <div class="section-card p-4 h-100">
@@ -876,7 +890,7 @@ body {
     </div>
     </div>
 
-    <div id="notificationsPanel" class="d-none">
+    <div id="notificationsPanel" class="{% if not show_notifications_panel %}d-none{% endif %}">
         <div class="row g-3 mb-4" id="notifications">
             <div class="col-12">
                 <div class="section-card p-4 h-100">
@@ -946,7 +960,7 @@ body {
         </div>
     </div>
 
-    <div id="reportsPanel" class="d-none">
+    <div id="reportsPanel" class="{% if not show_reports_panel %}d-none{% endif %}">
     <div class="row g-3 mb-4" id="reports">
         <div class="col-12">
             <div class="section-card p-4 h-100">
@@ -1007,7 +1021,7 @@ body {
     </div>
     </div>
 
-    <div id="settingsPanel" class="d-none">
+    <div id="settingsPanel" class="{% if not show_settings_panel %}d-none{% endif %}">
     <div class="row g-3 mb-4" id="settings">
         <div class="col-12">
             <div class="section-card p-4 h-100">
@@ -1077,7 +1091,7 @@ body {
     </div>
     </div>
 
-    <div id="profilePanel" class="d-none">
+    <div id="profilePanel" class="{% if not show_profile_panel %}d-none{% endif %}">
     <div class="row g-3 mb-4" id="profile_view">
         <div class="col-12">
             <div class="section-card p-4 h-100">
@@ -1160,7 +1174,30 @@ body {
     </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script id="dashboard-config" type="application/json">
+{
+  "showProfilePanel": {% if show_profile_panel %}true{% else %}false{% endif %},
+  "showNotificationsPanel": {% if show_notifications_panel %}true{% else %}false{% endif %},
+  "showAnalyticsPanel": {% if show_analytics_panel %}true{% else %}false{% endif %},
+  "showMonitoringPanel": {% if show_monitoring_panel %}true{% else %}false{% endif %},
+  "showExceptionPanel": {% if show_exception_panel %}true{% else %}false{% endif %},
+  "showCustodyPanel": {% if show_custody_panel %}true{% else %}false{% endif %},
+  "showReconciliationPanel": {% if show_reconciliation_panel %}true{% else %}false{% endif %},
+  "showCompliancePanel": {% if show_compliance_panel %}true{% else %}false{% endif %},
+  "showReportsPanel": {% if show_reports_panel %}true{% else %}false{% endif %},
+  "reportOnly": {% if report_only %}true{% else %}false{% endif %},
+  "profileEditMode": {% if profile_edit_mode %}true{% else %}false{% endif %},
+  "statusLabels": {{ status_labels_json|safe }},
+  "statusCounts": {{ status_counts_json|safe }},
+  "monthlyLabels": {{ monthly_labels_json|safe }},
+  "monthlyShipments": {{ monthly_shipments_json|safe }},
+  "monthlyCompliance": {{ monthly_compliance_json|safe }},
+  "monthlyExceptions": {{ monthly_exceptions_json|safe }}
+}
+</script>
 <script>
+const dashboardConfig = JSON.parse(document.getElementById('dashboard-config').textContent || '{}');
+
 function getCookie(name) {
     const cookieValue = document.cookie.match('(?:^|; )' + name + '=([^;]*)');
     return cookieValue ? decodeURIComponent(cookieValue[1]) : null;
@@ -1184,6 +1221,26 @@ function updateSidebarActiveLink(targetHref) {
     });
 }
 
+function renderEmbeddedPanelContent(html) {
+    const embedded = document.getElementById('embeddedContent');
+    if (!embedded) {
+        return;
+    }
+    embedded.innerHTML = `
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                <span class="fw-semibold">Selected Feature</span>
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-action="close-embedded-panel" aria-label="Close feature panel">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div class="card-body">
+                ${html}
+            </div>
+        </div>`;
+    attachEmbeddedHandlers();
+}
+
 function loadEmbeddedFragment(url, panel = '#shipment_approvals') {
     const targetUrl = new URL(url, window.location.origin);
     targetUrl.searchParams.set('partial', '1');
@@ -1203,9 +1260,9 @@ function loadEmbeddedFragment(url, panel = '#shipment_approvals') {
             const profile = document.getElementById('profilePanel');
             const notifications = document.getElementById('notificationsPanel');
             if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
-                embedded.innerHTML = html;
+                renderEmbeddedPanelContent(html);
                 embedded.classList.remove('d-none');
-                body.classList.add('d-none');
+                body.classList.remove('d-none');
                 analytics.classList.add('d-none');
                 monitoring.classList.add('d-none');
                 exception.classList.add('d-none');
@@ -1217,7 +1274,6 @@ function loadEmbeddedFragment(url, panel = '#shipment_approvals') {
                 profile.classList.add('d-none');
                 notifications.classList.add('d-none');
                 updateSidebarActiveLink(panel);
-                attachEmbeddedHandlers();
             }
         })
         .catch(() => {
@@ -1256,8 +1312,7 @@ function submitEmbeddedApprovalForm(form) {
             if (!html) return;
             const embedded = document.getElementById('embeddedContent');
             if (embedded) {
-                embedded.innerHTML = html;
-                attachEmbeddedHandlers();
+                renderEmbeddedPanelContent(html);
             }
         })
         .catch(() => {
@@ -1280,6 +1335,37 @@ function markNotificationsRead() {
     }).catch(() => {
         // Silent failure if notification mark-read request cannot complete.
     });
+}
+
+function closeEmbeddedPanel() {
+    const embedded = document.getElementById('embeddedContent');
+    const body = document.getElementById('dashboardBody');
+    const analytics = document.getElementById('analyticsPanel');
+    const monitoring = document.getElementById('monitoringPanel');
+    const exception = document.getElementById('exceptionPanel');
+    const custody = document.getElementById('custodyPanel');
+    const reconciliation = document.getElementById('reconciliationPanel');
+    const compliance = document.getElementById('compliancePanel');
+    const reports = document.getElementById('reportsPanel');
+    const settings = document.getElementById('settingsPanel');
+    const profile = document.getElementById('profilePanel');
+    const notifications = document.getElementById('notificationsPanel');
+    if (embedded && body && analytics && monitoring && exception && custody && reconciliation && compliance && reports && settings && profile && notifications) {
+        embedded.innerHTML = '';
+        embedded.classList.add('d-none');
+        body.classList.remove('d-none');
+        analytics.classList.add('d-none');
+        monitoring.classList.add('d-none');
+        exception.classList.add('d-none');
+        custody.classList.add('d-none');
+        reconciliation.classList.add('d-none');
+        compliance.classList.add('d-none');
+        reports.classList.add('d-none');
+        settings.classList.add('d-none');
+        profile.classList.add('d-none');
+        notifications.classList.add('d-none');
+        updateSidebarActiveLink('#dashboard');
+    }
 }
 
 function attachEmbeddedHandlers() {
@@ -1660,6 +1746,19 @@ function showDashboardBody() {
     }
 }
 
+document.addEventListener('click', event => {
+    const trigger = event.target.closest('[data-action="close-embedded-panel"]');
+    if (!trigger) {
+        return;
+    }
+    event.preventDefault();
+    closeEmbeddedPanel();
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+    attachEmbeddedHandlers();
+});
+
 document.querySelectorAll('a.analytics-toggle').forEach(link => {
     link.addEventListener('click', event => {
         event.preventDefault();
@@ -1756,6 +1855,31 @@ document.querySelectorAll('a.partial-load').forEach(link => {
     });
 });
 
+document.addEventListener('click', event => {
+    const embedded = event.target.closest('#embeddedContent');
+    if (!embedded) {
+        return;
+    }
+
+    const link = event.target.closest('a');
+    if (!link) {
+        return;
+    }
+
+    const href = link.getAttribute('href');
+    if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:')) {
+        return;
+    }
+
+    const targetUrl = new URL(href, window.location.origin);
+    if (targetUrl.origin !== window.location.origin) {
+        return;
+    }
+
+    event.preventDefault();
+    loadEmbeddedFragment(link.dataset.url || href, link.dataset.panel || '#shipment_approvals');
+});
+
 function handleNotificationAction(link) {
     const targetUrl = link.dataset.targetUrl || link.getAttribute('href');
     if (!targetUrl) {
@@ -1797,26 +1921,86 @@ document.getElementById('markAllNotificationsReadBtn')?.addEventListener('click'
     markNotificationsRead();
 });
 
-if ({{ show_profile_panel|yesno:'true,false' }}) {
+if (dashboardConfig.showProfilePanel) {
     showProfilePanel();
 }
 
-if ({{ show_notifications_panel|yesno:'true,false' }}) {
+if (dashboardConfig.showNotificationsPanel) {
     showNotificationsPanel();
 }
 
-if ({{ report_only|yesno:'true,false' }}) {
+if (dashboardConfig.showAnalyticsPanel) {
+    showAnalyticsPanel();
+}
+
+if (dashboardConfig.showMonitoringPanel) {
+    showMonitoringPanel();
+}
+
+if (dashboardConfig.showExceptionPanel) {
+    showExceptionPanel();
+}
+
+if (dashboardConfig.showCustodyPanel) {
+    showCustodyPanel();
+}
+
+if (dashboardConfig.showReconciliationPanel) {
+    showReconciliationPanel();
+}
+
+if (dashboardConfig.showCompliancePanel) {
+    showCompliancePanel();
+}
+
+if (dashboardConfig.showReportsPanel) {
     showReportsPanel();
 }
 
-if ({{ profile_edit_mode|yesno:'true,false' }}) {
+if (dashboardConfig.reportOnly) {
+    showReportsPanel();
+}
+
+if (dashboardConfig.profileEditMode) {
     const editProfileFormContainer = document.getElementById('editProfileFormContainer');
     if (editProfileFormContainer) {
         editProfileFormContainer.scrollIntoView({ behavior: 'smooth' });
     }
 }
 
-document.addEventListener('click', event => {
+document.addEventListener('click', async (event) => {
+    const link = event.target.closest('.feature-api-link');
+    if (link) {
+        event.preventDefault();
+        const apiUrl = link.dataset.apiUrl;
+        const fallbackUrl = link.dataset.targetUrl;
+
+        if (!apiUrl) {
+            if (fallbackUrl) {
+                window.location.assign(fallbackUrl);
+            }
+            return;
+        }
+
+        try {
+            const response = await fetch(apiUrl, {
+                method: 'GET',
+                headers: { 'X-Requested-With': 'XMLHttpRequest' },
+                credentials: 'same-origin'
+            });
+            const payload = await response.json();
+            if (response.ok && payload.target_url) {
+                window.location.assign(payload.target_url);
+            } else if (fallbackUrl) {
+                window.location.assign(fallbackUrl);
+            }
+        } catch (error) {
+            if (fallbackUrl) {
+                window.location.assign(fallbackUrl);
+            }
+        }
+    }
+
     const backButton = event.target.closest('.back-to-dashboard-btn');
     if (backButton) {
         event.preventDefault();
@@ -1856,9 +2040,9 @@ if (statusChartCtx) {
     new Chart(statusChartCtx, {
         type: 'doughnut',
         data: {
-            labels: {{ status_labels_json|safe }},
+            labels: dashboardConfig.statusLabels,
             datasets: [{
-                data: {{ status_counts_json|safe }},
+                data: dashboardConfig.statusCounts,
                 backgroundColor: ['#0d6efd', '#198754', '#0dcaf0', '#ffc107', '#6610f2', '#dc3545'],
                 borderWidth: 0,
             }]
@@ -1874,10 +2058,10 @@ if (monthlyTrendCtx) {
     new Chart(monthlyTrendCtx, {
         type: 'line',
         data: {
-            labels: {{ monthly_labels_json|safe }},
+            labels: dashboardConfig.monthlyLabels,
             datasets: [{
                 label: 'Shipments',
-                data: {{ monthly_shipments_json|safe }},
+                data: dashboardConfig.monthlyShipments,
                 borderColor: '#0d6efd',
                 backgroundColor: 'rgba(13,110,253,0.12)',
                 fill: true,
@@ -1897,10 +2081,10 @@ if (complianceCtx) {
     new Chart(complianceCtx, {
         type: 'bar',
         data: {
-            labels: {{ monthly_labels_json|safe }},
+            labels: dashboardConfig.monthlyLabels,
             datasets: [{
                 label: 'Compliance %',
-                data: {{ monthly_compliance_json|safe }},
+                data: dashboardConfig.monthlyCompliance,
                 backgroundColor: '#198754',
                 borderRadius: 12,
                 barThickness: 18,
@@ -1918,10 +2102,10 @@ if (exceptionCtx) {
     new Chart(exceptionCtx, {
         type: 'line',
         data: {
-            labels: {{ monthly_labels_json|safe }},
+            labels: dashboardConfig.monthlyLabels,
             datasets: [{
                 label: 'Exceptions',
-                data: {{ monthly_exceptions_json|safe }},
+                data: dashboardConfig.monthlyExceptions,
                 borderColor: '#dc3545',
                 backgroundColor: 'rgba(220,53,69,0.12)',
                 fill: true,

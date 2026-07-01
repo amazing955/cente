@@ -16,10 +16,18 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include, re_path
-from inventory.views import custom_page_not_found
+from inventory.views import (
+    custom_bad_request,
+    custom_page_not_found,
+    custom_permission_denied,
+    custom_server_error,
+)
 
 
+handler400 = custom_bad_request
+handler403 = custom_permission_denied
 handler404 = custom_page_not_found
+handler500 = custom_server_error
 
 
 urlpatterns = [

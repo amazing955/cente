@@ -6,7 +6,8 @@ from .models import DashboardFeatureExemption, DashboardFeaturePermission, get_d
 
 
 def dashboard_features(request):
-    if not request.user.is_authenticated:
+    user = getattr(request, 'user', None)
+    if not user or not user.is_authenticated:
         return {'dashboard_features': []}
 
     if request.user.is_superuser:
@@ -38,6 +39,7 @@ def dashboard_features(request):
             'name': feature['name'],
             'icon': feature['icon'],
             'target_url': target_url,
+            'api_url': reverse('api-feature-navigation', kwargs={'feature_key': feature['key']}),
             'description': feature['description'],
         })
 

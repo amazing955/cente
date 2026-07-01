@@ -1,3 +1,4 @@
+import json
 from datetime import date
 from io import BytesIO
 from unittest.mock import patch
@@ -6,12 +7,14 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
-from django.urls import reverse
+from django.http import HttpResponseForbidden
+from django.test import RequestFactory, TestCase, override_settings
+from django.urls import path, reverse
 from openpyxl import Workbook
 
 from .forms import BackupShipmentAssignmentForm, RoleCreationForm
 from .models import (
+    ApplicationSetting,
     AuditLog,
     CourierProfile,
     DashboardFeatureExemption,
@@ -25,6 +28,17 @@ from .models import (
     Tape,
     TapeRequest,
 )
+from .serializer import TapeSerializer
+from .views import custom_permission_denied
+
+
+def forbidden_view(request):
+    return HttpResponseForbidden('Forbidden')
+
+
+urlpatterns = [
+    path('protected-page/', forbidden_view),
+]
 
 
 class AuditorDashboardTests(TestCase):
@@ -58,6 +72,14 @@ class AuditorDashboardTests(TestCase):
         response = self.client.get(reverse('auditor-dashboard'))
 
         self.assertEqual(response.status_code, 200)
+
+    @override_settings(ROOT_URLCONF='inventory.tests')
+    def test_custom_permission_denied_view_uses_403_template(self):
+        response = self.client.get('/protected-page/')
+
+        self.assertEqual(response.status_code, 403)
+        self.assertContains(response, 'Access denied', status_code=403)
+        self.assertContains(response, 'Return home', status_code=403)
 
     def test_auditor_reports_page_renders_report_module(self):
         self.client.force_login(self.user)
@@ -173,6 +195,43 @@ class AuditorDashboardTests(TestCase):
         self.assertEqual(shipment.created_by, self.user)
 
 
+class BackupDashboardSettingsTests(TestCase):
+    def test_backup_dashboard_settings_save_reconciliation_schedule(self):
+        user = get_user_model().objects.create_superuser(
+            username='backup-settings-admin',
+            email='backup-settings-admin@example.com',
+            password='pass1234',
+        )
+        application_settings = ApplicationSetting.objects.create()
+
+        self.client.force_login(user)
+        response = self.client.post(
+            reverse('backup-dashboard'),
+            {
+                'form_type': 'system_settings',
+                'backup_retention_days': '180',
+                'shipment_notification_enabled': 'on',
+                'email_alerts_enabled': 'on',
+                'allow_offsite_transfers': 'on',
+                'max_tapes_per_shipment': '60',
+                'audit_logging_level': 'warning',
+                'audit_retention_years': '8',
+                'default_dashboard_section': 'reports',
+                'maintenance_window_start': '02:00',
+                'maintenance_window_end': '04:00',
+                'next_reconciliation_date': '2026-08-15',
+                'reconciliation_alert_start_days_before': '5',
+                'reconciliation_alert_duration_days': '10',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        application_settings.refresh_from_db()
+        self.assertEqual(application_settings.next_reconciliation_date, date(2026, 8, 15))
+        self.assertEqual(application_settings.reconciliation_alert_start_days_before, 5)
+        self.assertEqual(application_settings.reconciliation_alert_duration_days, 10)
+
+
 class ShipmentFormTests(TestCase):
     def test_add_shipment_form_prefills_releasing_custodian_with_current_user(self):
         backup_group = Group.objects.create(name='Backup Administrator')
@@ -219,6 +278,26 @@ class DashboardFeatureNavigationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(any(entry['key'] == 'operations_dashboard' for entry in response.context['dashboard_features']))
 
+    def test_dashboard_context_processor_exposes_api_navigation_urls_for_permitted_features(self):
+        group = Group.objects.create(name='Operations Manager')
+        user = get_user_model().objects.create_user(
+            username='nav-api-user',
+            email='nav-api-user@example.com',
+            password='pass1234',
+        )
+        user.groups.add(group)
+
+        DashboardFeaturePermission.objects.create(role=group, feature_key='operations_dashboard', can_view=True)
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('operations-dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        entry = next((item for item in response.context['dashboard_features'] if item['key'] == 'operations_dashboard'), None)
+        self.assertIsNotNone(entry)
+        self.assertIn('api_url', entry)
+        self.assertEqual(entry['api_url'], reverse('api-feature-navigation', kwargs={'feature_key': 'operations_dashboard'}))
+
     def test_dashboard_feature_exemptions_hide_feature_for_individual_user(self):
         group = Group.objects.create(name='Operations Manager')
         user = get_user_model().objects.create_user(
@@ -236,6 +315,42 @@ class DashboardFeatureNavigationTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(any(entry['key'] == 'operations_dashboard' for entry in response.context['dashboard_features']))
+
+    def test_feature_navigation_api_returns_standalone_page_payload_for_features(self):
+        group = Group.objects.create(name='Operations Manager')
+        user = get_user_model().objects.create_user(
+            username='nav-fragment-user',
+            email='nav-fragment-user@example.com',
+            password='pass1234',
+        )
+        user.groups.add(group)
+
+        DashboardFeaturePermission.objects.create(role=group, feature_key='shipment_approvals', can_view=True)
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('api-feature-navigation', kwargs={'feature_key': 'shipment_approvals'}))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['load_mode'], 'page')
+        self.assertIn(reverse('shipment-approvals'), payload['target_url'])
+        self.assertNotIn('partial=1', payload['target_url'])
+
+    def test_feature_page_hides_sidebar_when_feature_key_is_present(self):
+        group = Group.objects.create(name='Operations Manager')
+        user = get_user_model().objects.create_user(
+            username='feature-page-sidebar-user',
+            email='feature-page-sidebar-user@example.com',
+            password='pass1234',
+        )
+        user.groups.add(group)
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('shipment-approvals'), {'feature_key': 'shipment_approvals'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'class="app-sidebar')
+        self.assertNotContains(response, 'id="sidebarPanel"')
 
     def test_feature_permission_allows_access_for_custom_group_name(self):
         group = Group.objects.create(name='Warehouse Ops')
@@ -270,6 +385,24 @@ class DashboardFeatureNavigationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.context['show_tape_inventory_panel'])
         self.assertEqual(response.context['active_feature_key'], 'tape_inventory')
+
+    def test_feature_link_opens_selected_section_inside_operations_dashboard(self):
+        group = Group.objects.create(name='Operations Manager')
+        user = get_user_model().objects.create_user(
+            username='operations-feature-user',
+            email='operations-feature-user@example.com',
+            password='pass1234',
+        )
+        user.groups.add(group)
+
+        DashboardFeaturePermission.objects.create(role=group, feature_key='exception_management', can_view=True)
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('operations-dashboard'), {'feature_key': 'exception_management'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['show_exception_panel'])
+        self.assertEqual(response.context['active_feature_key'], 'exception_management')
 
 
 class ApiEndpointTests(TestCase):
@@ -324,6 +457,39 @@ class ApiEndpointTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['count'], 1)
         self.assertEqual(response.json()['results'][0]['volser'], 'TAPE-002')
+
+    def test_tape_serializer_returns_expected_fields(self):
+        tape = Tape.objects.create(
+            volser='TAPE-003',
+            barcode='BAR-003',
+            tape_type='LTO-8',
+            retention_end_date=date(2032, 1, 1),
+            status='Active',
+            current_location='Vault A',
+        )
+
+        payload = TapeSerializer(tape).data
+
+        self.assertEqual(payload['volser'], 'TAPE-003')
+        self.assertEqual(payload['status'], 'Active')
+        self.assertEqual(payload['location'], 'Vault A')
+
+    def test_tape_creation_via_api_returns_created_payload(self):
+        response = self.client.post(
+            '/api/tapes/',
+            json.dumps({
+                'volser': 'TAPE-004',
+                'tape_type': 'LTO-8',
+                'retention_end_date': '2035-01-01',
+                'current_location': 'Vault B',
+                'status': 'Active',
+            }),
+            content_type='application/json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(Tape.objects.count(), 1)
+        self.assertEqual(response.json()['result']['volser'], 'TAPE-004')
 
     def test_shipments_api_returns_collection(self):
         Shipment.objects.create(

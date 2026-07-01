@@ -948,6 +948,9 @@ class SystemSettingsForm(forms.ModelForm):
             'default_dashboard_section',
             'maintenance_window_start',
             'maintenance_window_end',
+            'next_reconciliation_date',
+            'reconciliation_alert_start_days_before',
+            'reconciliation_alert_duration_days',
         ]
         widgets = {
             'backup_retention_days': forms.NumberInput(attrs={'class': 'form-control', 'min': 1}),
@@ -960,4 +963,7 @@ class SystemSettingsForm(forms.ModelForm):
             'default_dashboard_section': forms.Select(attrs={'class': 'form-select'}),
             'maintenance_window_start': forms.TimeInput(attrs={'class': 'form-control', 'type': 'time'}),
             'maintenance_window_end': forms.TimeInput(attrs={'class': 'form-control', 'type': 'time'}),
+            'next_reconciliation_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
+            'reconciliation_alert_start_days_before': forms.NumberInput(attrs={'class': 'form-control', 'min': 0}),
+            'reconciliation_alert_duration_days': forms.NumberInput(attrs={'class': 'form-control', 'min': 1}),
         }

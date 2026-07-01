@@ -41,6 +41,9 @@ class ApplicationSetting(models.Model):
     default_dashboard_section = models.CharField(max_length=50, choices=DEFAULT_PANEL_CHOICES, default='inventory')
     maintenance_window_start = models.TimeField(default=time(2, 0))
     maintenance_window_end = models.TimeField(default=time(4, 0))
+    next_reconciliation_date = models.DateField(null=True, blank=True)
+    reconciliation_alert_start_days_before = models.PositiveIntegerField(default=7)
+    reconciliation_alert_duration_days = models.PositiveIntegerField(default=14)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
