@@ -13,10 +13,11 @@ from django.test import RequestFactory, TestCase, override_settings
 from django.urls import path, reverse
 from openpyxl import Workbook
 
-from .forms import BackupShipmentAssignmentForm, RoleCreationForm
+from .forms import BackupShipmentAssignmentForm, CustomUserCreationForm, RoleCreationForm
 from .models import (
     ApplicationSetting,
     AuditLog,
+    BankBranch,
     CourierProfile,
     DashboardFeatureExemption,
     DashboardFeaturePermission,
@@ -42,6 +43,64 @@ def forbidden_view(request):
 urlpatterns = [
     path('protected-page/', forbidden_view),
 ]
+
+
+class OperationsManagerBranchAssignmentTests(TestCase):
+    def test_operations_manager_creation_requires_assigned_branch(self):
+        branch = BankBranch.objects.create(branch_code='KMA-001', branch_name='Kampala Main Branch', status='Active')
+        form = CustomUserCreationForm(data={
+            'username': 'opsmanager',
+            'email': 'opsmanager@example.com',
+            'password1': 'StrongPass123!',
+            'password2': 'StrongPass123!',
+            'first_name': 'Ops',
+            'last_name': 'Manager',
+            'role': 'operations_manager',
+        })
+
+        self.assertFalse(form.is_valid())
+        self.assertIn('assigned_branch', form.errors)
+        self.assertIn('Assigned Branch is required', str(form.errors['assigned_branch'][0]))
+
+        form = CustomUserCreationForm(data={
+            'username': 'opsmanager2',
+            'email': 'opsmanager2@example.com',
+            'password1': 'StrongPass123!',
+            'password2': 'StrongPass123!',
+            'first_name': 'Ops',
+            'last_name': 'Manager',
+            'role': 'operations_manager',
+            'assigned_branch': branch.pk,
+        })
+
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_operations_manager_shipment_uses_assigned_branch_from_user_profile(self):
+        branch = BankBranch.objects.create(branch_code='MBA-002', branch_name='Mbarara Branch', status='Active')
+        operations_group = Group.objects.create(name='Operations Manager')
+        user = get_user_model().objects.create_user(
+            username='opsuser',
+            email='opsuser@example.com',
+            password='pass1234',
+            role='operations_manager',
+        )
+        user.groups.add(operations_group)
+        user.assigned_branch = branch
+        user.save(update_fields=['assigned_branch'])
+
+        self.client.force_login(user)
+        response = self.client.post(reverse('start-shipment-request'), {
+            'form_type': 'submit_shipment_request',
+            'branch_name': 'Some Other Branch',
+            'requester_name': 'Ops User',
+            'request_details': 'Move tapes to the branch',
+        })
+
+        self.assertEqual(response.status_code, 302)
+        shipment = Shipment.objects.filter(created_by=user).latest('created_at')
+        self.assertEqual(shipment.requesting_branch, branch)
+        self.assertEqual(shipment.source_location, branch.branch_name)
+        self.assertEqual(shipment.destination_location, branch.branch_name)
 
 
 class AuditorDashboardTests(TestCase):
@@ -159,6 +218,35 @@ class AuditorDashboardTests(TestCase):
         self.assertContains(response, 'name="view"')
         self.assertContains(response, 'value="audit-logs"')
 
+    def test_audit_logs_view_renders_enhanced_filter_controls(self):
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('auditor-dashboard'), {'view': 'audit-logs', 'search': 'reconciliation', 'severity': 'info'})
+
+        self.assertContains(response, 'name="search"')
+        self.assertContains(response, 'name="log_type"')
+        self.assertContains(response, 'name="module"')
+        self.assertContains(response, 'name="severity"')
+        self.assertContains(response, 'name="user"')
+        self.assertContains(response, 'name="status"')
+        self.assertContains(response, 'name="date_range"')
+        self.assertContains(response, 'name="per_page"')
+
+    def test_audit_logs_export_generates_csv(self):
+        self.client.force_login(self.user)
+        AuditLog.objects.create(
+            name='Reports',
+            action='Compliance report exported',
+            user=self.user,
+            severity='success',
+        )
+
+        response = self.client.get(reverse('auditor-dashboard'), {'view': 'audit-logs', 'export': 'csv'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'text/csv')
+        self.assertContains(response, 'Compliance report exported')
+
     def test_unknown_page_uses_custom_404_template(self):
         response = self.client.get('/definitely-not-a-real-page/')
 
@@ -199,6 +287,32 @@ class AuditorDashboardTests(TestCase):
 
 
 class BackupDashboardSettingsTests(TestCase):
+    def test_backup_dashboard_audit_logs_renders_enhanced_filters(self):
+        user = get_user_model().objects.create_superuser(
+            username='backup-audit-admin',
+            email='backup-audit-admin@example.com',
+            password='pass1234',
+        )
+        AuditLog.objects.create(
+            name='Reports',
+            action='Backup audit log review requested',
+            user=user,
+            severity='warning',
+        )
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('backup-dashboard'), {'show_audit': '1', 'search': 'review', 'severity': 'warning'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'name="search"')
+        self.assertContains(response, 'name="log_type"')
+        self.assertContains(response, 'name="module"')
+        self.assertContains(response, 'name="severity"')
+        self.assertContains(response, 'name="user"')
+        self.assertContains(response, 'name="status"')
+        self.assertContains(response, 'name="date_range"')
+        self.assertContains(response, 'name="per_page"')
+
     def test_backup_dashboard_settings_save_reconciliation_schedule(self):
         user = get_user_model().objects.create_superuser(
             username='backup-settings-admin',

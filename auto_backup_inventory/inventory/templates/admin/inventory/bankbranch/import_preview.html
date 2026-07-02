@@ -1,31 +1,67 @@
 {% extends 'admin/base_site.html' %}
-{% load i18n %}
+{% load i18n static %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'inventory/jazzmin_admin.css' %}">
+  <style>
+    .btn-import {
+      background: #198754 !important;
+      color: #ffffff !important;
+      border: 1px solid #198754 !important;
+      border-radius: 10px !important;
+      box-shadow: 0 4px 12px rgba(25,135,84,.25) !important;
+      transition: all 0.3s ease !important;
+    }
+    .btn-import:hover {
+      transform: translateY(-2px) !important;
+      box-shadow: 0 8px 20px rgba(25,135,84,.30) !important;
+    }
+    .btn-cancel {
+      background: #f8f9fa !important;
+      color: #495057 !important;
+      border: 1px solid #ced4da !important;
+      border-radius: 10px !important;
+    }
+    .btn-cancel:hover {
+      background: #fff5f5 !important;
+      color: #dc3545 !important;
+      border-color: #dc3545 !important;
+    }
+  </style>
+{% endblock %}
 
 {% block content %}
 <div id="content-main">
-  <h2>Import Preview</h2>
-  <p><strong>Total Rows:</strong> {{ preview.total_rows }}</p>
-  <p><strong>New Branches:</strong> {{ preview.new_branches }}</p>
-  <p><strong>Updated Branches:</strong> {{ preview.updated_branches }}</p>
-  <p><strong>Duplicate Rows:</strong> {{ preview.duplicate_rows }}</p>
-  <p><strong>Invalid Rows:</strong> {{ preview.invalid_rows }}</p>
-  <p><strong>Rows To Be Imported:</strong> {{ preview.rows_to_import }}</p>
-  {% if preview.errors %}
-    <div class="module">
-      <h3>Validation Errors</h3>
-      <ul>
-        {% for error in preview.errors %}
-          <li>{{ error }}</li>
-        {% endfor %}
-      </ul>
-    </div>
-  {% endif %}
-  <form method="post">
-    {% csrf_token %}
-    <div class="submit-row">
-      <button type="submit" name="confirm_import" value="1" class="default">Import</button>
-      <a href="{% url 'admin:inventory_bankbranch_changelist' %}" class="button cancel-link">Cancel</a>
-    </div>
-  </form>
+  <div class="bankbranch-action-card">
+    <h2>Import Preview</h2>
+    <p><strong>Total Rows:</strong> {{ preview.total_rows }}</p>
+    <p><strong>New Branches:</strong> {{ preview.new_branches }}</p>
+    <p><strong>Updated Branches:</strong> {{ preview.updated_branches }}</p>
+    <p><strong>Duplicate Rows:</strong> {{ preview.duplicate_rows }}</p>
+    <p><strong>Invalid Rows:</strong> {{ preview.invalid_rows }}</p>
+    <p><strong>Rows To Be Imported:</strong> {{ preview.rows_to_import }}</p>
+    {% if preview.errors %}
+      <div class="module">
+        <h3>Validation Errors</h3>
+        <ul>
+          {% for error in preview.errors %}
+            <li>{{ error }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+    <form method="post">
+      {% csrf_token %}
+      <div class="btn-toolbar bankbranch-toolbar" role="toolbar" aria-label="Import preview actions">
+        <button type="submit" name="confirm_import" value="1" class="btn btn-import" aria-label="Import branches">
+          <i class="bi bi-check-circle" aria-hidden="true"></i> Import
+        </button>
+        <a href="{% url 'admin:inventory_bankbranch_changelist' %}" class="btn btn-cancel" aria-label="Cancel import">
+          <i class="bi bi-x-circle" aria-hidden="true"></i> Cancel
+        </a>
+      </div>
+    </form>
+  </div>
 </div>
 {% endblock %}

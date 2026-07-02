@@ -13,7 +13,7 @@ from django.core.mail import EmailMessage, send_mail
 from django.core.paginator import Paginator
 from django.template.loader import render_to_string
 import csv
-import json
+import json  
 import uuid
 from io import BytesIO, StringIO
 from datetime import date, datetime, timedelta
@@ -118,6 +118,133 @@ def api_audit_log_list(request):
         'results': [AuditLogSerializer(log).data for log in logs],
     }
     return JsonResponse(payload)
+
+
+def build_audit_log_queryset(request):
+    queryset = AuditLog.objects.select_related('user').all().order_by('-timestamp')
+
+    search = (request.GET.get('search') or '').strip()
+    log_type = (request.GET.get('log_type') or '').strip()
+    module = (request.GET.get('module') or '').strip()
+    severity = (request.GET.get('severity') or '').strip()
+    user_filter = (request.GET.get('user') or '').strip()
+    status = (request.GET.get('status') or '').strip()
+    date_range = (request.GET.get('date_range') or '').strip()
+    date_from = (request.GET.get('date_from') or '').strip()
+    date_to = (request.GET.get('date_to') or '').strip()
+    per_page = int(request.GET.get('per_page') or 25)
+
+    if search:
+        queryset = queryset.filter(
+            Q(name__icontains=search)
+            | Q(action__icontains=search)
+            | Q(message__icontains=search)
+            | Q(user__username__icontains=search)
+        )
+    if log_type:
+        queryset = queryset.filter(action__icontains=log_type)
+    if module:
+        queryset = queryset.filter(name__icontains=module)
+    if severity:
+        queryset = queryset.filter(severity__iexact=severity)
+    if user_filter:
+        queryset = queryset.filter(user__username__icontains=user_filter)
+    if status:
+        queryset = queryset.filter(action__icontains=status)
+
+    if date_range:
+        today = timezone.localdate()
+        if date_range == 'today':
+            queryset = queryset.filter(timestamp__date=today)
+        elif date_range == 'yesterday':
+            queryset = queryset.filter(timestamp__date=today - timedelta(days=1))
+        elif date_range == 'last_7_days':
+            start = today - timedelta(days=7)
+            queryset = queryset.filter(timestamp__date__gte=start, timestamp__date__lte=today)
+        elif date_range == 'last_30_days':
+            start = today - timedelta(days=30)
+            queryset = queryset.filter(timestamp__date__gte=start, timestamp__date__lte=today)
+        elif date_range == 'this_month':
+            queryset = queryset.filter(timestamp__year=today.year, timestamp__month=today.month)
+        elif date_range == 'this_year':
+            queryset = queryset.filter(timestamp__year=today.year)
+
+    if date_from:
+        queryset = queryset.filter(timestamp__date__gte=date_from)
+    if date_to:
+        queryset = queryset.filter(timestamp__date__lte=date_to)
+
+    return queryset, {
+        'search': search,
+        'log_type': log_type,
+        'module': module,
+        'severity': severity,
+        'user': user_filter,
+        'status': status,
+        'date_range': date_range,
+        'date_from': date_from,
+        'date_to': date_to,
+        'per_page': per_page,
+    }
+
+
+def export_audit_logs(queryset, export_format):
+    headers = ['Timestamp', 'User', 'Log Type', 'Module', 'Status', 'Severity', 'Action']
+    rows = []
+    for entry in queryset:
+        rows.append([
+            entry.timestamp.strftime('%Y-%m-%d %H:%M:%S') if entry.timestamp else '',
+            entry.user.username if entry.user else 'System',
+            entry.log_type,
+            entry.module,
+            entry.status or '-',
+            entry.severity or 'info',
+            entry.action or '',
+        ])
+
+    if export_format == 'csv':
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = 'attachment; filename="audit_logs.csv"'
+        writer = csv.writer(response)
+        writer.writerow(headers)
+        writer.writerows(rows)
+        return response
+
+    if export_format == 'excel':
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.title = 'Audit Logs'
+        worksheet.append(headers)
+        for row in rows:
+            worksheet.append(row)
+        buffer = BytesIO()
+        workbook.save(buffer)
+        buffer.seek(0)
+        response = HttpResponse(buffer.read(), content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+        response['Content-Disposition'] = 'attachment; filename="audit_logs.xlsx"'
+        return response
+
+    if export_format == 'pdf':
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesizes=landscape(letter), title='Audit Logs')
+        styles = getSampleStyleSheet()
+        table_rows = [headers] + rows
+        table = Table(table_rows, repeatRows=1)
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0d6efd')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+        ]))
+        doc.build([Paragraph('Audit Logs', styles['Title']), Spacer(1, 12), table])
+        buffer.seek(0)
+        response = HttpResponse(buffer.read(), content_type='application/pdf')
+        response['Content-Disposition'] = 'attachment; filename="audit_logs.pdf"'
+        return response
+
+    return None
 
 
 def api_feature_navigation(request, feature_key):
@@ -1178,7 +1305,21 @@ def is_backup_administrator(user):
 def is_operations_manager(user):
     if not user or not user.is_authenticated:
         return False
-    return user.is_superuser or user.groups.filter(name='Operations Manager').exists()
+    if user.is_superuser:
+        return True
+    if (getattr(user, 'role', '') or '').strip().lower() == 'operations_manager':
+        return True
+    return user.groups.filter(name='Operations Manager').exists()
+
+
+def get_user_assigned_branch(user):
+    if not user or not user.is_authenticated:
+        return None
+    return getattr(user, 'assigned_branch', None)
+
+
+def get_branch_assignment_required_message():
+    return 'You cannot create a shipment because no bank branch has been assigned to your account. Please contact the system administrator.'
 
 
 def is_it_compliance_auditor(user):
@@ -1480,34 +1621,48 @@ def auditor_dashboard(request):
 @user_passes_test(is_it_compliance_auditor, login_url='signin')
 def audit_logs_view(request):
     context = _build_auditor_context(request, page='audit-logs')
-    search = request.GET.get('search', '').strip()
-    module = request.GET.get('module', '').strip()
-    action_type = request.GET.get('action_type', '').strip()
-    severity = request.GET.get('severity', '').strip()
-    user_filter = request.GET.get('user', '').strip()
-    date_from = request.GET.get('date_from', '').strip()
-    date_to = request.GET.get('date_to', '').strip()
+    queryset, filters = build_audit_log_queryset(request)
+    export_format = (request.GET.get('export') or '').strip().lower()
+    if export_format in {'csv', 'excel', 'pdf'}:
+        export_response = export_audit_logs(queryset, export_format)
+        if export_response is not None:
+            return export_response
 
-    audit_logs = AuditLog.objects.select_related('user').all().order_by('-timestamp')
-    if search:
-        audit_logs = audit_logs.filter(
-            Q(name__icontains=search) | Q(action__icontains=search) | Q(message__icontains=search) | Q(user__username__icontains=search)
-        )
-    if module:
-        audit_logs = audit_logs.filter(name__icontains=module)
-    if action_type:
-        audit_logs = audit_logs.filter(action__icontains=action_type)
-    if severity:
-        audit_logs = audit_logs.filter(severity__iexact=severity)
-    if user_filter:
-        audit_logs = audit_logs.filter(user__username__icontains=user_filter)
-    if date_from:
-        audit_logs = audit_logs.filter(timestamp__date__gte=date_from)
-    if date_to:
-        audit_logs = audit_logs.filter(timestamp__date__lte=date_to)
+    per_page = filters['per_page']
+    paginator = Paginator(queryset, per_page)
+    page = request.GET.get('page', 1)
+    page_obj = paginator.get_page(page)
 
-    context['audit_logs'] = audit_logs[:100]
-    context['filters'] = {'search': search, 'module': module, 'action_type': action_type, 'severity': severity, 'user': user_filter, 'date_from': date_from, 'date_to': date_to}
+    context['audit_logs'] = page_obj.object_list
+    context['page_obj'] = page_obj
+    context['paginator'] = paginator
+    context['filters'] = filters
+    context['active_filters'] = [
+        {'name': 'Search', 'value': filters['search']},
+        {'name': 'Log Type', 'value': filters['log_type']},
+        {'name': 'Module', 'value': filters['module']},
+        {'name': 'Severity', 'value': filters['severity']},
+        {'name': 'User', 'value': filters['user']},
+        {'name': 'Status', 'value': filters['status']},
+        {'name': 'Date Range', 'value': filters['date_range']},
+        {'name': 'From', 'value': filters['date_from']},
+        {'name': 'To', 'value': filters['date_to']},
+    ]
+    context['active_filters'] = [item for item in context['active_filters'] if item['value']]
+    context['users'] = get_user_model().objects.order_by('username')
+    context['log_types'] = ['Authentication', 'Request', 'Approval', 'Shipment', 'Inventory', 'Audit', 'Compliance', 'Exception', 'Reconciliation', 'Notification', 'API', 'Import', 'Export', 'Security', 'Configuration', 'System', 'Error']
+    context['modules'] = ['Shipment', 'Inventory', 'Bank Branches', 'Couriers', 'Users', 'Vault', 'Reports', 'Dashboard', 'API', 'Notifications']
+    context['severity_choices'] = ['info', 'success', 'warning', 'error']
+    context['status_choices'] = ['Success', 'Failed', 'Pending', 'Approved', 'Rejected']
+    context['date_ranges'] = [
+        ('', 'All Dates'),
+        ('today', 'Today'),
+        ('yesterday', 'Yesterday'),
+        ('last_7_days', 'Last 7 Days'),
+        ('last_30_days', 'Last 30 Days'),
+        ('this_month', 'This Month'),
+        ('this_year', 'This Year'),
+    ]
     return render(request, 'audit_logs.html', context)
 
 
@@ -2963,7 +3118,18 @@ def backup_dashboard(request):
     for alert in recent_alerts:
         alert.is_new = alert.pk in unread_alert_id_set
     pending_approval_shipments = Shipment.objects.filter(status='Pending').order_by('-shipment_date')[:8]
-    audit_logs = AuditLog.objects.order_by('-timestamp')
+
+    queryset, filters = build_audit_log_queryset(request)
+    export_format = (request.GET.get('export') or '').strip().lower()
+    if show_audit_panel and export_format in {'csv', 'excel', 'pdf'}:
+        export_response = export_audit_logs(queryset, export_format)
+        if export_response is not None:
+            return export_response
+    per_page = filters['per_page']
+    paginator = Paginator(queryset, per_page)
+    page = request.GET.get('page', 1)
+    page_obj = paginator.get_page(page)
+    audit_logs = page_obj.object_list
 
     inventory_report_tapes = []
     shipment_report_rows = []
@@ -3430,6 +3596,34 @@ def backup_dashboard(request):
         'approval_shipment': approval_shipment,
         'assignment_form': assignment_form,
         'audit_logs': audit_logs,
+        'page_obj': page_obj,
+        'paginator': paginator,
+        'filters': filters,
+        'active_filters': [
+            {'name': 'Search', 'value': filters['search']},
+            {'name': 'Log Type', 'value': filters['log_type']},
+            {'name': 'Module', 'value': filters['module']},
+            {'name': 'Severity', 'value': filters['severity']},
+            {'name': 'User', 'value': filters['user']},
+            {'name': 'Status', 'value': filters['status']},
+            {'name': 'Date Range', 'value': filters['date_range']},
+            {'name': 'From', 'value': filters['date_from']},
+            {'name': 'To', 'value': filters['date_to']},
+        ],
+        'users': get_user_model().objects.order_by('username'),
+        'log_types': ['Authentication', 'Request', 'Approval', 'Shipment', 'Inventory', 'Audit', 'Compliance', 'Exception', 'Reconciliation', 'Notification', 'API', 'Import', 'Export', 'Security', 'Configuration', 'System', 'Error'],
+        'modules': ['Shipment', 'Inventory', 'Bank Branches', 'Couriers', 'Users', 'Vault', 'Reports', 'Dashboard', 'API', 'Notifications'],
+        'severity_choices': ['info', 'success', 'warning', 'error'],
+        'status_choices': ['Success', 'Failed', 'Pending', 'Approved', 'Rejected'],
+        'date_ranges': [
+            ('', 'All Dates'),
+            ('today', 'Today'),
+            ('yesterday', 'Yesterday'),
+            ('last_7_days', 'Last 7 Days'),
+            ('last_30_days', 'Last 30 Days'),
+            ('this_month', 'This Month'),
+            ('this_year', 'This Year'),
+        ],
         'user_feature_names': user_feature_names,
         'dashboard_tabs': dashboard_tabs,
         'tape_form': tape_form,
@@ -3510,10 +3704,19 @@ def backup_dashboard(request):
 @user_passes_test(lambda u: u.is_superuser or is_operations_manager(u), login_url='signin')
 @login_required(login_url='signin')
 def start_shipment_request(request):
-    form = ShipmentRequestSubmissionForm(request.POST or None)
+    assigned_branch = get_user_assigned_branch(request.user)
     partial_request = request.GET.get('partial') == '1' or request.POST.get('partial') == '1'
+    branch_assignment_required = is_operations_manager(request.user) and not assigned_branch
+
+    if branch_assignment_required:
+        messages.error(request, get_branch_assignment_required_message())
+        template_name = 'start_shipment_request_fragment.html' if partial_request else 'start_shipment_request.html'
+        return render(request, template_name, {'form': None, 'partial_request': partial_request, 'branch_assignment_required': True})
+
+    initial_branch_name = assigned_branch.branch_name if assigned_branch else ''
+    form = ShipmentRequestSubmissionForm(request.POST or None, initial={'branch_name': initial_branch_name})
     if request.method == 'POST' and form.is_valid():
-        branch_name = form.cleaned_data['branch_name'].strip()
+        branch_name = assigned_branch.branch_name if assigned_branch else ''
         requester_name = (form.cleaned_data['requester_name'] or '').strip()
         request_details = form.cleaned_data['request_details'].strip()
         shipment = Shipment.objects.create(
@@ -3522,6 +3725,7 @@ def start_shipment_request(request):
             status='Pending',
             source_location=branch_name,
             destination_location=branch_name,
+            requesting_branch=assigned_branch,
             releasing_custodian=requester_name or request.user.get_full_name() or request.user.username,
             receiving_organization='Pending review',
             approval_remarks=request_details,
@@ -3529,25 +3733,27 @@ def start_shipment_request(request):
             last_updated_by=request.user,
         )
         AuditLog.objects.create(
-            name='Shipment Request Submitted',
-            action=f'Shipment request {shipment.shipment_id} created for {branch_name} by {request.user.username}',
+            name='Shipment Created',
+            action='Shipment Created',
+            message=f'Shipment request {shipment.shipment_id} created for {branch_name} by {request.user.username}',
             user=request.user,
-            severity='warning',
+            severity='info',
         )
         messages.success(request, 'Shipment request submitted to the backup administrator.')
         if partial_request:
             return redirect(f"{reverse('start-shipment-request')}?partial=1")
         return redirect(reverse('operations-dashboard'))
     if request.method == 'POST':
-        messages.error(request, 'Please provide the branch name, requester name, and request details.')
+        messages.error(request, 'Please provide the requester name and request details.')
     template_name = 'start_shipment_request_fragment.html' if partial_request else 'start_shipment_request.html'
-    return render(request, template_name, {'form': form, 'partial_request': partial_request})
+    return render(request, template_name, {'form': form, 'partial_request': partial_request, 'branch_assignment_required': False})
 
 
 @user_passes_test(lambda u: u.is_superuser or is_operations_manager(u), login_url='signin')
 @login_required(login_url='signin')
 def operations_dashboard(request):
-    shipment_request_form = ShipmentRequestSubmissionForm(request.POST or None)
+    assigned_branch = get_user_assigned_branch(request.user)
+    shipment_request_form = ShipmentRequestSubmissionForm(request.POST or None, initial={'branch_name': assigned_branch.branch_name if assigned_branch else ''})
     shipments = Shipment.objects.all().order_by('-shipment_date')
     tapes = Tape.objects.all()
     reconciliations = Reconciliation.objects.order_by('-reconciliation_date')[:5]
@@ -3582,8 +3788,11 @@ def operations_dashboard(request):
     tape_request_form = TapeRequestForm(request.POST or None)
 
     if request.method == 'POST' and request.POST.get('form_type') == 'submit_shipment_request':
+        if is_operations_manager(request.user) and not assigned_branch:
+            messages.error(request, get_branch_assignment_required_message())
+            return redirect(reverse('operations-dashboard'))
         if shipment_request_form.is_valid():
-            branch_name = shipment_request_form.cleaned_data['branch_name'].strip()
+            branch_name = assigned_branch.branch_name if assigned_branch else ''
             requester_name = (shipment_request_form.cleaned_data['requester_name'] or '').strip()
             request_details = shipment_request_form.cleaned_data['request_details'].strip()
             shipment = Shipment.objects.create(
@@ -3592,6 +3801,7 @@ def operations_dashboard(request):
                 status='Pending',
                 source_location=branch_name,
                 destination_location=branch_name,
+                requesting_branch=assigned_branch,
                 releasing_custodian=requester_name or request.user.get_full_name() or request.user.username,
                 receiving_organization='Pending review',
                 approval_remarks=request_details,
@@ -3599,14 +3809,15 @@ def operations_dashboard(request):
                 last_updated_by=request.user,
             )
             AuditLog.objects.create(
-                name='Shipment Request Submitted',
-                action=f'Shipment request {shipment.shipment_id} created for {branch_name} by {request.user.username}',
+                name='Shipment Created',
+                action='Shipment Created',
+                message=f'Shipment request {shipment.shipment_id} created for {branch_name} by {request.user.username}',
                 user=request.user,
-                severity='warning',
+                severity='info',
             )
             messages.success(request, 'Shipment request submitted to the backup administrator.')
             return redirect(reverse('operations-dashboard'))
-        messages.error(request, 'Please provide the branch name, requester name, and request details.')
+        messages.error(request, 'Please provide the requester name and request details.')
 
     show_reports_panel = request.GET.get('show_reports') in {'1', 'reports'} or 'show_reports' in request.GET
     active_feature_key = request.GET.get('feature_key') or request.POST.get('feature_key')

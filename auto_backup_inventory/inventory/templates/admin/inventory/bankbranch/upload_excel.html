@@ -1,21 +1,58 @@
 {% extends 'admin/base_site.html' %}
-{% load i18n %}
+{% load i18n static %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <link rel="stylesheet" href="{% static 'inventory/jazzmin_admin.css' %}">
+  <style>
+    .btn-primary-gradient {
+      background: linear-gradient(135deg, #0548ad 0%, #001f54 100%) !important;
+      color: #ffffff !important;
+      border: 1px solid #0548ad !important;
+      border-radius: 10px !important;
+      box-shadow: 0 4px 12px rgba(5,72,173,.25) !important;
+      transition: all 0.3s ease !important;
+    }
+    .btn-primary-gradient:hover {
+      transform: translateY(-2px) !important;
+      box-shadow: 0 8px 20px rgba(5,72,173,.30) !important;
+    }
+    .btn-cancel {
+      background: #f8f9fa !important;
+      color: #495057 !important;
+      border: 1px solid #ced4da !important;
+      border-radius: 10px !important;
+    }
+    .btn-cancel:hover {
+      background: #fff5f5 !important;
+      color: #dc3545 !important;
+      border-color: #dc3545 !important;
+    }
+  </style>
+{% endblock %}
 
 {% block content %}
 <div id="content-main">
-  <form method="post" enctype="multipart/form-data">
-    {% csrf_token %}
-    <fieldset class="module aligned">
-      <h2>Upload Branch Excel</h2>
-      <div class="form-row">
-        <label for="id_excel_file">Select Excel file (.xlsx only)</label>
-        <input type="file" name="excel_file" id="id_excel_file" accept=".xlsx" required>
+  <div class="bankbranch-action-card">
+    <p>Upload an Excel workbook containing branch records. Only .xlsx files are supported.</p>
+    <form method="post" enctype="multipart/form-data" class="bankbranch-upload-form">
+      {% csrf_token %}
+      <fieldset class="module aligned">
+        <h2>Upload Branch Excel</h2>
+        <div class="form-row">
+          <label for="id_excel_file">Select Excel file (.xlsx only)</label>
+          <input type="file" name="excel_file" id="id_excel_file" accept=".xlsx" required aria-label="Select Excel file to upload">
+        </div>
+      </fieldset>
+      <div class="btn-toolbar bankbranch-toolbar" role="toolbar" aria-label="Upload actions">
+        <button type="submit" class="btn btn-primary-gradient" aria-label="Upload Excel file">
+          <i class="bi bi-upload" aria-hidden="true"></i> Upload
+        </button>
+        <a href="{% url 'admin:inventory_bankbranch_changelist' %}" class="btn btn-cancel" aria-label="Cancel upload">
+          <i class="bi bi-x-circle" aria-hidden="true"></i> Cancel
+        </a>
       </div>
-    </fieldset>
-    <div class="submit-row">
-      <input type="submit" value="Upload" class="default">
-      <a href="{% url 'admin:inventory_bankbranch_changelist' %}" class="button cancel-link">Cancel</a>
-    </div>
-  </form>
+    </form>
+  </div>
 </div>
 {% endblock %}

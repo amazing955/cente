@@ -15,6 +15,11 @@ from .models import BankBranch, BranchImportLog
 
 
 class BankBranchAdmin(admin.ModelAdmin):
+    class Media:
+        css = {
+            'all': ('inventory/jazzmin_admin.css',),
+        }
+
     list_display = ('branch_code', 'branch_name', 'region', 'district', 'status', 'created_at', 'updated_at')
     list_filter = ('status', 'region')
     search_fields = ('branch_code', 'branch_name')
@@ -127,11 +132,8 @@ class BankBranchAdmin(admin.ModelAdmin):
             preview = self._build_import_preview(rows, request.user)
             preview['filename'] = excel_file.name
             request.session['bank_branch_import_preview'] = preview
-            return render(request, 'admin/inventory/bankbranch/import_preview.html', {
-                'title': 'Import Preview',
-                'preview': preview,
-                'opts': self.model._meta,
-            })
+            messages.info(request, 'Preview loaded. Review the data below and click "Import" to confirm.')
+            return HttpResponseRedirect(reverse('admin:inventory_bankbranch_preview_import'))
 
         return render(request, 'admin/inventory/bankbranch/upload_excel.html', {'title': 'Upload Branch Excel'})
 

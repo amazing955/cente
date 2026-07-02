@@ -3,6 +3,14 @@
     --admin-sidebar-text: #ffffff;
     --admin-sidebar-hover: rgba(255,255,255,0.12);
     --admin-sidebar-active: rgba(255,255,255,0.22);
+    --brand-primary: #0548ad;
+    --brand-primary-dark: #001f54;
+    --brand-accent: #0d6efd;
+    --brand-success: #198754;
+    --brand-warning: #fd7e14;
+    --brand-danger: #dc3545;
+    --brand-border-radius: 10px;
+    --brand-shadow: 0 4px 12px rgba(5,72,173,.25);
 }
 
 #jazzy-sidebar.app-sidebar,
@@ -44,4 +52,174 @@
 
 #jazzy-sidebar .nav-sidebar .nav-link.active {
     background: var(--admin-sidebar-active) !important;
+}
+
+.btn-toolbar.bankbranch-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    margin: 0 0 16px;
+}
+
+.btn-toolbar.bankbranch-toolbar a,
+.btn-toolbar.bankbranch-toolbar button,
+.btn-toolbar.bankbranch-toolbar input[type="submit"] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 42px;
+    padding: 10px 16px;
+    border-radius: var(--brand-border-radius);
+    border: 1px solid transparent;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    text-decoration: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,.08);
+}
+
+.btn-toolbar.bankbranch-toolbar a:hover,
+.btn-toolbar.bankbranch-toolbar button:hover,
+.btn-toolbar.bankbranch-toolbar input[type="submit"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(5,72,173,.30);
+}
+
+.btn-toolbar.bankbranch-toolbar a:focus-visible,
+.btn-toolbar.bankbranch-toolbar button:focus-visible,
+.btn-toolbar.bankbranch-toolbar input[type="submit"]:focus-visible {
+    outline: 3px solid rgba(13,110,253,.25);
+    outline-offset: 2px;
+}
+
+.btn-primary-gradient {
+    background: linear-gradient(135deg, var(--brand-primary) 0%, var(--brand-primary-dark) 100%) !important;
+    color: var(--admin-sidebar-text) !important;
+    border-color: var(--brand-primary) !important;
+}
+
+.btn-primary-gradient:hover {
+    background: linear-gradient(135deg, var(--brand-accent) 0%, var(--brand-primary) 100%) !important;
+    color: #fff !important;
+}
+
+.btn-outline-custom {
+    background: transparent;
+    color: var(--brand-accent);
+    border-color: var(--brand-accent);
+}
+
+.btn-outline-custom:hover {
+    background: var(--brand-accent);
+    color: #fff;
+}
+
+.btn-excel {
+    background: transparent;
+    color: var(--brand-success);
+    border-color: var(--brand-success);
+}
+
+.btn-excel:hover {
+    background: var(--brand-success);
+    color: #fff;
+}
+
+.btn-import {
+    background: var(--brand-success);
+    color: #fff;
+    border-color: var(--brand-success);
+}
+
+.btn-import:hover {
+    background: #157347;
+    color: #fff;
+}
+
+.btn-cancel {
+    background: #f8f9fa;
+    color: #495057;
+    border-color: #ced4da;
+}
+
+.btn-cancel:hover {
+    background: #fff5f5;
+    color: var(--brand-danger);
+    border-color: var(--brand-danger);
+}
+
+.btn-preview {
+    background: var(--brand-accent);
+    color: #fff;
+    border-color: var(--brand-accent);
+}
+
+.btn-validate {
+    background: var(--brand-warning);
+    color: #fff;
+    border-color: var(--brand-warning);
+}
+
+.btn-validate:hover {
+    background: #e66b00;
+    color: #fff;
+}
+
+.bankbranch-action-card {
+    background: #fff;
+    border: 1px solid #e9ecef;
+    border-radius: var(--brand-border-radius);
+    padding: 16px 18px;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 6px rgba(0,0,0,.04);
+}
+
+.bankbranch-action-card .bankbranch-toolbar {
+    margin-bottom: 0;
+}
+
+.bankbranch-action-card p {
+    margin: 0 0 10px;
+    color: #4b5563;
+}
+
+.btn:disabled,
+.btn[disabled] {
+    opacity: .65;
+    cursor: not-allowed;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+.btn-spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(255,255,255,.4);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: bankbranch-spin 0.8s linear infinite;
+}
+
+.btn.is-loading {
+    pointer-events: none;
+}
+
+@keyframes bankbranch-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (max-width: 767px) {
+    .btn-toolbar.bankbranch-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .btn-toolbar.bankbranch-toolbar a,
+    .btn-toolbar.bankbranch-toolbar button,
+    .btn-toolbar.bankbranch-toolbar input[type="submit"] {
+        width: 100%;
+    }
 }

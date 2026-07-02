@@ -46,6 +46,7 @@ class BankBranchAdminImportTests(TestCase):
             reverse('admin:inventory_bankbranch_upload_excel'),
             {'excel_file': excel_file},
             format='multipart',
+            follow=True,
         )
 
         self.assertEqual(response.status_code, 200)

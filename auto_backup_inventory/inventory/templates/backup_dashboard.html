@@ -404,48 +404,132 @@ footer{
 </div>
 {% elif show_audit_panel %}
 <div class="card shadow-sm mb-4" style="min-height:70vh;">
-    <div class="card-header">
-        Audit Logs
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+            <h5 class="mb-0">Audit Logs</h5>
+            <small class="text-muted">Enterprise audit review for the shared audit log table.</small>
+        </div>
+        <div class="text-muted small">{{ page_obj.paginator.count }} total events</div>
     </div>
     <div class="card-body">
+        <form method="get" action="{% url 'backup-dashboard' %}" class="row g-2 mb-3">
+            <input type="hidden" name="show_audit" value="1">
+            <div class="col-md-3">
+                <input class="form-control" name="search" value="{{ filters.search }}" placeholder="Search action, message, user">
+            </div>
+            <div class="col-md-2">
+                <select class="form-select" name="log_type">
+                    <option value="">All log types</option>
+                    {% for choice in log_types %}
+                    <option value="{{ choice }}" {% if filters.log_type == choice %}selected{% endif %}>{{ choice }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select class="form-select" name="module">
+                    <option value="">All modules</option>
+                    {% for choice in modules %}
+                    <option value="{{ choice }}" {% if filters.module == choice %}selected{% endif %}>{{ choice }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select class="form-select" name="severity">
+                    <option value="">All severities</option>
+                    {% for choice in severity_choices %}
+                    <option value="{{ choice }}" {% if filters.severity == choice %}selected{% endif %}>{{ choice|title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select class="form-select" name="user">
+                    <option value="">All users</option>
+                    {% for user in users %}
+                    <option value="{{ user.username }}" {% if filters.user == user.username %}selected{% endif %}>{{ user.username }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select class="form-select" name="status">
+                    <option value="">All statuses</option>
+                    {% for choice in status_choices %}
+                    <option value="{{ choice }}" {% if filters.status == choice %}selected{% endif %}>{{ choice }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2">
+                <select class="form-select" name="date_range">
+                    {% for value, label in date_ranges %}
+                    <option value="{{ value }}" {% if filters.date_range == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="col-md-2"><input class="form-control" type="date" name="date_from" value="{{ filters.date_from }}"></div>
+            <div class="col-md-2"><input class="form-control" type="date" name="date_to" value="{{ filters.date_to }}"></div>
+            <div class="col-md-2"><select class="form-select" name="per_page"><option value="25" {% if filters.per_page == 25 %}selected{% endif %}>25 per page</option><option value="50" {% if filters.per_page == 50 %}selected{% endif %}>50 per page</option><option value="100" {% if filters.per_page == 100 %}selected{% endif %}>100 per page</option></select></div>
+            <div class="col-12 d-flex gap-2">
+                <button class="btn btn-primary btn-sm">Apply Filters</button>
+                <a class="btn btn-outline-secondary btn-sm" href="{% url 'backup-dashboard' %}?show_audit=1">Reset</a>
+                <button class="btn btn-outline-success btn-sm" type="submit" name="export" value="csv">Export CSV</button>
+                <button class="btn btn-outline-primary btn-sm" type="submit" name="export" value="excel">Export Excel</button>
+                <button class="btn btn-outline-danger btn-sm" type="submit" name="export" value="pdf">Export PDF</button>
+            </div>
+        </form>
+
+        {% if active_filters %}
+        <div class="mb-3">
+            {% for item in active_filters %}
+            <span class="badge text-bg-light border me-2">{{ item.name }}: {{ item.value }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+
         <div class="table-responsive">
             <table class="table table-hover table-sm align-middle mb-0">
                 <thead class="table-light">
                     <tr>
-                        <th scope="col">Event</th>
-                        <th scope="col">Details</th>
-                        <th scope="col">User</th>
-                        <th scope="col">Severity</th>
                         <th scope="col">Timestamp</th>
+                        <th scope="col">User</th>
+                        <th scope="col">Log Type</th>
+                        <th scope="col">Module</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Severity</th>
+                        <th scope="col">Action</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for audit in audit_logs %}
                         <tr>
-                            <td class="fw-semibold">{{ audit.name }}</td>
-                            <td class="small text-muted">{{ audit.action }}</td>
-                            <td>{% if audit.user %}{{ audit.user.username }}{% else %}<span class="text-muted">System</span>{% endif %}</td>
-                            <td>
-                                {% if audit.severity == 'error' %}
-                                    <span class="badge bg-danger text-uppercase">{{ audit.severity|title }}</span>
-                                {% elif audit.severity == 'warning' %}
-                                    <span class="badge bg-warning text-dark text-uppercase">{{ audit.severity|title }}</span>
-                                {% elif audit.severity == 'success' %}
-                                    <span class="badge bg-success text-uppercase">{{ audit.severity|title }}</span>
-                                {% else %}
-                                    <span class="badge bg-secondary text-uppercase">{{ audit.severity|title }}</span>
-                                {% endif %}
-                            </td>
                             <td class="small text-muted">{{ audit.timestamp|date:"Y-m-d H:i" }}</td>
+                            <td>{% if audit.user %}{{ audit.user.username }}{% else %}<span class="text-muted">System</span>{% endif %}</td>
+                            <td>{{ audit.log_type }}</td>
+                            <td>{{ audit.module }}</td>
+                            <td>{{ audit.status|default:"-" }}</td>
+                            <td><span class="badge text-bg-{{ audit.severity|default:'secondary' }}">{{ audit.severity|title }}</span></td>
+                            <td class="small text-muted">{{ audit.action }}</td>
                         </tr>
                     {% empty %}
                         <tr>
-                            <td colspan="5" class="text-center text-muted">No audit logs found.</td>
+                            <td colspan="7" class="text-center text-muted">No audit logs found.</td>
                         </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
+
+        {% if page_obj.has_other_pages %}
+        <nav class="mt-3">
+            <ul class="pagination pagination-sm">
+                {% if page_obj.has_previous %}
+                <li class="page-item"><a class="page-link" href="?show_audit=1&page={{ page_obj.previous_page_number }}{% for key, value in request.GET.items %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">Previous</a></li>
+                {% endif %}
+                <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
+                {% if page_obj.has_next %}
+                <li class="page-item"><a class="page-link" href="?show_audit=1&page={{ page_obj.next_page_number }}{% for key, value in request.GET.items %}{% if key != 'page' %}&{{ key }}={{ value }}{% endif %}{% endfor %}">Next</a></li>
+                {% endif %}
+            </ul>
+        </nav>
+        {% endif %}
     </div>
 </div>
 {% elif show_alerts_panel %}

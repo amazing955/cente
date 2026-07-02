@@ -2,14 +2,23 @@ from django import forms
 from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth.models import Group, Permission
+from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import ApplicationSetting, CustomUser, CourierProfile, Reconciliation, ReconciliationResult, Shipment, ShipmentException, ShipmentReceipt, ShipmentTransportEvent, Tape, TapeRequest, DeliveryConfirmation
+from .models import ApplicationSetting, BankBranch, CustomUser, CourierProfile, Reconciliation, ReconciliationResult, Shipment, ShipmentException, ShipmentReceipt, ShipmentTransportEvent, Tape, TapeRequest, DeliveryConfirmation
 
 
 class CustomUserCreationForm(UserCreationForm):
+    assigned_branch = forms.ModelChoiceField(
+        queryset=BankBranch.objects.filter(status='Active').order_by('branch_name'),
+        required=False,
+        empty_label='Select an active branch',
+        label='Assigned Branch',
+        widget=forms.Select(attrs={'class': 'form-select'}),
+    )
+
     class Meta:
         model = CustomUser
         fields = [
@@ -18,6 +27,7 @@ class CustomUserCreationForm(UserCreationForm):
             'first_name',
             'last_name',
             'role',
+            'assigned_branch',
         ]
         widgets = {
             'username': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter username', 'required': True}),
@@ -27,8 +37,30 @@ class CustomUserCreationForm(UserCreationForm):
             'role': forms.Select(attrs={'class': 'form-select'}),
         }
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['assigned_branch'].queryset = BankBranch.objects.filter(status='Active').order_by('branch_name')
+        role_value = self.data.get('role', self.initial.get('role', ''))
+        self.fields['assigned_branch'].required = str(role_value).strip().lower() == 'operations_manager'
+
+    def clean(self):
+        cleaned_data = super().clean()
+        role_value = (cleaned_data.get('role') or '').strip().lower()
+        assigned_branch = cleaned_data.get('assigned_branch')
+        if role_value == 'operations_manager' and not assigned_branch:
+            raise ValidationError('Assigned Branch is required.')
+        return cleaned_data
+
 
 class CustomUserEditForm(forms.ModelForm):
+    assigned_branch = forms.ModelChoiceField(
+        queryset=BankBranch.objects.filter(status='Active').order_by('branch_name'),
+        required=False,
+        empty_label='Select an active branch',
+        label='Assigned Branch',
+        widget=forms.Select(attrs={'class': 'form-select'}),
+    )
+
     class Meta:
         model = CustomUser
         fields = [
@@ -37,8 +69,23 @@ class CustomUserEditForm(forms.ModelForm):
             'first_name',
             'last_name',
             'role',
+            'assigned_branch',
             'is_active',
         ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['assigned_branch'].queryset = BankBranch.objects.filter(status='Active').order_by('branch_name')
+        role_value = self.data.get('role', self.initial.get('role', getattr(self.instance, 'role', '')))
+        self.fields['assigned_branch'].required = str(role_value).strip().lower() == 'operations_manager'
+
+    def clean(self):
+        cleaned_data = super().clean()
+        role_value = (cleaned_data.get('role') or '').strip().lower()
+        assigned_branch = cleaned_data.get('assigned_branch')
+        if role_value == 'operations_manager' and not assigned_branch:
+            raise ValidationError('Assigned Branch is required.')
+        return cleaned_data
 
 
 class UserProfileForm(forms.ModelForm):
@@ -281,8 +328,9 @@ class AddTapeForm(forms.ModelForm):
 class ShipmentRequestSubmissionForm(forms.Form):
     branch_name = forms.CharField(
         max_length=200,
-        label='Branch Name',
-        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter branch or site name'})
+        label='Requesting Branch',
+        required=False,
+        widget=forms.TextInput(attrs={'class': 'form-control', 'readonly': 'readonly'})
     )
     requester_name = forms.CharField(
         max_length=200,
@@ -298,6 +346,10 @@ class ShipmentRequestSubmissionForm(forms.Form):
 
 class AuditorShipmentRequestForm(ShipmentRequestSubmissionForm):
     pass
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['branch_name'].required = False
 
 
 class BackupShipmentAssignmentForm(forms.Form):

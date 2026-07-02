@@ -11,14 +11,21 @@
         </div>
     </div>
     <div class="card-body">
+        {% if branch_assignment_required %}
+            <div class="alert alert-warning">You cannot create a shipment because no bank branch has been assigned to your account. Please contact the system administrator.</div>
+        {% endif %}
         <form method="post" action="{% url 'start-shipment-request' %}">
             {% csrf_token %}
             <input type="hidden" name="partial" value="1">
             <div class="mb-3">
                 <label for="id_branch_name" class="form-label">Branch name</label>
-                {{ form.branch_name }}
-                {% if form.branch_name.errors %}
-                    <div class="text-danger small mt-1">{{ form.branch_name.errors|join:", " }}</div>
+                {% if form %}
+                    {{ form.branch_name }}
+                    {% if form.branch_name.errors %}
+                        <div class="text-danger small mt-1">{{ form.branch_name.errors|join:", " }}</div>
+                    {% endif %}
+                {% else %}
+                    <input type="text" class="form-control" value="" readonly>
                 {% endif %}
             </div>
             <div class="mb-3">
@@ -36,7 +43,7 @@
                 {% endif %}
             </div>
             <div class="d-flex justify-content-end gap-2">
-                <button type="submit" class="btn btn-primary">Send to backup administrator</button>
+                <button type="submit" class="btn btn-primary" {% if branch_assignment_required %}disabled{% endif %}>Send to backup administrator</button>
             </div>
         </form>
     </div>

@@ -115,12 +115,20 @@ class CustomUser(AbstractUser):
         ('admin', 'Admin'),
         ('auditor', 'IT Compliance Auditor'),
         ('user', 'User'),
+        ('operations_manager', 'Operations Manager'),
     ]
 
     role = models.CharField(
         max_length=50,
         choices=ROLE_CHOICES,
         default='user'
+    )
+    assigned_branch = models.ForeignKey(
+        'BankBranch',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='assigned_users'
     )
     verified = models.BooleanField(default=False)
     verified_at = models.DateTimeField(null=True, blank=True)
@@ -472,6 +480,13 @@ class Shipment(models.Model):
     number_of_tapes = models.PositiveIntegerField(default=0)
 
     source_location = models.CharField(max_length=200, blank=True)
+    requesting_branch = models.ForeignKey(
+        'BankBranch',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='shipments'
+    )
     releasing_custodian = models.CharField(max_length=150, blank=True)
     release_datetime = models.DateTimeField(null=True, blank=True)
 
@@ -823,13 +838,80 @@ class MonthlyReport(models.Model):
         return f"{self.report_name} ({self.report_month.strftime('%B %Y')})"
 
 
+def infer_log_type(*values):
+    haystack = ' '.join(str(value or '').lower() for value in values if value)
+    if any(keyword in haystack for keyword in ['login', 'logout', 'auth', 'authenticate', 'password', 'session', 'token', 'signin']):
+        return 'Authentication'
+    if any(keyword in haystack for keyword in ['shipment', 'courier', 'dispatch', 'delivery', 'manifest', 'tracking']):
+        return 'Shipment'
+    if any(keyword in haystack for keyword in ['approve', 'approval', 'approved', 'rejected', 'reject', 'decision']):
+        return 'Approval'
+    if any(keyword in haystack for keyword in ['inventory', 'tape', 'vault', 'barcode', 'retention', 'reconciliation']):
+        return 'Inventory'
+    if any(keyword in haystack for keyword in ['audit', 'audit trail', 'compliance', 'exception', 'review']):
+        return 'Audit'
+    if any(keyword in haystack for keyword in ['notification', 'email', 'alert', 'reminder']):
+        return 'Notification'
+    if any(keyword in haystack for keyword in ['api', 'endpoint', 'rest']):
+        return 'API'
+    if any(keyword in haystack for keyword in ['import', 'upload', 'excel']):
+        return 'Import'
+    if any(keyword in haystack for keyword in ['export', 'download']):
+        return 'Export'
+    if any(keyword in haystack for keyword in ['security', 'permission', 'role', 'user', 'group']):
+        return 'Security'
+    if any(keyword in haystack for keyword in ['config', 'configuration', 'settings']):
+        return 'Configuration'
+    if any(keyword in haystack for keyword in ['error', 'failed', 'exception']):
+        return 'Error'
+    if any(keyword in haystack for keyword in ['request', 'submitted', 'created', 'updated']):
+        return 'Request'
+    return 'System'
+
+
+def infer_module(*values):
+    haystack = ' '.join(str(value or '').lower() for value in values if value)
+    if any(keyword in haystack for keyword in ['shipment', 'courier', 'dispatch', 'manifest', 'delivery']):
+        return 'Shipment'
+    if any(keyword in haystack for keyword in ['tape', 'inventory', 'barcode', 'vault', 'retention']):
+        return 'Inventory'
+    if any(keyword in haystack for keyword in ['branch', 'bank']):
+        return 'Bank Branches'
+    if any(keyword in haystack for keyword in ['user', 'role', 'permission', 'group']):
+        return 'Users'
+    if any(keyword in haystack for keyword in ['report', 'compliance', 'audit']):
+        return 'Reports'
+    if any(keyword in haystack for keyword in ['api', 'endpoint', 'rest']):
+        return 'API'
+    if any(keyword in haystack for keyword in ['notification', 'alert', 'email']):
+        return 'Notifications'
+    if any(keyword in haystack for keyword in ['dashboard']):
+        return 'Dashboard'
+    return 'System'
+
+
+def infer_status(*values):
+    haystack = ' '.join(str(value or '').lower() for value in values if value)
+    if any(keyword in haystack for keyword in ['approved', 'approve']):
+        return 'Approved'
+    if any(keyword in haystack for keyword in ['rejected', 'reject']):
+        return 'Rejected'
+    if any(keyword in haystack for keyword in ['failed', 'error', 'exception']):
+        return 'Failed'
+    if any(keyword in haystack for keyword in ['pending', 'submitted', 'created', 'updated']):
+        return 'Pending'
+    if any(keyword in haystack for keyword in ['success', 'completed', 'done']):
+        return 'Success'
+    return ''
+
+
 class AuditLog(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    timestamp = models.DateTimeField(auto_now_add=True)
-    name = models.CharField(max_length=255, blank=True)
-    action = models.CharField(max_length=255, blank=True)
+    timestamp = models.DateTimeField(auto_now_add=True, db_index=True)
+    name = models.CharField(max_length=255, blank=True, db_index=True)
+    action = models.CharField(max_length=255, blank=True, db_index=True)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL)
-    message = models.CharField(max_length=255, blank=True)
+    message = models.CharField(max_length=255, blank=True, db_index=True)
     severity = models.CharField(
         max_length=20,
         choices=[
@@ -838,10 +920,23 @@ class AuditLog(models.Model):
             ('warning', 'Warning'),
             ('error', 'Error'),
         ],
-        default='info'
+        default='info',
+        db_index=True,
     )
-    is_read = models.BooleanField(default=False)
+    is_read = models.BooleanField(default=False, db_index=True)
     read_at = models.DateTimeField(null=True, blank=True)
+
+    @property
+    def log_type(self):
+        return infer_log_type(self.name, self.action, self.message)
+
+    @property
+    def module(self):
+        return infer_module(self.name, self.action, self.message)
+
+    @property
+    def status(self):
+        return infer_status(self.name, self.action, self.message)
 
     def __str__(self):
         label = self.name or self.action or self.message or 'Audit'

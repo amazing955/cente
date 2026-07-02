@@ -1,3 +1,4 @@
+from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
@@ -19,17 +20,55 @@ from .models import (
 )
 
 
+class CustomUserAdminForm(forms.ModelForm):
+    assigned_branch = forms.ModelChoiceField(
+        queryset=BankBranch.objects.filter(status='Active').order_by('branch_name'),
+        required=False,
+        empty_label='Select an active branch',
+        label='Assigned Branch',
+        widget=forms.Select(attrs={'class': 'form-select'}),
+    )
+
+    class Meta:
+        model = CustomUser
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['assigned_branch'].queryset = BankBranch.objects.filter(status='Active').order_by('branch_name')
+        role_value = self.data.get('role', self.initial.get('role', getattr(self.instance, 'role', '')))
+        self.fields['assigned_branch'].required = str(role_value).strip().lower() == 'operations_manager'
+
+    def clean(self):
+        cleaned_data = super().clean()
+        role_value = (cleaned_data.get('role') or '').strip().lower()
+        assigned_branch = cleaned_data.get('assigned_branch')
+        if role_value == 'operations_manager' and not assigned_branch:
+            raise forms.ValidationError('Assigned Branch is required.')
+        return cleaned_data
+
+
 @admin.register(CustomUser)
 class CustomUserAdmin(UserAdmin):
+    form = CustomUserAdminForm
     model = CustomUser
     fieldsets = UserAdmin.fieldsets + (
-        ('Extra info', {'fields': ('role',)}),
+        ('Extra info', {'fields': ('role', 'assigned_branch')}),
     )
     add_fieldsets = UserAdmin.add_fieldsets + (
-        ('Extra info', {'fields': ('role',)}),
+        ('Extra info', {'fields': ('role', 'assigned_branch')}),
     )
-    list_display = ('username', 'email', 'first_name', 'last_name', 'role', 'is_staff', 'is_active')
+    list_display = ('username', 'email', 'first_name', 'last_name', 'role', 'assigned_branch', 'is_staff', 'is_active')
     list_filter = ('role', 'is_staff', 'is_active', 'groups')
+    readonly_fields = ('assigned_branch_code', 'assigned_branch_status')
+
+    def assigned_branch_code(self, obj):
+        return obj.assigned_branch.branch_code if obj.assigned_branch else '-'
+    assigned_branch_code.short_description = 'Branch Code'
+
+    def assigned_branch_status(self, obj):
+        return obj.assigned_branch.status if obj.assigned_branch else '-'
+    assigned_branch_status.short_description = 'Branch Status'
 
 
 @admin.register(DashboardFeaturePermission)
@@ -103,6 +142,8 @@ class MonthlyReportAdmin(admin.ModelAdmin):
 
 @admin.register(AuditLog)
 class AuditLogAdmin(admin.ModelAdmin):
-    list_display = ('timestamp', 'severity', 'message')
-    list_filter = ('severity',)
+    list_display = ('timestamp', 'user', 'severity', 'module', 'status', 'action', 'name')
+    list_filter = ('severity', 'is_read')
+    search_fields = ('name', 'action', 'message', 'user__username')
     ordering = ('-timestamp',)
+    readonly_fields = ('timestamp', 'log_type', 'module', 'status')
