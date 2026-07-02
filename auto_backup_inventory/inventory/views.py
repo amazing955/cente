@@ -33,6 +33,216 @@ from django.utils import timezone
 from .serializer import AuditLogSerializer, ShipmentSerializer, TapeSerializer
 
 
+def _build_investigation_log_entry(exception, request):
+    return {
+        'timestamp': timezone.now().isoformat(),
+        'message': f"Exception investigation requested for {exception.exception_id}",
+        'severity': 'info',
+        'source': 'API',
+        'actor': getattr(request.user, 'username', None) or 'anonymous',
+    }
+
+
+def exception_investigation_view(request, exception_id):
+    if request.method not in {'GET'}:
+        return JsonResponse({'detail': 'Only GET requests are allowed.'}, status=405)
+
+    if request.user.is_authenticated:
+        user = request.user
+    else:
+        user = None
+
+    exception_obj = ShipmentException.objects.select_related(
+        'shipment', 'shipment__requesting_branch', 'shipment__created_by', 'shipment__approved_by', 'shipment__last_updated_by',
+        'tape', 'reported_by'
+    ).filter(exception_id=exception_id).first()
+
+    if not exception_obj:
+        return JsonResponse({'detail': 'Exception not found.'}, status=404)
+
+    if exception_obj.status != 'Open':
+        return JsonResponse({'detail': 'Exception is not open.'}, status=400)
+
+    shipment = exception_obj.shipment
+    tape = exception_obj.tape
+
+    transport_events = list(
+        ShipmentTransportEvent.objects.select_related('courier', 'courier__user').filter(shipment=shipment).order_by('-event_date', '-event_time', '-created_at')
+    )
+    receipts = list(
+        ShipmentReceipt.objects.select_related('courier', 'courier__user').filter(shipment=shipment).order_by('-created_at')
+    )
+    approvals = list(
+        ShipmentApprovalHistory.objects.select_related('user').filter(shipment=shipment).order_by('-created_at')
+    )
+    related_exceptions = list(
+        ShipmentException.objects.select_related('tape', 'reported_by').filter(shipment=shipment).exclude(pk=exception_obj.pk).order_by('-reported_date')
+    )
+    audit_logs = list(
+        AuditLog.objects.select_related('user').filter(action__icontains=exception_obj.exception_id).order_by('-timestamp')[:20]
+    )
+
+    timeline = []
+    timeline.append({
+        'type': 'exception_reported',
+        'timestamp': exception_obj.reported_date.isoformat() if exception_obj.reported_date else None,
+        'message': f"Exception {exception_obj.exception_id} reported for shipment {shipment.shipment_id}",
+        'actor': getattr(exception_obj.reported_by, 'username', None) or 'system',
+    })
+    for event in transport_events:
+        timeline.append({
+            'type': 'transport_event',
+            'timestamp': datetime.combine(event.event_date, event.event_time).isoformat() if event.event_date and event.event_time else None,
+            'message': f"{event.event_type} - {event.comments or 'No notes'}",
+            'actor': getattr(event.courier, 'full_name', None) or 'courier',
+        })
+    for receipt in receipts:
+        timeline.append({
+            'type': 'receipt',
+            'timestamp': receipt.created_at.isoformat() if receipt.created_at else None,
+            'message': f"Receipt captured: {receipt.notes or 'No notes'}",
+            'actor': getattr(receipt.courier, 'full_name', None) or 'courier',
+        })
+    for approval in approvals:
+        timeline.append({
+            'type': 'approval',
+            'timestamp': approval.created_at.isoformat() if approval.created_at else None,
+            'message': approval.comments or 'Approval history updated',
+            'actor': getattr(approval.user, 'username', None) or 'system',
+        })
+
+    chain_of_custody = []
+    if shipment.releasing_custodian:
+        chain_of_custody.append({'role': 'releasing_custodian', 'value': shipment.releasing_custodian})
+    if shipment.receiving_custodian:
+        chain_of_custody.append({'role': 'receiving_custodian', 'value': shipment.receiving_custodian})
+    for receipt in receipts:
+        chain_of_custody.append({
+            'role': 'receipt',
+            'value': receipt.pickup_location,
+            'confirmed': receipt.custody_confirmed,
+            'courier': getattr(receipt.courier, 'full_name', None),
+        })
+    for event in transport_events:
+        chain_of_custody.append({
+            'role': 'transport_event',
+            'value': event.event_type,
+            'courier': getattr(event.courier, 'full_name', None),
+        })
+
+    payload = {
+        'exception': {
+            'id': exception_obj.exception_id,
+            'type': exception_obj.exception_type,
+            'status': exception_obj.status,
+            'severity': exception_obj.severity,
+            'description': exception_obj.description,
+            'reported_by': getattr(exception_obj.reported_by, 'username', None),
+            'reported_date': exception_obj.reported_date.isoformat() if exception_obj.reported_date else None,
+        },
+        'tape': {
+            'id': str(tape.id) if tape else None,
+            'volser': tape.volser if tape else None,
+            'barcode': tape.barcode if tape else None,
+            'status': tape.status if tape else None,
+            'current_location': tape.current_location if tape else None,
+            'retention_end_date': tape.retention_end_date.isoformat() if tape and tape.retention_end_date else None,
+        },
+        'shipment': {
+            'id': str(shipment.id),
+            'shipment_id': shipment.shipment_id,
+            'status': shipment.status,
+            'shipment_type': shipment.shipment_type,
+            'priority_level': shipment.priority_level,
+            'source_location': shipment.source_location,
+            'destination_location': shipment.destination_location,
+            'requesting_branch': getattr(shipment.requesting_branch, 'branch_name', None),
+            'releasing_custodian': shipment.releasing_custodian,
+            'receiving_custodian': shipment.receiving_custodian,
+            'tracking_number': shipment.tracking_number,
+            'vehicle_number': shipment.vehicle_number,
+            'created_by': getattr(shipment.created_by, 'username', None),
+            'approved_by': getattr(shipment.approved_by, 'username', None),
+        },
+        'timeline': sorted(timeline, key=lambda item: item['timestamp'] or '', reverse=True),
+        'chain_of_custody': chain_of_custody,
+        'logs': [
+            {
+                'timestamp': entry.timestamp.isoformat() if entry.timestamp else None,
+                'message': entry.message,
+                'severity': entry.severity,
+                'user': getattr(entry.user, 'username', None),
+            }
+            for entry in audit_logs
+        ],
+        'audit_logs': [
+            {
+                'id': str(entry.id),
+                'timestamp': entry.timestamp.isoformat() if entry.timestamp else None,
+                'name': entry.name,
+                'action': entry.action,
+                'message': entry.message,
+                'severity': entry.severity,
+                'user': getattr(entry.user, 'username', None),
+            }
+            for entry in audit_logs
+        ],
+        'user_interactions': [
+            {
+                'username': getattr(exception_obj.reported_by, 'username', None),
+                'role': getattr(exception_obj.reported_by, 'role', None),
+                'assigned_branch': getattr(getattr(exception_obj.reported_by, 'assigned_branch', None), 'branch_name', None),
+            }
+        ],
+        'notifications': [
+            {
+                'type': 'audit_log',
+                'message': 'Investigation access recorded',
+            }
+        ],
+        'related_exceptions': [
+            {
+                'id': exc.exception_id,
+                'type': exc.exception_type,
+                'status': exc.status,
+                'severity': exc.severity,
+            }
+            for exc in related_exceptions
+        ],
+        'users': [
+            {
+                'username': getattr(exception_obj.reported_by, 'username', None),
+                'role': getattr(exception_obj.reported_by, 'role', None),
+                'branch': getattr(getattr(exception_obj.reported_by, 'assigned_branch', None), 'branch_name', None),
+            },
+            {
+                'username': getattr(shipment.created_by, 'username', None),
+                'role': getattr(shipment.created_by, 'role', None),
+                'branch': getattr(getattr(shipment.created_by, 'assigned_branch', None), 'branch_name', None),
+            },
+        ],
+        'branch_details': {
+            'branch_name': getattr(shipment.requesting_branch, 'branch_name', None),
+            'branch_code': getattr(shipment.requesting_branch, 'branch_code', None),
+            'region': getattr(shipment.requesting_branch, 'region', None),
+        },
+        'courier_details': {
+            'name': getattr(transport_events[0].courier, 'full_name', None) if transport_events else None,
+            'vehicle_number': getattr(transport_events[0].courier, 'vehicle_number', None) if transport_events else None,
+        },
+    }
+
+    AuditLog.objects.create(
+        name='Exception Investigation',
+        action=f'Investigated exception {exception_obj.exception_id}',
+        user=user,
+        message='Exception investigation API accessed',
+        severity='info',
+    )
+
+    return JsonResponse(payload)
+
+
 def custom_page_not_found(request, exception=None):
     return render(request, '404.html', status=404)
 

@@ -30,6 +30,10 @@ handler404 = custom_page_not_found
 handler500 = custom_server_error
 
 
+def normalize_double_slashes(request, path):
+    return redirect('/' + path.lstrip('/'), permanent=False)
+
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', include('inventory.urls')),

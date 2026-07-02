@@ -99,6 +99,32 @@ Example response:
 }
 ```
 
+### GET /api/investigation/<exception_id>/
+Returns a read-only investigation payload for an open shipment exception.
+
+Behavior:
+- Accepts anonymous GET requests during development
+- Returns 404 Not Found when the exception identifier does not exist
+- Returns 400 Bad Request when the exception is not in an Open state
+- Writes an audit entry for each access
+
+Response sections:
+- exception: exception identifier, type, status, severity, description, reporter, and reported timestamp
+- tape: related tape metadata when available
+- shipment: shipment status, locations, branch, custody information, and relevant user references
+- timeline: transport events, receipts, approvals, and exception-reporting activity
+- chain_of_custody: custody handoff and receipt information
+- logs/audit_logs: investigation-related log history
+- user_interactions: reporter and assigned context
+- notifications: access and notification metadata
+- related_exceptions: other exceptions tied to the same shipment
+- users: relevant users and branch context
+- branch_details: requesting branch metadata
+- courier_details: courier name and vehicle number when available
+
+Example:
+- /api/investigation/EXC-3A0000D3/
+
 ### Notes
 The same endpoint behavior is also exposed under the /apis/ prefix for compatibility with existing integrations.
 

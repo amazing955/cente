@@ -24,6 +24,12 @@ class ClearInvalidSessionUserMiddleware(MiddlewareMixin):
 
 
 class CustomErrorResponseMiddleware(MiddlewareMixin):
+    def process_request(self, request):
+        if request.path.startswith('//'):
+            normalized_path = '/' + request.path.lstrip('/')
+            request.path = normalized_path
+            request.path_info = normalized_path
+
     def process_response(self, request, response):
         if not response.get('Content-Type', '').startswith('text/html'):
             return response

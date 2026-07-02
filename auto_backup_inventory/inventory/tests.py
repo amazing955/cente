@@ -66,6 +66,134 @@ class DjangoAdminCourierUserCreationTests(TestCase):
         self.assertIn('Vehicle Number is required for courier accounts.', str(form.errors['__all__']))
 
 
+class ExceptionInvestigationApiTests(TestCase):
+    def test_open_exception_investigation_endpoint_returns_comprehensive_payload(self):
+        branch = BankBranch.objects.create(branch_code='KLA-001', branch_name='Kampala Branch', status='Active')
+        user = get_user_model().objects.create_user(
+            username='investigator',
+            email='investigator@example.com',
+            password='pass1234',
+            role='operations_manager',
+            assigned_branch=branch,
+        )
+        tape = Tape.objects.create(
+            volser='TAPE-INV-001',
+            barcode='BC-INV-001',
+            tape_type='LTO-8',
+            retention_end_date=date(2028, 1, 1),
+            current_location='Kampala Vault',
+        )
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Approved',
+            source_location='Kampala Branch',
+            destination_location='Mbarara Branch',
+            requesting_branch=branch,
+            releasing_custodian='Jane Doe',
+            receiving_custodian='John Doe',
+            created_by=user,
+        )
+        shipment.tapes.add(tape)
+
+        courier_user = get_user_model().objects.create_user(
+            username='courier-investigator',
+            email='courier-investigator@example.com',
+            password='pass1234',
+            role='user',
+        )
+        courier_profile = CourierProfile.objects.create(
+            courier_id='CR-INV-001',
+            full_name='Courier One',
+            vehicle_number='V-100',
+            user=courier_user,
+            email='courier-investigator@example.com',
+        )
+        ShipmentTransportEvent.objects.create(
+            shipment=shipment,
+            courier=courier_profile,
+            event_type='Picked Up',
+            comments='Collected by courier',
+        )
+        ShipmentReceipt.objects.create(
+            shipment=shipment,
+            courier=courier_profile,
+            pickup_location='Kampala Branch',
+            custody_confirmed=True,
+            manifest_verified=True,
+            tape_count_matched=True,
+            notes='Pickup received',
+        )
+        ShipmentApprovalHistory.objects.create(
+            shipment=shipment,
+            action='Approved',
+            comments='Ready for dispatch',
+            user=user,
+        )
+        exception = ShipmentException.objects.create(
+            shipment=shipment,
+            tape=tape,
+            exception_type='Missing Tape',
+            description='Tape missing during handover.',
+            reported_by=user,
+            severity='High',
+            status='Open',
+        )
+
+        response = self.client.get(reverse('exception-investigation', kwargs={'exception_id': exception.exception_id}))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload['exception']['id'], exception.exception_id)
+        self.assertEqual(payload['exception']['status'], 'Open')
+        self.assertEqual(payload['tape']['volser'], tape.volser)
+        self.assertEqual(payload['shipment']['shipment_id'], shipment.shipment_id)
+        self.assertGreaterEqual(len(payload['timeline']), 1)
+        self.assertGreaterEqual(len(payload['chain_of_custody']), 1)
+        self.assertIn('audit_logs', payload)
+        self.assertIn('notifications', payload)
+        self.assertTrue(AuditLog.objects.filter(action__icontains=exception.exception_id).exists())
+
+    def test_double_slash_investigation_url_is_supported(self):
+        branch = BankBranch.objects.create(branch_code='KLA-002', branch_name='Kampala East Branch', status='Active')
+        user = get_user_model().objects.create_user(
+            username='investigator-double',
+            email='investigator-double@example.com',
+            password='pass1234',
+            role='operations_manager',
+            assigned_branch=branch,
+        )
+        tape = Tape.objects.create(
+            volser='TAPE-INV-002',
+            barcode='BC-INV-002',
+            tape_type='LTO-8',
+            retention_end_date=date(2028, 1, 1),
+            current_location='Kampala Vault',
+        )
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Approved',
+            source_location='Kampala Branch',
+            destination_location='Mbarara Branch',
+            requesting_branch=branch,
+            created_by=user,
+        )
+        shipment.tapes.add(tape)
+        exception = ShipmentException.objects.create(
+            shipment=shipment,
+            tape=tape,
+            exception_type='Missing Tape',
+            description='Tape missing during handover.',
+            reported_by=user,
+            severity='High',
+            status='Open',
+        )
+
+        response = self.client.get(f'//api/investigation/{exception.exception_id}/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['exception']['id'], exception.exception_id)
+
+
 class CourierActivityLogTests(TestCase):
     def test_courier_profile_requires_vehicle_number(self):
         with self.assertRaises(ValidationError):
