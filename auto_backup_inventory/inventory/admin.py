@@ -1,3 +1,5 @@
+import uuid
+
 from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
@@ -7,6 +9,7 @@ from .models import (
     AuditLog,
     BankBranch,
     BranchImportLog,
+    CourierProfile,
     CustomUser,
     DashboardFeatureExemption,
     DashboardFeaturePermission,
@@ -28,6 +31,11 @@ class CustomUserAdminForm(forms.ModelForm):
         label='Assigned Branch',
         widget=forms.Select(attrs={'class': 'form-select'}),
     )
+    vehicle_number = forms.CharField(
+        required=False,
+        label='Vehicle Number',
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Required for courier accounts'}),
+    )
 
     class Meta:
         model = CustomUser
@@ -43,9 +51,45 @@ class CustomUserAdminForm(forms.ModelForm):
         cleaned_data = super().clean()
         role_value = (cleaned_data.get('role') or '').strip().lower()
         assigned_branch = cleaned_data.get('assigned_branch')
+        vehicle_number = (cleaned_data.get('vehicle_number') or '').strip()
+        selected_groups = cleaned_data.get('groups') or []
+        is_courier_group = any(str(group.name).strip().lower() == 'courier' for group in selected_groups)
+
         if role_value == 'operations_manager' and not assigned_branch:
             raise forms.ValidationError('Assigned Branch is required.')
+        if (role_value == 'courier' or is_courier_group) and not vehicle_number:
+            raise forms.ValidationError('Vehicle Number is required for courier accounts.')
         return cleaned_data
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+        if commit:
+            instance.save()
+        return instance
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        vehicle_number = (form.cleaned_data.get('vehicle_number') or '').strip()
+        selected_groups = form.cleaned_data.get('groups') or []
+        is_courier_group = any(str(group.name).strip().lower() == 'courier' for group in selected_groups)
+        if not is_courier_group or not vehicle_number:
+            return
+
+        courier_profile = CourierProfile.objects.filter(user=obj).first()
+        if courier_profile:
+            courier_profile.vehicle_number = vehicle_number
+            courier_profile.full_name = obj.get_full_name() or obj.username
+            courier_profile.email = obj.email or ''
+            courier_profile.save(update_fields=['vehicle_number', 'full_name', 'email'])
+        else:
+            CourierProfile.objects.create(
+                user=obj,
+                courier_id=f'CR-{uuid.uuid4().hex[:8].upper()}',
+                full_name=obj.get_full_name() or obj.username,
+                email=obj.email or '',
+                vehicle_number=vehicle_number,
+                active_status=True,
+            )
 
 
 @admin.register(CustomUser)
@@ -53,10 +97,10 @@ class CustomUserAdmin(UserAdmin):
     form = CustomUserAdminForm
     model = CustomUser
     fieldsets = UserAdmin.fieldsets + (
-        ('Extra info', {'fields': ('role', 'assigned_branch')}),
+        ('Extra info', {'fields': ('role', 'assigned_branch', 'vehicle_number')}),
     )
     add_fieldsets = UserAdmin.add_fieldsets + (
-        ('Extra info', {'fields': ('role', 'assigned_branch')}),
+        ('Extra info', {'fields': ('role', 'assigned_branch', 'vehicle_number')}),
     )
     list_display = ('username', 'email', 'first_name', 'last_name', 'role', 'assigned_branch', 'is_staff', 'is_active')
     list_filter = ('role', 'is_staff', 'is_active', 'groups')

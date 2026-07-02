@@ -6,6 +6,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.http import HttpResponseForbidden
@@ -13,6 +14,7 @@ from django.test import RequestFactory, TestCase, override_settings
 from django.urls import path, reverse
 from openpyxl import Workbook
 
+from .admin import CustomUserAdminForm
 from .forms import BackupShipmentAssignmentForm, CustomUserCreationForm, RoleCreationForm
 from .models import (
     ApplicationSetting,
@@ -46,7 +48,34 @@ urlpatterns = [
 ]
 
 
+class DjangoAdminCourierUserCreationTests(TestCase):
+    def test_admin_form_exposes_vehicle_number_for_courier_users(self):
+        courier_group = Group.objects.create(name='Courier')
+        form = CustomUserAdminForm(data={
+            'username': 'courier-admin-user',
+            'email': 'courier-admin-user@example.com',
+            'first_name': 'Courier',
+            'last_name': 'User',
+            'role': 'user',
+            'groups': [courier_group.pk],
+        })
+
+        self.assertIn('vehicle_number', form.fields)
+        self.assertFalse(form.is_valid())
+        self.assertIn('__all__', form.errors)
+        self.assertIn('Vehicle Number is required for courier accounts.', str(form.errors['__all__']))
+
+
 class CourierActivityLogTests(TestCase):
+    def test_courier_profile_requires_vehicle_number(self):
+        with self.assertRaises(ValidationError):
+            CourierProfile.objects.create(
+                courier_id='CR-TEST-001',
+                full_name='Test Courier',
+                email='test-courier@example.com',
+                active_status=True,
+            )
+
     def test_activity_log_shows_exception_activity_for_courier(self):
         courier_group = Group.objects.create(name='Courier')
         courier_user = get_user_model().objects.create_user(
@@ -1613,6 +1642,82 @@ class BackupDashboardShipmentApprovalTests(TestCase):
                 shipment=shipment,
                 courier__user=courier_user,
                 event_type='Picked Up',
+            ).exists()
+        )
+
+    def test_pickup_confirmation_autofills_manifest_and_notifies_backup_admin(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-notify',
+            email='backup-notify@example.com',
+            password='pass1234',
+            first_name='Backup',
+            last_name='Admin',
+        )
+        backup_admin.groups.add(backup_group)
+
+        courier_group = Group.objects.create(name='Courier')
+        courier_user = get_user_model().objects.create_user(
+            username='pickup-courier',
+            email='pickup-courier@example.com',
+            password='pass1234',
+            first_name='Pickup',
+            last_name='Courier',
+        )
+        courier_user.groups.add(courier_group)
+
+        courier_profile = CourierProfile.objects.create(
+            user=courier_user,
+            courier_id='CR-1001',
+            full_name='Pickup Courier',
+            email='pickup-courier@example.com',
+            vehicle_number='KDA 123A',
+            active_status=True,
+        )
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Vault',
+            destination_location='Kampala Branch',
+            status='Approved',
+            releasing_custodian='Ops User',
+            created_by=backup_admin,
+        )
+
+        self.client.force_login(courier_user)
+        get_response = self.client.get(reverse('pickup-confirmation', args=[shipment.pk]))
+        self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(
+            get_response.context['form'].initial['manifest_reference'],
+            f'MANIFEST-{shipment.shipment_id[:8].upper()}',
+        )
+        self.assertEqual(get_response.context['form'].initial['pickup_location'], 'Nairobi Vault')
+
+        post_response = self.client.post(
+            reverse('pickup-confirmation', args=[shipment.pk]),
+            {
+                'manifest_reference': 'MANIFEST-001',
+                'pickup_date': '2026-06-26',
+                'pickup_time': '09:00',
+                'pickup_location': 'Nairobi Vault',
+                'notes': 'Pickup confirmed',
+                'all_tapes_scanned': 'on',
+                'manifest_verified': 'on',
+                'tape_count_matched': 'on',
+                'no_damaged_tapes': 'on',
+                'custody_accepted': 'on',
+            },
+        )
+
+        self.assertEqual(post_response.status_code, 302)
+        shipment.refresh_from_db()
+        self.assertEqual(shipment.vehicle_number, 'KDA 123A')
+        self.assertTrue(
+            AuditLog.objects.filter(
+                user=backup_admin,
+                action__icontains='MANIFEST-001',
+            ).filter(
+                action__icontains='KDA 123A',
             ).exists()
         )
 

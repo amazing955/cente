@@ -665,6 +665,7 @@ class CourierProfile(models.Model):
     phone_number = models.CharField(max_length=50, blank=True)
     email = models.EmailField(blank=True)
     employee_number = models.CharField(max_length=50, blank=True)
+    vehicle_number = models.CharField(max_length=50)
     active_status = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -672,6 +673,15 @@ class CourierProfile(models.Model):
         verbose_name = 'Courier Profile'
         verbose_name_plural = 'Courier Profiles'
         ordering = ['full_name']
+
+    def clean(self):
+        super().clean()
+        if not self.vehicle_number or not str(self.vehicle_number).strip():
+            raise ValidationError({'vehicle_number': 'Vehicle number is required.'})
+
+    def save(self, *args, **kwargs):
+        self.full_clean(exclude=None)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.full_name} ({self.courier_id})"

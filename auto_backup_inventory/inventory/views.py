@@ -390,6 +390,7 @@ def ensure_courier_profile(user):
         full_name=full_name,
         phone_number='',
         email=user.email or '',
+        vehicle_number='Not provided',
         active_status=True,
     )
     return profile
@@ -2181,6 +2182,25 @@ def dashboard(request):
                 user.is_active = False
                 user.verified = False
                 user.save()
+
+                vehicle_number = (user_form.cleaned_data.get('vehicle_number') or '').strip()
+                if user.role == 'courier' and vehicle_number:
+                    courier_profile = CourierProfile.objects.filter(user=user).first()
+                    if courier_profile:
+                        courier_profile.vehicle_number = vehicle_number
+                        courier_profile.save(update_fields=['vehicle_number'])
+                    else:
+                        courier_id = f'CR-{uuid.uuid4().hex[:8].upper()}'
+                        CourierProfile.objects.create(
+                            user=user,
+                            courier_id=courier_id,
+                            full_name=user.get_full_name() or user.username,
+                            phone_number='',
+                            email=user.email or '',
+                            vehicle_number=vehicle_number,
+                            active_status=True,
+                        )
+
                 AuditLog.objects.create(
                     name='User Created',
                     action=f'Created user {user.username} pending verification',
@@ -4590,7 +4610,15 @@ def manifest_detail(request, shipment_pk):
 def pickup_confirmation(request, shipment_pk):
     shipment = get_object_or_404(Shipment.objects.prefetch_related('tapes'), pk=shipment_pk)
     courier = ensure_courier_profile(request.user)
-    form = ShipmentReceiptForm(request.POST or None)
+    form = ShipmentReceiptForm(
+        request.POST or None,
+        initial={
+            'manifest_reference': f'MANIFEST-{shipment.shipment_id[:8].upper()}',
+            'pickup_location': shipment.source_location or (shipment.requesting_branch.branch_name if shipment.requesting_branch else ''),
+            'pickup_date': timezone.localdate().strftime('%Y-%m-%d'),
+            'pickup_time': timezone.localtime().strftime('%H:%M'),
+        },
+    )
 
     if request.method == 'POST':
         if form.is_valid():
@@ -4600,8 +4628,9 @@ def pickup_confirmation(request, shipment_pk):
             receipt.confirmation_timestamp = timezone.localtime()
             receipt.save()
             shipment.status = 'Picked Up'
+            shipment.vehicle_number = courier.vehicle_number or shipment.vehicle_number or ''
             shipment.last_updated_by = request.user
-            shipment.save(update_fields=['status', 'last_updated_by', 'last_updated_at'])
+            shipment.save(update_fields=['status', 'vehicle_number', 'last_updated_by', 'last_updated_at'])
             ShipmentTransportEvent.objects.create(
                 shipment=shipment,
                 courier=courier,
@@ -4610,6 +4639,30 @@ def pickup_confirmation(request, shipment_pk):
                 event_time=timezone.localtime().time(),
                 comments='Pickup confirmed by courier.',
             )
+            manifest_reference = receipt.manifest_reference.strip() or f'MANIFEST-{shipment.shipment_id[:8].upper()}'
+            vehicle_plate = courier.vehicle_number or shipment.vehicle_number or 'Not provided'
+            backup_admins = User.objects.filter(is_active=True, groups__name='Backup Administrator').distinct()
+            for backup_admin in backup_admins:
+                AuditLog.objects.create(
+                    name='Pickup Confirmed',
+                    action=(
+                        f'Pickup confirmed for shipment {shipment.shipment_id}. '
+                        f'Manifest reference: {manifest_reference}. Vehicle plate: {vehicle_plate}.'
+                    ),
+                    user=backup_admin,
+                    severity='success',
+                )
+                if ApplicationSetting.objects.first() and ApplicationSetting.objects.first().email_alerts_enabled and backup_admin.email:
+                    send_mail(
+                        f'Pickup confirmed for shipment {shipment.shipment_id}',
+                        (
+                            f'Pickup confirmation was submitted for shipment {shipment.shipment_id}. '
+                            f'Manifest reference: {manifest_reference}. Vehicle plate: {vehicle_plate}.'
+                        ),
+                        settings.DEFAULT_FROM_EMAIL,
+                        [backup_admin.email],
+                        fail_silently=True,
+                    )
             AuditLog.objects.create(
                 name='Pickup Confirmed',
                 action=f'Pickup confirmed for shipment {shipment.shipment_id}',

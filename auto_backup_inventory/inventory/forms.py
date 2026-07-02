@@ -18,6 +18,11 @@ class CustomUserCreationForm(UserCreationForm):
         label='Assigned Branch',
         widget=forms.Select(attrs={'class': 'form-select'}),
     )
+    vehicle_number = forms.CharField(
+        required=False,
+        label='Vehicle Number',
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Required for courier accounts'}),
+    )
 
     class Meta:
         model = CustomUser
@@ -28,6 +33,7 @@ class CustomUserCreationForm(UserCreationForm):
             'last_name',
             'role',
             'assigned_branch',
+            'vehicle_number',
         ]
         widgets = {
             'username': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter username', 'required': True}),
@@ -499,6 +505,28 @@ class TapeRequestForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields['tape'].queryset = Tape.objects.order_by('volser')
         self.fields['tape'].empty_label = 'Select a tape'
+
+
+class CourierProfileForm(forms.ModelForm):
+    class Meta:
+        model = CourierProfile
+        fields = ['courier_id', 'full_name', 'company_name', 'phone_number', 'email', 'employee_number', 'vehicle_number', 'active_status']
+        widgets = {
+            'courier_id': forms.TextInput(attrs={'class': 'form-control'}),
+            'full_name': forms.TextInput(attrs={'class': 'form-control'}),
+            'company_name': forms.TextInput(attrs={'class': 'form-control'}),
+            'phone_number': forms.TextInput(attrs={'class': 'form-control'}),
+            'email': forms.EmailInput(attrs={'class': 'form-control'}),
+            'employee_number': forms.TextInput(attrs={'class': 'form-control'}),
+            'vehicle_number': forms.TextInput(attrs={'class': 'form-control', 'required': True}),
+            'active_status': forms.CheckboxInput(attrs={'class': 'form-check-input'}),
+        }
+
+    def clean_vehicle_number(self):
+        vehicle_number = self.cleaned_data.get('vehicle_number', '')
+        if not vehicle_number or not str(vehicle_number).strip():
+            raise forms.ValidationError('Vehicle number is required.')
+        return str(vehicle_number).strip()
 
 
 class ShipmentForm(forms.ModelForm):
