@@ -115,61 +115,7 @@
 
     <div class="col-lg-4">
         <div class="card shadow-sm border-0 mb-3">
-            <div class="card-body">
-                <h5 class="mb-3">Compliance & Risk</h5>
-                <div class="mb-3">
-                    <h6 class="mb-1">Risk Level</h6>
-                    {% if risk_level == 'Critical' %}
-                        <span class="badge bg-danger">{{ risk_level }}</span>
-                    {% elif risk_level == 'High' %}
-                        <span class="badge bg-warning">{{ risk_level }}</span>
-                    {% elif risk_level == 'Medium' %}
-                        <span class="badge bg-info">{{ risk_level }}</span>
-                    {% else %}
-                        <span class="badge bg-success">{{ risk_level }}</span>
-                    {% endif %}
-                </div>
-                <div class="mb-3">
-                    <h6 class="mb-1">Risk Score</h6>
-                    <div class="progress" style="height: 12px;">
-                        {% if risk_score >= 70 %}
-                            <div class="progress-bar bg-danger" role="progressbar" style="width: {{ risk_score }}%;"></div>
-                        {% elif risk_score >= 45 %}
-                            <div class="progress-bar bg-warning" role="progressbar" style="width: {{ risk_score }}%;"></div>
-                        {% elif risk_score >= 20 %}
-                            <div class="progress-bar bg-info" role="progressbar" style="width: {{ risk_score }}%;"></div>
-                        {% else %}
-                            <div class="progress-bar bg-success" role="progressbar" style="width: {{ risk_score }}%;"></div>
-                        {% endif %}
-                    </div>
-                    <div class="small text-muted mt-1">{{ risk_score }} / 100</div>
-                </div>
-                <div class="mb-3">
-                    <h6 class="mb-1">Recommendation</h6>
-                    <p class="small text-muted mb-0">{{ risk_recommendation }}</p>
-                </div>
-                <div class="mb-3">
-                    <h6 class="mb-1">Compliance Status</h6>
-                    {% if compliance_passed %}
-                    <span class="badge bg-success">Passed</span>
-                    {% else %}
-                    <span class="badge bg-danger">Failed</span>
-                    {% endif %}
-                </div>
-                <div class="list-group list-group-flush">
-                    {% for label, value in compliance_checks_display %}
-                    <div class="list-group-item d-flex justify-content-between align-items-center px-0 border-0 py-2">
-                        <span class="small text-muted">{{ label }}</span>
-                        {% if value %}
-                        <span class="badge bg-success">Yes</span>
-                        {% else %}
-                        <span class="badge bg-danger">No</span>
-                        {% endif %}
-                    </div>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
+            
 
         {% if shipment.status != 'Completed' and shipment.status != 'Cancelled' and shipment.status != 'Rejected' %}
         <div class="card shadow-sm border-0 mb-3">
@@ -180,7 +126,9 @@
                     <input type="hidden" name="form_type" value="operator_receipt_completion">
                     <div class="mb-3">
                         <label class="form-label" for="id_receiving_custodian">Receiving Custodian</label>
+
                         {{ receipt_form.receiving_custodian }}
+                        
                     </div>
                     <div class="mb-3">
                         <label class="form-label" for="id_receipt_notes">Receipt Notes</label>
@@ -192,34 +140,7 @@
         </div>
         {% endif %}
 
-        <div class="card shadow-sm border-0 mb-3">
-            <div class="card-body">
-                <h5 class="mb-3">Approval Decision</h5>
-                {% if shipment.status == 'Pending' %}
-                <form method="post" action="{% url 'shipment-detail' shipment.pk %}?partial=1" class="mb-3">
-                    {% csrf_token %}
-                    <input type="hidden" name="shipment_pk" value="{{ shipment.pk }}">
-                    <input type="hidden" name="decision" value="approve">
-                    <input type="hidden" name="comments" value="Approved after review.">
-                    <button type="submit" class="btn btn-success w-100">Approve Shipment</button>
-                </form>
-                {% endif %}
-                <form method="post" action="{% url 'shipment-detail' shipment.pk %}?partial=1">
-                    {% csrf_token %}
-                    {{ approval_form.shipment_pk }}
-                    <div class="mb-3">
-                        {{ approval_form.decision.label_tag }}
-                        {{ approval_form.decision }}
-                    </div>
-                    <div class="mb-3">
-                        {{ approval_form.comments.label_tag }}
-                        {{ approval_form.comments }}
-                    </div>
-                    <button type="submit" class="btn btn-primary w-100">Submit Decision</button>
-                </form>
-            </div>
-        </div>
-
+       
         <div class="card shadow-sm border-0">
             <div class="card-body">
                 <h5 class="mb-3">Approval History</h5>

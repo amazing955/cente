@@ -336,7 +336,7 @@ class ShipmentRequestSubmissionForm(forms.Form):
         max_length=200,
         label='Requester Name',
         required=False,
-        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Leave blank to use your name'})
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Auto-filled from your account name (edit if needed)'})
     )
     request_details = forms.CharField(
         label='Request Details',
@@ -665,7 +665,7 @@ class ShipmentApprovalDecisionForm(forms.Form):
 class OperatorReceiptCompletionForm(forms.Form):
     receiving_custodian = forms.CharField(
         required=True,
-        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Receiving custodian'}),
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Auto-filled from your account name (edit if needed)'}),
         label='Receiving Custodian',
     )
     receipt_notes = forms.CharField(

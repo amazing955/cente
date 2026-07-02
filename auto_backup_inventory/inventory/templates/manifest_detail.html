@@ -29,8 +29,15 @@
             <div class="card-body">
                 <h5 class="mb-3">Custody Details</h5>
                 <p><strong>Source:</strong> {{ shipment.source_location|default:'N/A' }}</p>
-                <p><strong>Releasing Custodian:</strong> {{ shipment.releasing_custodian|default:'N/A' }}</p>
-                <p><strong>Receiving Organization:</strong> {{ shipment.receiving_organization|default:'N/A' }}</p>
+                <p><strong>Releasing Custodian:</strong> {{ shipment.approved_by.get_full_name|default:shipment.approved_by.username|default:'N/A' }}</p>
+                <p><strong>Receiving Custodian:</strong>
+                    {% if shipment.status in 'Completed,Delivered,Return Accepted' %}
+                        {{ shipment.received_by|default:shipment.receiving_custodian|default:'N/A' }}
+                    {% else %}
+                        Pending completion
+                    {% endif %}
+                </p>
+                <p><strong>Receiving Organization:</strong> {{ shipment.requesting_branch.branch_name|default:'N/A' }}</p>
                 <p><strong>Expected Delivery:</strong> {{ shipment.expected_delivery_date|date:'M d, Y'|default:'N/A' }}</p>
             </div>
         </div>
@@ -58,7 +65,7 @@
                         <td>{{ tape.barcode }}</td>
                         <td>{{ tape.rfid_tag|default:'-' }}</td>
                         <td>{{ tape.status }}</td>
-                        <td>{{ tape.current_location|default:'N/A' }}</td>
+                        <td>{{ shipment.approved_by.assigned_branch.branch_name|default:shipment.destination_location|default:'N/A' }}</td>
                     </tr>
                     {% empty %}
                     <tr>

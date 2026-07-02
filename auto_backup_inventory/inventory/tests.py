@@ -27,6 +27,7 @@ from .models import (
     ShipmentApprovalHistory,
     ShipmentReceipt,
     ShipmentTransportEvent,
+    ShipmentException,
     Tape,
     TapeRequest,
     SchemaChangeLog,
@@ -43,6 +44,41 @@ def forbidden_view(request):
 urlpatterns = [
     path('protected-page/', forbidden_view),
 ]
+
+
+class CourierActivityLogTests(TestCase):
+    def test_activity_log_shows_exception_activity_for_courier(self):
+        courier_group = Group.objects.create(name='Courier')
+        courier_user = get_user_model().objects.create_user(
+            username='activity-log-courier',
+            email='activity-log-courier@example.com',
+            password='pass1234',
+            first_name='Activity',
+            last_name='Courier',
+        )
+        courier_user.groups.add(courier_group)
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            destination_location='Kampala Branch',
+            status='Approved',
+            releasing_custodian='Ops User',
+        )
+        ShipmentException.objects.create(
+            shipment=shipment,
+            exception_type='Missing Tape',
+            description='One tape was not present during handover.',
+            reported_by=courier_user,
+            severity='High',
+        )
+
+        self.client.force_login(courier_user)
+        response = self.client.get(reverse('activity-log'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Missing Tape')
+        self.assertContains(response, 'One tape was not present during handover.')
 
 
 class OperationsManagerBranchAssignmentTests(TestCase):

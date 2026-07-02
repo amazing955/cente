@@ -3714,7 +3714,8 @@ def start_shipment_request(request):
         return render(request, template_name, {'form': None, 'partial_request': partial_request, 'branch_assignment_required': True})
 
     initial_branch_name = assigned_branch.branch_name if assigned_branch else ''
-    form = ShipmentRequestSubmissionForm(request.POST or None, initial={'branch_name': initial_branch_name})
+    initial_requester = request.user.get_full_name() or request.user.username
+    form = ShipmentRequestSubmissionForm(request.POST or None, initial={'branch_name': initial_branch_name, 'requester_name': initial_requester})
     if request.method == 'POST' and form.is_valid():
         branch_name = assigned_branch.branch_name if assigned_branch else ''
         requester_name = (form.cleaned_data['requester_name'] or '').strip()
@@ -3732,17 +3733,17 @@ def start_shipment_request(request):
             created_by=request.user,
             last_updated_by=request.user,
         )
+        user_email = request.user.email or 'N/A'
         AuditLog.objects.create(
             name='Shipment Created',
             action='Shipment Created',
-            message=f'Shipment request {shipment.shipment_id} created for {branch_name} by {request.user.username}',
+            message=f'Shipment request {shipment.shipment_id} created for {branch_name} by {request.user.username} ({user_email})',
             user=request.user,
             severity='info',
         )
-        messages.success(request, 'Shipment request submitted to the backup administrator.')
-        if partial_request:
-            return redirect(f"{reverse('start-shipment-request')}?partial=1")
-        return redirect(reverse('operations-dashboard'))
+        messages.success(request, f'Shipment request {shipment.shipment_id} sent successfully for review and assignment.')
+        redirect_url = reverse('operations-dashboard') + '?show_reports=reports&report_category=reconciliation&report_period=2026-07&report_type=monthly&report_only=1'
+        return redirect(redirect_url)
     if request.method == 'POST':
         messages.error(request, 'Please provide the requester name and request details.')
     template_name = 'start_shipment_request_fragment.html' if partial_request else 'start_shipment_request.html'
@@ -3753,7 +3754,8 @@ def start_shipment_request(request):
 @login_required(login_url='signin')
 def operations_dashboard(request):
     assigned_branch = get_user_assigned_branch(request.user)
-    shipment_request_form = ShipmentRequestSubmissionForm(request.POST or None, initial={'branch_name': assigned_branch.branch_name if assigned_branch else ''})
+    initial_requester = request.user.get_full_name() or request.user.username
+    shipment_request_form = ShipmentRequestSubmissionForm(request.POST or None, initial={'branch_name': assigned_branch.branch_name if assigned_branch else '', 'requester_name': initial_requester})
     shipments = Shipment.objects.all().order_by('-shipment_date')
     tapes = Tape.objects.all()
     reconciliations = Reconciliation.objects.order_by('-reconciliation_date')[:5]
@@ -3796,7 +3798,7 @@ def operations_dashboard(request):
             requester_name = (shipment_request_form.cleaned_data['requester_name'] or '').strip()
             request_details = shipment_request_form.cleaned_data['request_details'].strip()
             shipment = Shipment.objects.create(
-                shipment_date=timezone.localdate(),
+                shipment_date=timezone.localtime(),
                 shipment_type='Off-Site Transfer',
                 status='Pending',
                 source_location=branch_name,
@@ -3808,15 +3810,17 @@ def operations_dashboard(request):
                 created_by=request.user,
                 last_updated_by=request.user,
             )
+            user_email = request.user.email or 'N/A'
             AuditLog.objects.create(
                 name='Shipment Created',
                 action='Shipment Created',
-                message=f'Shipment request {shipment.shipment_id} created for {branch_name} by {request.user.username}',
+                message=f'Shipment request {shipment.shipment_id} created for {branch_name} by {request.user.username} ({user_email})',
                 user=request.user,
                 severity='info',
             )
-            messages.success(request, 'Shipment request submitted to the backup administrator.')
-            return redirect(reverse('operations-dashboard'))
+            messages.success(request, f'Shipment request {shipment.shipment_id} sent successfully for review and assignment.')
+            redirect_url = reverse('operations-dashboard') + '?show_reports=reports&report_category=reconciliation&report_period=2026-07&report_type=monthly&report_only=1'
+            return redirect(redirect_url)
         messages.error(request, 'Please provide the requester name and request details.')
 
     show_reports_panel = request.GET.get('show_reports') in {'1', 'reports'} or 'show_reports' in request.GET
@@ -4339,7 +4343,10 @@ def shipment_approvals(request):
 @login_required(login_url='signin')
 def shipment_detail(request, shipment_pk):
     shipment = get_object_or_404(Shipment.objects.prefetch_related('tapes', 'approval_history'), pk=shipment_pk)
-    receipt_form = OperatorReceiptCompletionForm(request.POST or None)
+    receipt_form = OperatorReceiptCompletionForm(
+        request.POST or None,
+        initial={'receiving_custodian': request.user.get_full_name() or request.user.username}
+    )
     approval_form = ShipmentApprovalDecisionForm(request.POST or None, initial={'shipment_pk': shipment.pk})
     assignment_form = BackupShipmentAssignmentForm(request.POST or None)
     manifest_search_form = ManifestSearchForm(request.GET or None)
@@ -4564,7 +4571,10 @@ def assigned_shipments(request):
 @user_passes_test(lambda u: u.is_superuser or is_courier(u), login_url='signin')
 @login_required(login_url='signin')
 def manifest_detail(request, shipment_pk):
-    shipment = get_object_or_404(Shipment.objects.prefetch_related('tapes'), pk=shipment_pk)
+    shipment = get_object_or_404(
+        Shipment.objects.select_related('approved_by__assigned_branch', 'requesting_branch').prefetch_related('tapes'),
+        pk=shipment_pk,
+    )
     courier = get_courier_profile(request.user)
     manifest_tapes = shipment.tapes.all()
     context = {
@@ -4718,16 +4728,44 @@ def incident_management(request):
 @user_passes_test(lambda u: u.is_superuser or is_courier(u), login_url='signin')
 @login_required(login_url='signin')
 def activity_log(request):
-    courier = get_courier_profile(request.user)
-    events = ShipmentTransportEvent.objects.filter(courier=courier).order_by('-event_date', '-event_time') if courier else ShipmentTransportEvent.objects.none()
+    courier = ensure_courier_profile(request.user)
+    events = ShipmentTransportEvent.objects.filter(courier=courier).order_by('-event_date', '-event_time', '-created_at') if courier else ShipmentTransportEvent.objects.none()
     exceptions = ShipmentException.objects.filter(
-        Q(shipment__courier_name__iexact=courier.full_name) | Q(shipment__courier_contact__iexact=courier.phone_number) | Q(shipment__receipts__courier=courier) | Q(shipment__deliveries__courier=courier)
+        Q(shipment__courier_name__iexact=courier.full_name) |
+        Q(shipment__courier_contact__iexact=courier.phone_number) |
+        Q(shipment__receipts__courier=courier) |
+        Q(shipment__deliveries__courier=courier) |
+        Q(reported_by=request.user)
     ).distinct().order_by('-reported_date') if courier else ShipmentException.objects.none()
+
+    activity_items = []
+    for event in events:
+        activity_items.append({
+            'timestamp': datetime.combine(event.event_date, event.event_time),
+            'title': event.event_type,
+            'shipment': event.shipment,
+            'courier': event.courier,
+            'details': event.comments or '-',
+            'item_type': 'event',
+        })
+
+    for exception in exceptions:
+        activity_items.append({
+            'timestamp': exception.reported_date,
+            'title': exception.exception_type,
+            'shipment': exception.shipment,
+            'courier': courier,
+            'details': exception.description or 'No additional details provided.',
+            'item_type': 'exception',
+        })
+
+    activity_items.sort(key=lambda item: item['timestamp'], reverse=True)
 
     context = {
         'courier': courier,
         'events': events,
         'exceptions': exceptions,
+        'activity_items': activity_items,
     }
     return render(request, 'activity_log.html', context)
 
