@@ -36,7 +36,7 @@ from .models import (
     get_dashboard_feature_catalog,
 )
 from .serializer import TapeSerializer
-from .views import custom_permission_denied, is_backup_administrator, is_operations_manager
+from .views import custom_permission_denied, is_backup_administrator, is_dr_team, is_operations_manager
 
 
 def forbidden_view(request):
@@ -48,7 +48,33 @@ urlpatterns = [
 ]
 
 
+class DrTeamAccessTests(TestCase):
+    def test_is_dr_team_matches_case_insensitive_group_names(self):
+        user = get_user_model().objects.create_user(
+            username='dr-lowercase-user',
+            email='dr-lowercase-user@example.com',
+            password='StrongPass123!',
+            role='user',
+        )
+        Group.objects.create(name='dr team')
+        user.groups.add(Group.objects.get(name='dr team'))
+
+        self.assertTrue(is_dr_team(user))
+
+
 class DjangoAdminCourierUserCreationTests(TestCase):
+    def test_admin_add_user_page_renders_without_server_error(self):
+        superuser = get_user_model().objects.create_superuser(
+            username='admin-test-user',
+            email='admin-test-user@example.com',
+            password='StrongPass123!',
+        )
+        self.client.force_login(superuser)
+
+        response = self.client.get(reverse('admin:inventory_customuser_add'))
+
+        self.assertEqual(response.status_code, 200)
+
     def test_admin_form_exposes_vehicle_number_for_courier_users(self):
         courier_group = Group.objects.create(name='Courier')
         form = CustomUserAdminForm(data={
@@ -69,13 +95,15 @@ class DjangoAdminCourierUserCreationTests(TestCase):
 class ExceptionInvestigationApiTests(TestCase):
     def test_open_exception_investigation_endpoint_returns_comprehensive_payload(self):
         branch = BankBranch.objects.create(branch_code='KLA-001', branch_name='Kampala Branch', status='Active')
+        dr_group = Group.objects.create(name='DR Team')
         user = get_user_model().objects.create_user(
             username='investigator',
             email='investigator@example.com',
             password='pass1234',
-            role='operations_manager',
+            role='auditor',
             assigned_branch=branch,
         )
+        user.groups.add(dr_group)
         tape = Tape.objects.create(
             volser='TAPE-INV-001',
             barcode='BC-INV-001',
@@ -139,7 +167,18 @@ class ExceptionInvestigationApiTests(TestCase):
             status='Open',
         )
 
-        response = self.client.get(reverse('exception-investigation', kwargs={'exception_id': exception.exception_id}))
+        auth_response = self.client.post(
+            reverse('token_obtain_pair'),
+            {'username': user.username, 'password': 'pass1234'},
+            content_type='application/json',
+        )
+        self.assertEqual(auth_response.status_code, 200)
+        access_token = auth_response.json()['access']
+
+        response = self.client.get(
+            reverse('exception-investigation', kwargs={'exception_id': exception.exception_id}),
+            HTTP_AUTHORIZATION=f'Bearer {access_token}',
+        )
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -155,13 +194,15 @@ class ExceptionInvestigationApiTests(TestCase):
 
     def test_double_slash_investigation_url_is_supported(self):
         branch = BankBranch.objects.create(branch_code='KLA-002', branch_name='Kampala East Branch', status='Active')
+        dr_group = Group.objects.create(name='DR Team')
         user = get_user_model().objects.create_user(
             username='investigator-double',
             email='investigator-double@example.com',
             password='pass1234',
-            role='operations_manager',
+            role='auditor',
             assigned_branch=branch,
         )
+        user.groups.add(dr_group)
         tape = Tape.objects.create(
             volser='TAPE-INV-002',
             barcode='BC-INV-002',
@@ -188,10 +229,121 @@ class ExceptionInvestigationApiTests(TestCase):
             status='Open',
         )
 
-        response = self.client.get(f'//api/investigation/{exception.exception_id}/')
+        auth_response = self.client.post(
+            reverse('token_obtain_pair'),
+            {'username': user.username, 'password': 'pass1234'},
+            content_type='application/json',
+        )
+        self.assertEqual(auth_response.status_code, 200)
+        access_token = auth_response.json()['access']
+
+        response = self.client.get(
+            f'//api/investigation/{exception.exception_id}/',
+            HTTP_AUTHORIZATION=f'Bearer {access_token}',
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['exception']['id'], exception.exception_id)
+
+
+class JwtAuthenticationAndAuthorizationTests(TestCase):
+    def test_jwt_obtain_refresh_and_blacklist_flow_with_role_based_access(self):
+        branch = BankBranch.objects.create(branch_code='KLA-003', branch_name='Kampala West Branch', status='Active')
+        dr_group = Group.objects.create(name='DR Team')
+        auditor = get_user_model().objects.create_user(
+            username='jwt-auditor',
+            email='jwt-auditor@example.com',
+            password='StrongPass123!',
+            role='auditor',
+            assigned_branch=branch,
+        )
+        auditor.groups.add(dr_group)
+        regular_user = get_user_model().objects.create_user(
+            username='jwt-regular',
+            email='jwt-regular@example.com',
+            password='StrongPass123!',
+            role='user',
+            assigned_branch=branch,
+        )
+        tape = Tape.objects.create(
+            volser='TAPE-JWT-001',
+            barcode='BC-JWT-001',
+            tape_type='LTO-8',
+            retention_end_date=date(2028, 1, 1),
+            current_location='Kampala Vault',
+        )
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Approved',
+            source_location='Kampala Branch',
+            destination_location='Mbarara Branch',
+            requesting_branch=branch,
+            created_by=auditor,
+        )
+        shipment.tapes.add(tape)
+        exception = ShipmentException.objects.create(
+            shipment=shipment,
+            tape=tape,
+            exception_type='Missing Tape',
+            description='Tape missing during handover.',
+            reported_by=auditor,
+            severity='High',
+            status='Open',
+        )
+
+        obtain_response = self.client.post(
+            reverse('token_obtain_pair'),
+            {'username': auditor.username, 'password': 'StrongPass123!'},
+            content_type='application/json',
+        )
+        self.assertEqual(obtain_response.status_code, 200)
+        tokens = obtain_response.json()
+        self.assertIn('access', tokens)
+        self.assertIn('refresh', tokens)
+
+        anonymous_response = self.client.get(reverse('exception-investigation', kwargs={'exception_id': exception.exception_id}))
+        self.assertEqual(anonymous_response.status_code, 401)
+
+        auditor_response = self.client.get(
+            reverse('exception-investigation', kwargs={'exception_id': exception.exception_id}),
+            HTTP_AUTHORIZATION=f"Bearer {tokens['access']}",
+        )
+        self.assertEqual(auditor_response.status_code, 200)
+        self.assertEqual(auditor_response.json()['exception']['id'], exception.exception_id)
+
+        regular_obtain_response = self.client.post(
+            reverse('token_obtain_pair'),
+            {'username': regular_user.username, 'password': 'StrongPass123!'},
+            content_type='application/json',
+        )
+        regular_tokens = regular_obtain_response.json()
+        regular_response = self.client.get(
+            reverse('exception-investigation', kwargs={'exception_id': exception.exception_id}),
+            HTTP_AUTHORIZATION=f"Bearer {regular_tokens['access']}",
+        )
+        self.assertEqual(regular_response.status_code, 403)
+
+        refresh_response = self.client.post(
+            reverse('token_refresh'),
+            {'refresh': tokens['refresh']},
+            content_type='application/json',
+        )
+        self.assertEqual(refresh_response.status_code, 200)
+
+        blacklist_response = self.client.post(
+            reverse('token_blacklist'),
+            {'refresh': refresh_response.json()['refresh']},
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {tokens['access']}",
+        )
+        self.assertEqual(blacklist_response.status_code, 200)
+
+        reusing_refresh_response = self.client.post(
+            reverse('token_refresh'),
+            {'refresh': refresh_response.json()['refresh']},
+            content_type='application/json',
+        )
+        self.assertEqual(reusing_refresh_response.status_code, 401)
 
 
 class CourierActivityLogTests(TestCase):
@@ -1429,6 +1581,27 @@ class TwoFactorLoginTests(TestCase):
 
             self.assertEqual(final_response.status_code, 302)
             self.assertRedirects(final_response, reverse('operations-dashboard'))
+            self.assertIn('_auth_user_id', self.client.session)
+
+    def test_signin_redirects_dr_team_to_investigation_dashboard(self):
+        dr_team_group = Group.objects.create(name='DR Team')
+        user = get_user_model().objects.create_user(
+            username='dr-otp-user',
+            email='dr-otp-user@example.com',
+            password='pass1234',
+        )
+        user.groups.add(dr_team_group)
+
+        with patch('builtins.print'):
+            response = self.client.post(reverse('signin'), {'username': 'dr-otp-user', 'password': 'pass1234'})
+            self.assertEqual(response.status_code, 200)
+            otp_code = self.client.session.get('pending_2fa_otp')
+            self.assertTrue(otp_code)
+
+            final_response = self.client.post(reverse('signin'), {'otp_code': otp_code})
+
+            self.assertEqual(final_response.status_code, 302)
+            self.assertRedirects(final_response, reverse('investigation-dashboard'))
             self.assertIn('_auth_user_id', self.client.session)
 
 

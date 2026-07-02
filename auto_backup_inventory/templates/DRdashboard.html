@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Investigation Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body{background:#f4f7fb;}
+        .top-header{background:linear-gradient(135deg,#0548ad,#001f54);color:white;border-radius:12px;}
+        .card{border:none;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.08);}
+        .card-header{background:white;font-weight:bold;}
+        .stat-card{text-align:center;color:white;}
+        .stat-card h2{font-weight:bold;}
+        .timeline{border-left:4px solid #0d6efd;padding-left:25px;}
+        .timeline-item{position:relative;margin-bottom:30px;}
+        .timeline-item::before{content:"";width:18px;height:18px;background:#0d6efd;border-radius:50%;position:absolute;left:-35px;top:3px;}
+        .table td,.table th{vertical-align:middle;}
+        .badge{font-size:13px;}
+    </style>
+</head>
+<body>
+<div class="container-fluid p-4">
+    <div class="top-header p-4 mb-4">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div>
+                <h2><i class="bi bi-search"></i> Investigation Dashboard</h2>
+                <p class="mb-0">Exception ID: <strong id="exception-id-title">{{ exception_id }}</strong></p>
+            </div>
+            <div class="d-flex gap-2">
+                <div class="input-group" style="max-width: 320px;">
+                    <input id="exception-id-input" class="form-control" value="{{ exception_id }}" placeholder="Exception ID">
+                    <button id="load-btn" class="btn btn-light"><i class="bi bi-arrow-repeat"></i> Load</button>
+                </div>
+                <button id="refresh-btn" class="btn btn-light"><i class="bi bi-arrow-repeat"></i> Refresh</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="loading-state" class="alert alert-info">Loading investigation data…</div>
+    <div id="error-state" class="alert alert-danger d-none"></div>
+
+    <div class="row g-3 mb-4" id="summary-cards" style="display:none;">
+        <div class="col-md-3">
+            <div class="card stat-card bg-primary">
+                <div class="card-body">
+                    <h2 id="logs-count">0</h2>
+                    Logs
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card stat-card bg-success">
+                <div class="card-body">
+                    <h2 id="users-count">0</h2>
+                    Users
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card stat-card bg-danger">
+                <div class="card-body">
+                    <h2 id="open-exception-count">1</h2>
+                    Open Exception
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card stat-card bg-dark">
+                <div class="card-body">
+                    <h2 id="interactions-count">0</h2>
+                    Interactions
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-lg-4">
+            <div class="card mb-4">
+                <div class="card-header">Exception Details</div>
+                <div class="card-body">
+                    <table class="table">
+                        <tr>
+                            <th>Status</th>
+                            <td id="exception-status"></td>
+                        </tr>
+                        <tr>
+                            <th>Severity</th>
+                            <td id="exception-severity"></td>
+                        </tr>
+                        <tr>
+                            <th>Reported By</th>
+                            <td id="exception-reported-by"></td>
+                        </tr>
+                        <tr>
+                            <th>Branch</th>
+                            <td id="exception-branch"></td>
+                        </tr>
+                        <tr>
+                            <th>Date</th>
+                            <td id="exception-date"></td>
+                        </tr>
+                        <tr>
+                            <th>Description</th>
+                            <td id="exception-description"></td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">Tape Information</div>
+                <div class="card-body">
+                    <table class="table">
+                        <tr>
+                            <th>Volser</th>
+                            <td id="tape-volser"></td>
+                        </tr>
+                        <tr>
+                            <th>Barcode</th>
+                            <td id="tape-barcode"></td>
+                        </tr>
+                        <tr>
+                            <th>Status</th>
+                            <td id="tape-status"></td>
+                        </tr>
+                        <tr>
+                            <th>Location</th>
+                            <td id="tape-location"></td>
+                        </tr>
+                        <tr>
+                            <th>Retention</th>
+                            <td id="tape-retention"></td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            <div class="card mb-4">
+                <div class="card-header">Shipment Details</div>
+                <div class="card-body">
+                    <table class="table table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Shipment</th>
+                                <th>Courier</th>
+                                <th>Branch</th>
+                                <th>Status</th>
+                                <th>Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td id="shipment-id"></td>
+                                <td id="courier-name"></td>
+                                <td id="shipment-branch"></td>
+                                <td id="shipment-status"></td>
+                                <td id="shipment-date"></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">Shipment Timeline</div>
+                <div class="card-body">
+                    <div id="timeline" class="timeline"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mt-4">
+        <div class="card-header">System Logs</div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-striped">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Type</th>
+                            <th>User</th>
+                            <th>Action</th>
+                            <th>Severity</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logs-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mt-4">
+        <div class="card-header">Compliance Analysis</div>
+        <div class="card-body">
+            <div id="compliance-alert" class="alert alert-warning"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const initialExceptionId = "{{ exception_id|escapejs }}";
+    const exceptionIdInput = document.getElementById('exception-id-input');
+    const exceptionIdTitle = document.getElementById('exception-id-title');
+    const loadingState = document.getElementById('loading-state');
+    const errorState = document.getElementById('error-state');
+    const summaryCards = document.getElementById('summary-cards');
+
+    function badgeMarkup(text, cssClass) {
+        return `<span class="badge ${cssClass}">${text}</span>`;
+    }
+
+    function renderValue(elementId, value) {
+        const element = document.getElementById(elementId);
+        if (element) {
+            element.textContent = value ?? '—';
+        }
+    }
+
+    async function loadInvestigation() {
+        const exceptionId = exceptionIdInput.value.trim() || initialExceptionId;
+        exceptionIdInput.value = exceptionId;
+        exceptionIdTitle.textContent = exceptionId;
+        loadingState.classList.remove('d-none');
+        errorState.classList.add('d-none');
+        summaryCards.style.display = 'none';
+
+        try {
+            const response = await fetch(`/api/investigation/${encodeURIComponent(exceptionId)}/`);
+            if (!response.ok) {
+                throw new Error(`Request failed with status ${response.status}`);
+            }
+            const data = await response.json();
+
+            renderValue('exception-id-title', data.exception?.id || exceptionId);
+            renderValue('exception-status', data.exception?.status || '—');
+            renderValue('exception-severity', data.exception?.severity || '—');
+            renderValue('exception-reported-by', data.exception?.reported_by || '—');
+            renderValue('exception-branch', data.branch_details?.branch_name || '—');
+            renderValue('exception-date', data.exception?.reported_date ? new Date(data.exception.reported_date).toLocaleDateString() : '—');
+            renderValue('exception-description', data.exception?.description || '—');
+
+            renderValue('tape-volser', data.tape?.volser || '—');
+            renderValue('tape-barcode', data.tape?.barcode || '—');
+            renderValue('tape-status', data.tape?.status || '—');
+            renderValue('tape-location', data.tape?.current_location || '—');
+            renderValue('tape-retention', data.tape?.retention_end_date || '—');
+
+            renderValue('shipment-id', data.shipment?.shipment_id || '—');
+            renderValue('courier-name', data.courier_details?.name || '—');
+            renderValue('shipment-branch', data.shipment?.requesting_branch || '—');
+            renderValue('shipment-status', data.shipment?.status || '—');
+            renderValue('shipment-date', data.shipment?.shipment_date || '—');
+
+            const timeline = document.getElementById('timeline');
+            timeline.innerHTML = '';
+            (data.timeline || []).forEach(item => {
+                const wrapper = document.createElement('div');
+                wrapper.className = 'timeline-item';
+                wrapper.innerHTML = `<h6>${item.type || 'Event'}</h6><p>${item.message || '—'}<br><small>${item.actor || 'System'}</small></p>`;
+                timeline.appendChild(wrapper);
+            });
+
+            const logsBody = document.getElementById('logs-body');
+            logsBody.innerHTML = '';
+            (data.audit_logs || []).forEach(log => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${log.timestamp ? new Date(log.timestamp).toLocaleString() : '—'}</td>
+                    <td>${log.name || 'System'}</td>
+                    <td>${log.user || 'System'}</td>
+                    <td>${log.action || log.message || '—'}</td>
+                    <td>${badgeMarkup(log.severity || 'info', log.severity === 'error' ? 'bg-danger' : log.severity === 'warning' ? 'bg-warning text-dark' : 'bg-success')}</td>
+                `;
+                logsBody.appendChild(row);
+            });
+
+            const complianceAlert = document.getElementById('compliance-alert');
+            complianceAlert.innerHTML = `
+                <h5><i class="bi bi-exclamation-triangle"></i> Risk Level: ${data.exception?.severity || 'Medium'}</h5>
+                <p>${data.exception?.description || 'Investigation details were loaded successfully.'}</p>
+                <ul>
+                    <li>Review chain of custody.</li>
+                    <li>Verify courier and branch evidence.</li>
+                    <li>Confirm receipt and reconciliation notes.</li>
+                </ul>
+            `;
+
+            document.getElementById('logs-count').textContent = (data.logs || []).length;
+            document.getElementById('users-count').textContent = (data.users || []).length;
+            document.getElementById('interactions-count').textContent = (data.user_interactions || []).length;
+            summaryCards.style.display = 'flex';
+            loadingState.classList.add('d-none');
+        } catch (error) {
+            loadingState.classList.add('d-none');
+            errorState.textContent = error.message || 'Unable to load the investigation data.';
+            errorState.classList.remove('d-none');
+        }
+    }
+
+    document.getElementById('load-btn').addEventListener('click', loadInvestigation);
+    document.getElementById('refresh-btn').addEventListener('click', loadInvestigation);
+    loadInvestigation();
+</script>
+</body>
+</html>

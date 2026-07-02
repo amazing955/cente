@@ -30,6 +30,8 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
 
+from .authentication import AuditedJWTAuthentication
+from .permissions import InvestigationPermission
 from .serializer import AuditLogSerializer, ShipmentSerializer, TapeSerializer
 
 
@@ -43,14 +45,46 @@ def _build_investigation_log_entry(exception, request):
     }
 
 
+def investigation_dashboard_page(request, exception_id=None):
+    return render(request, 'DRdashboard.html', {'exception_id': exception_id or ''})
+
+
+def _authenticate_api_user(request):
+    if getattr(request.user, 'is_authenticated', False):
+        return request.user
+
+    auth_backend = AuditedJWTAuthentication()
+    try:
+        auth_result = auth_backend.authenticate(request)
+    except Exception:
+        return None
+
+    if not auth_result:
+        return None
+
+    user, _ = auth_result
+    request.user = user
+    return user
+
+
+def _require_authenticated_api_user(request, require_investigation_role=False):
+    user = _authenticate_api_user(request)
+    if not user:
+        return None, JsonResponse({'detail': 'Authentication credentials were not provided.'}, status=401)
+
+    if require_investigation_role and not InvestigationPermission().has_permission(request, None):
+        return user, JsonResponse({'detail': 'You do not have permission to perform this action.'}, status=403)
+
+    return user, None
+
+
 def exception_investigation_view(request, exception_id):
     if request.method not in {'GET'}:
         return JsonResponse({'detail': 'Only GET requests are allowed.'}, status=405)
 
-    if request.user.is_authenticated:
-        user = request.user
-    else:
-        user = None
+    user, auth_error = _require_authenticated_api_user(request, require_investigation_role=True)
+    if auth_error is not None:
+        return auth_error
 
     exception_obj = ShipmentException.objects.select_related(
         'shipment', 'shipment__requesting_branch', 'shipment__created_by', 'shipment__approved_by', 'shipment__last_updated_by',
@@ -243,6 +277,15 @@ def exception_investigation_view(request, exception_id):
     return JsonResponse(payload)
 
 
+def custom_exception_handler(exc, context):
+    from rest_framework.views import exception_handler
+
+    response = exception_handler(exc, context)
+    if response is None:
+        return None
+    return response
+
+
 def custom_page_not_found(request, exception=None):
     return render(request, '404.html', status=404)
 
@@ -263,8 +306,9 @@ from django.utils.dateparse import parse_date
 
 # REST API helpers used by the dashboard and external integrations.
 def api_dashboard_summary(request):
-    if not request.user.is_authenticated:
-        return JsonResponse({'detail': 'Authentication required.'}, status=401)
+    user, auth_error = _require_authenticated_api_user(request)
+    if auth_error is not None:
+        return auth_error
 
     summary = {
         'tape_count': Tape.objects.count(),
@@ -276,8 +320,9 @@ def api_dashboard_summary(request):
 
 
 def api_tape_list(request):
-    if not request.user.is_authenticated:
-        return JsonResponse({'detail': 'Authentication required.'}, status=401)
+    user, auth_error = _require_authenticated_api_user(request)
+    if auth_error is not None:
+        return auth_error
 
     if request.method == 'POST':
         try:
@@ -307,8 +352,9 @@ def api_tape_list(request):
 
 
 def api_shipment_list(request):
-    if not request.user.is_authenticated:
-        return JsonResponse({'detail': 'Authentication required.'}, status=401)
+    user, auth_error = _require_authenticated_api_user(request)
+    if auth_error is not None:
+        return auth_error
 
     shipments = Shipment.objects.order_by('-shipment_date', '-created_at')[:20]
     payload = {
@@ -319,8 +365,9 @@ def api_shipment_list(request):
 
 
 def api_audit_log_list(request):
-    if not request.user.is_authenticated:
-        return JsonResponse({'detail': 'Authentication required.'}, status=401)
+    user, auth_error = _require_authenticated_api_user(request)
+    if auth_error is not None:
+        return auth_error
 
     logs = AuditLog.objects.order_by('-timestamp')[:20]
     payload = {
@@ -1523,6 +1570,26 @@ def is_operations_manager(user):
     return user.groups.filter(name='Operations Manager').exists()
 
 
+def is_dr_team(user):
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+
+    role_name = (getattr(user, 'role', '') or '').strip().lower()
+    if role_name in {'dr team', 'dr_team', 'drteam', 'disaster recovery team', 'disaster_recovery_team'}:
+        return True
+
+    group_names = [group.name.lower() for group in user.groups.all()]
+    return any(
+        name in {'dr team', 'dr_team', 'drteam', 'disaster recovery team', 'disaster_recovery_team'}
+        or 'dr team' in name
+        or 'drteam' in name
+        or 'disaster recovery' in name
+        for name in group_names
+    )
+
+
 def get_user_assigned_branch(user):
     if not user or not user.is_authenticated:
         return None
@@ -2294,6 +2361,14 @@ def signin(request):
                         severity='success',
                     )
                     return redirect("courier-dashboard")
+                if is_dr_team(pending_user):
+                    AuditLog.objects.create(
+                        name='DR Team Login',
+                        action=f'User {pending_user.username} signed in as DR Team',
+                        user=pending_user,
+                        severity='success',
+                    )
+                    return redirect("investigation-dashboard")
                 AuditLog.objects.create(
                     name='Unauthorized Dashboard Login',
                     action=f'User {pending_user.username} attempted dashboard login without appropriate role',

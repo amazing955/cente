@@ -1,4 +1,6 @@
 from django.urls import path, include, re_path
+from rest_framework_simplejwt.views import TokenBlacklistView, TokenObtainPairView, TokenRefreshView
+
 from . import views
 #urlpatterns for the inventory app, including API endpoints, user authentication, and dashboard views
 #some features are not yet usin api but will be in the future, so we are keeping the api endpoints for now
@@ -9,7 +11,11 @@ urlpatterns = [
     path('api/tapes/', views.api_tape_list, name='api-tapes'),
     path('api/shipments/', views.api_shipment_list, name='api-shipments'),
     path('api/audit-logs/', views.api_audit_log_list, name='api-audit-logs'),
-    re_path(r'^/?(?:api/)?investigation/(?P<exception_id>[^/]+)/?$', views.exception_investigation_view, name='exception-investigation'),
+    re_path(r'^(?:api/)?investigation/(?P<exception_id>[^/]+)/?$', views.exception_investigation_view, name='exception-investigation'),
+    re_path(r'^investigation-dashboard/(?:(?P<exception_id>[^/]+)/)?$', views.investigation_dashboard_page, name='investigation-dashboard'),
+    path('api/token/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('api/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('api/token/blacklist/', TokenBlacklistView.as_view(), name='token_blacklist'),
     path('api/features/<str:feature_key>/', views.api_feature_navigation, name='api-feature-navigation'),
     path('features/<str:feature_key>/', views.feature_module, name='feature-module'),
     path('apis/dashboard-summary/', views.api_dashboard_summary, name='apis-dashboard-summary'),

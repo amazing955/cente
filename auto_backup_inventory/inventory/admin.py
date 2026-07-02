@@ -3,6 +3,7 @@ import uuid
 from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.hashers import make_password
 
 from .admin_bank_branch import BankBranchAdmin  # noqa: F401
 from .models import (
@@ -23,7 +24,12 @@ from .models import (
 )
 
 
-class CustomUserAdminForm(forms.ModelForm):
+class BaseCustomUserAdminForm(forms.ModelForm):
+    password = forms.CharField(
+        required=False,
+        label='Password',
+        widget=forms.PasswordInput(attrs={'autocomplete': 'new-password'}),
+    )
     assigned_branch = forms.ModelChoiceField(
         queryset=BankBranch.objects.filter(status='Active').order_by('branch_name'),
         required=False,
@@ -39,10 +45,25 @@ class CustomUserAdminForm(forms.ModelForm):
 
     class Meta:
         model = CustomUser
-        fields = '__all__'
+        fields = [
+            'username',
+            'email',
+            'password',
+            'first_name',
+            'last_name',
+            'is_staff',
+            'is_active',
+            'groups',
+            'role',
+            'assigned_branch',
+            'vehicle_number',
+            'verified',
+            'verified_at',
+        ]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields['password'].required = not bool(getattr(self.instance, 'pk', None))
         self.fields['assigned_branch'].queryset = BankBranch.objects.filter(status='Active').order_by('branch_name')
         role_value = self.data.get('role', self.initial.get('role', getattr(self.instance, 'role', '')))
         self.fields['assigned_branch'].required = str(role_value).strip().lower() == 'operations_manager'
@@ -63,9 +84,46 @@ class CustomUserAdminForm(forms.ModelForm):
 
     def save(self, commit=True):
         instance = super().save(commit=False)
+        password = self.cleaned_data.get('password') or ''
+        if password:
+            instance.password = make_password(password)
         if commit:
             instance.save()
         return instance
+
+
+class CustomUserAdminForm(BaseCustomUserAdminForm):
+    pass
+
+
+class CustomUserChangeForm(BaseCustomUserAdminForm):
+    pass
+
+
+@admin.register(CustomUser)
+class CustomUserAdmin(UserAdmin):
+    add_form = CustomUserAdminForm
+    form = CustomUserChangeForm
+    model = CustomUser
+    fieldsets = (
+        (None, {'fields': ('username', 'email', 'password', 'first_name', 'last_name', 'is_staff', 'is_active', 'groups')}),
+        ('Extra info', {'fields': ('role', 'assigned_branch', 'vehicle_number', 'verified', 'verified_at')}),
+    )
+    add_fieldsets = (
+        (None, {'classes': ('wide',), 'fields': ('username', 'email', 'password', 'first_name', 'last_name', 'is_staff', 'is_active', 'groups')}),
+        ('Extra info', {'fields': ('role', 'assigned_branch', 'vehicle_number', 'verified', 'verified_at')}),
+    )
+    list_display = ('username', 'email', 'first_name', 'last_name', 'role', 'assigned_branch', 'is_staff', 'is_active')
+    list_filter = ('role', 'is_staff', 'is_active', 'groups')
+    readonly_fields = ('assigned_branch_code', 'assigned_branch_status')
+
+    def assigned_branch_code(self, obj):
+        return obj.assigned_branch.branch_code if obj.assigned_branch else '-'
+    assigned_branch_code.short_description = 'Branch Code'
+
+    def assigned_branch_status(self, obj):
+        return obj.assigned_branch.status if obj.assigned_branch else '-'
+    assigned_branch_status.short_description = 'Branch Status'
 
     def save_model(self, request, obj, form, change):
         super().save_model(request, obj, form, change)
@@ -90,29 +148,6 @@ class CustomUserAdminForm(forms.ModelForm):
                 vehicle_number=vehicle_number,
                 active_status=True,
             )
-
-
-@admin.register(CustomUser)
-class CustomUserAdmin(UserAdmin):
-    form = CustomUserAdminForm
-    model = CustomUser
-    fieldsets = UserAdmin.fieldsets + (
-        ('Extra info', {'fields': ('role', 'assigned_branch', 'vehicle_number')}),
-    )
-    add_fieldsets = UserAdmin.add_fieldsets + (
-        ('Extra info', {'fields': ('role', 'assigned_branch', 'vehicle_number')}),
-    )
-    list_display = ('username', 'email', 'first_name', 'last_name', 'role', 'assigned_branch', 'is_staff', 'is_active')
-    list_filter = ('role', 'is_staff', 'is_active', 'groups')
-    readonly_fields = ('assigned_branch_code', 'assigned_branch_status')
-
-    def assigned_branch_code(self, obj):
-        return obj.assigned_branch.branch_code if obj.assigned_branch else '-'
-    assigned_branch_code.short_description = 'Branch Code'
-
-    def assigned_branch_status(self, obj):
-        return obj.assigned_branch.status if obj.assigned_branch else '-'
-    assigned_branch_status.short_description = 'Branch Status'
 
 
 @admin.register(DashboardFeaturePermission)
