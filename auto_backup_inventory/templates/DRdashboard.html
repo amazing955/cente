@@ -28,12 +28,81 @@
                 <h2><i class="bi bi-search"></i> Investigation Dashboard</h2>
                 <p class="mb-0">Exception ID: <strong id="exception-id-title">{{ exception_id }}</strong></p>
             </div>
-            <div class="d-flex gap-2">
+            <div class="d-flex gap-2 flex-wrap">
                 <div class="input-group" style="max-width: 320px;">
                     <input id="exception-id-input" class="form-control" value="{{ exception_id }}" placeholder="Exception ID">
                     <button id="load-btn" class="btn btn-light"><i class="bi bi-arrow-repeat"></i> Load</button>
                 </div>
                 <button id="refresh-btn" class="btn btn-light"><i class="bi bi-arrow-repeat"></i> Refresh</button>
+                <button id="toggle-reconciliation-form" type="button" class="btn btn-warning"><i class="bi bi-exclamation-triangle"></i> Initiate Reconciliation</button>
+                <button id="close-exception-btn" type="button" class="btn btn-success" onclick="handleCloseExceptionClick(event)"><i class="bi bi-check-circle"></i> Close Exception</button>
+            </div>
+        </div>
+    </div>
+
+    {% if messages %}
+        {% for message in messages %}
+            <div class="alert alert-{{ message.tags }} py-2">{{ message }}</div>
+        {% endfor %}
+    {% endif %}
+
+    <div id="reconciliation-request-form" class="card mb-4 {% if not reconciliation_requested %}d-none{% endif %}">
+        <div class="card-body">
+            <h5 class="card-title">Initiate reconciliation request</h5>
+            <p class="text-muted small">Send the exception context to the backup administrator so they can open a reconciliation session.</p>
+            <form method="post" action="{% url 'initiate-reconciliation-request' %}" id="reconciliation-form">
+                {% csrf_token %}
+                <input type="hidden" id="form-exception-id" name="exception_id" value="">
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <label class="form-label">Requester</label>
+                        <input class="form-control" name="requester_name" value="{{ requester_name }}" required>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label">Exception ID</label>
+                        <input class="form-control" id="form-exception-id-display" readonly>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Comment</label>
+                        <textarea class="form-control" name="comment" rows="3" placeholder="Describe the issue and why a reconciliation should be opened."></textarea>
+                    </div>
+                    <div class="col-12">
+                        <button class="btn btn-warning" type="submit">Send to backup administrator</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="close-exception-modal" class="modal fade" tabindex="-1" role="dialog">
+        <div class="modal-dialog" role="document">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Close Exception Investigation</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <form method="post" action="{% url 'close-exception' %}" id="close-exception-form">
+                    {% csrf_token %}
+                    <div class="modal-body">
+                        <div class="alert alert-info">
+                            <strong>Submit for Approval</strong>
+                            <p class="mb-0 small">Your investigation findings will be submitted to the backup administrator for review and approval.</p>
+                        </div>
+                        <input type="hidden" id="close-exception-id" name="exception_id" value="">
+                        <div class="mb-3">
+                            <label class="form-label">Exception ID</label>
+                            <input class="form-control" id="close-exception-id-display" readonly>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Investigation Results <span class="text-danger">*</span></label>
+                            <textarea class="form-control" name="investigation_results" id="investigation-results" rows="5" placeholder="Describe the findings of your investigation, root cause, and resolution steps taken." required></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-success">Submit for Approval</button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
@@ -203,6 +272,7 @@
     </div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
     const initialExceptionId = "{{ exception_id|escapejs }}";
     const exceptionIdInput = document.getElementById('exception-id-input');
@@ -210,6 +280,58 @@
     const loadingState = document.getElementById('loading-state');
     const errorState = document.getElementById('error-state');
     const summaryCards = document.getElementById('summary-cards');
+
+    // Direct click handler for Close Exception button
+    function handleCloseExceptionClick(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        console.log('Close Exception button clicked');
+        
+        try {
+            const closeExceptionModalElement = document.getElementById('close-exception-modal');
+            if (!closeExceptionModalElement) {
+                alert('Modal element not found');
+                return;
+            }
+            
+            const closeExceptionModal = new bootstrap.Modal(closeExceptionModalElement);
+            
+            // Get exception ID
+            const exceptionInput = document.getElementById('exception-id-input');
+            const currentExceptionId = (exceptionInput && exceptionInput.value?.trim()) || initialExceptionId;
+            
+            if (!currentExceptionId) {
+                alert('Please load an exception first by entering the Exception ID and clicking Load.');
+                return;
+            }
+            
+            console.log('Opening modal for exception:', currentExceptionId);
+            
+            // Set exception ID in form
+            const closeExceptionIdInput = document.getElementById('close-exception-id');
+            const closeExceptionIdDisplay = document.getElementById('close-exception-id-display');
+            
+            if (closeExceptionIdInput) {
+                closeExceptionIdInput.value = currentExceptionId;
+            }
+            if (closeExceptionIdDisplay) {
+                closeExceptionIdDisplay.value = currentExceptionId;
+            }
+            
+            // Clear investigation results field
+            const investigationResultsField = document.getElementById('investigation-results');
+            if (investigationResultsField) {
+                investigationResultsField.value = '';
+            }
+            
+            // Show the modal
+            closeExceptionModal.show();
+            console.log('Modal displayed successfully');
+        } catch (error) {
+            console.error('Error in Close Exception handler:', error);
+            alert('Error: ' + error.message);
+        }
+    }
 
     function badgeMarkup(text, cssClass) {
         return `<span class="badge ${cssClass}">${text}</span>`;
@@ -296,6 +418,22 @@
             document.getElementById('interactions-count').textContent = (data.user_interactions || []).length;
             summaryCards.style.display = 'flex';
             loadingState.classList.add('d-none');
+            
+            // Update reconciliation form with current exception ID
+            const formExceptionId = document.getElementById('form-exception-id');
+            const formExceptionIdDisplay = document.getElementById('form-exception-id-display');
+            if (formExceptionId && formExceptionIdDisplay) {
+                formExceptionId.value = exceptionId;
+                formExceptionIdDisplay.value = exceptionId;
+            }
+            
+            // Update close exception form with current exception ID
+            const closeExceptionId = document.getElementById('close-exception-id');
+            const closeExceptionIdDisplay = document.getElementById('close-exception-id-display');
+            if (closeExceptionId && closeExceptionIdDisplay) {
+                closeExceptionId.value = exceptionId;
+                closeExceptionIdDisplay.value = exceptionId;
+            }
         } catch (error) {
             loadingState.classList.add('d-none');
             errorState.textContent = error.message || 'Unable to load the investigation data.';
@@ -305,6 +443,30 @@
 
     document.getElementById('load-btn').addEventListener('click', loadInvestigation);
     document.getElementById('refresh-btn').addEventListener('click', loadInvestigation);
+    
+    const toggleReconciliationButton = document.getElementById('toggle-reconciliation-form');
+    const reconciliationRequestForm = document.getElementById('reconciliation-request-form');
+    const formExceptionId = document.getElementById('form-exception-id');
+    const formExceptionIdDisplay = document.getElementById('form-exception-id-display');
+    
+    function updateReconciliationFormExceptionId() {
+        const exceptionInput = document.getElementById('exception-id-input');
+        const currentExceptionId = (exceptionInput && exceptionInput.value?.trim()) || initialExceptionId;
+        if (formExceptionId) {
+            formExceptionId.value = currentExceptionId;
+        }
+        if (formExceptionIdDisplay) {
+            formExceptionIdDisplay.value = currentExceptionId;
+        }
+    }
+    
+    if (toggleReconciliationButton && reconciliationRequestForm) {
+        toggleReconciliationButton.addEventListener('click', () => {
+            reconciliationRequestForm.classList.toggle('d-none');
+            updateReconciliationFormExceptionId();
+        });
+    }
+    
     loadInvestigation();
 </script>
 </body>

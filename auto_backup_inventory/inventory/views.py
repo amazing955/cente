@@ -45,8 +45,196 @@ def _build_investigation_log_entry(exception, request):
     }
 
 
+def _build_reconciliation_request_message(exception_id, requester_name, comment):
+    encoded_parts = [
+        f"exception_id={exception_id or ''}",
+        f"requester_name={requester_name or ''}",
+        f"comment={comment or ''}",
+    ]
+    return '|'.join(encoded_parts)
+
+
+def _parse_reconciliation_request_message(message):
+    payload = {}
+    for part in (message or '').split('|'):
+        if '=' not in part:
+            continue
+        key, value = part.split('=', 1)
+        payload[key] = value
+    return payload
+
+
 def investigation_dashboard_page(request, exception_id=None):
-    return render(request, 'DRdashboard.html', {'exception_id': exception_id or ''})
+    requester_name = ''
+    if getattr(request.user, 'is_authenticated', False):
+        requester_name = request.user.get_full_name() or request.user.username
+    return render(request, 'DRdashboard.html', {
+        'exception_id': exception_id or '',
+        'requester_name': requester_name,
+        'reconciliation_requested': request.GET.get('reconciliation_requested') == '1',
+    })
+
+
+@login_required(login_url='signin')
+def initiate_reconciliation_request(request):
+    if request.method != 'POST':
+        return redirect('investigation-dashboard')
+
+    if not (request.user.is_superuser or is_dr_team(request.user)):
+        messages.error(request, 'Only DR Team members can initiate reconciliation requests.')
+        return redirect('investigation-dashboard')
+
+    exception_id = (request.POST.get('exception_id') or '').strip()
+    requester_name = (request.POST.get('requester_name') or request.user.get_full_name() or request.user.username).strip()
+    comment = (request.POST.get('comment') or '').strip()
+
+    message = _build_reconciliation_request_message(exception_id, requester_name, comment)
+    AuditLog.objects.create(
+        name='Reconciliation Requested',
+        action=f'Reconciliation requested for exception {exception_id or "unknown"}',
+        message=message,
+        user=request.user,
+        severity='warning',
+    )
+
+    messages.success(request, 'Reconciliation request sent to the backup administrator.')
+    redirect_url = reverse('investigation-dashboard', kwargs={'exception_id': exception_id}) if exception_id else reverse('investigation-dashboard')
+    return redirect(f'{redirect_url}?reconciliation_requested=1')
+
+
+@login_required(login_url='signin')
+def close_exception(request):
+    if request.method != 'POST':
+        return redirect('investigation-dashboard')
+
+    if not (request.user.is_superuser or is_dr_team(request.user)):
+        messages.error(request, 'Only DR Team members can request exception closure.')
+        return redirect('investigation-dashboard')
+
+    exception_id = (request.POST.get('exception_id') or '').strip()
+    investigation_results = (request.POST.get('investigation_results') or '').strip()
+
+    if not exception_id:
+        messages.error(request, 'Exception ID is required.')
+        return redirect('investigation-dashboard')
+
+    try:
+        exception = ShipmentException.objects.get(exception_id=exception_id)
+    except ShipmentException.DoesNotExist:
+        messages.error(request, f'Exception {exception_id} not found.')
+        return redirect('investigation-dashboard')
+
+    # Create a close request instead of directly closing
+    close_request = ExceptionCloseRequest.objects.create(
+        exception=exception,
+        requested_by=request.user,
+        investigation_results=investigation_results,
+        status='Pending'
+    )
+
+    # Create audit log entry
+    AuditLog.objects.create(
+        name='Exception Close Requested',
+        action=f'Close request initiated for exception {exception_id}',
+        message=f'investigator={request.user.get_full_name() or request.user.username}|results_preview={investigation_results[:100]}...',
+        user=request.user,
+        severity='warning',
+    )
+
+    # Notify backup administrators
+    backup_admin_group = Group.objects.filter(name='Backup Administrator').first()
+    if backup_admin_group:
+        admins = backup_admin_group.user_set.filter(is_active=True)
+        # In a real scenario, you'd send emails here using Django's email backend
+        # For now, we'll just create audit logs for the admins to see
+        for admin in admins:
+            AuditLog.objects.create(
+                name='Exception Close Request Notification',
+                action=f'Close request {close_request.id} awaiting approval for exception {exception_id}',
+                message=f'requested_by={request.user.get_full_name() or request.user.username}|close_request_id={close_request.id}',
+                user=admin,
+                severity='warning',
+            )
+
+    messages.success(request, f'Exception closure request submitted for admin review. Reference ID: {close_request.id}')
+    redirect_url = reverse('investigation-dashboard', kwargs={'exception_id': exception_id})
+    return redirect(redirect_url)
+
+
+@login_required(login_url='signin')
+def approve_close_exception(request, close_request_id):
+    """Admin endpoint to approve a close exception request.
+    GET: render approval form where admin can add a remark and choose approve/reject.
+    POST: process the approval or rejection.
+    """
+    # Check if user is backup admin
+    if not (request.user.is_superuser or is_backup_administrator(request.user)):
+        messages.error(request, 'Only backup administrators can approve exception closures.')
+        return redirect('backup-dashboard')
+
+    try:
+        close_request = ExceptionCloseRequest.objects.get(id=close_request_id)
+    except ExceptionCloseRequest.DoesNotExist:
+        messages.error(request, 'Close request not found.')
+        return redirect('backup-dashboard')
+
+    if request.method == 'GET':
+        # Render a simple approval form for the admin
+        return render(request, 'approve_close_request.html', {
+            'close_request': close_request,
+        })
+
+    if close_request.status != 'Pending':
+        messages.error(request, f'This request has already been {close_request.status.lower()}.')
+        return redirect('backup-dashboard')
+
+    approval_comment = (request.POST.get('approval_comment') or '').strip()
+    action = (request.POST.get('action') or 'approve').strip().lower()
+
+    if action == 'approve':
+        # Update close request status
+        close_request.status = 'Approved'
+        close_request.approval_comment = approval_comment
+        close_request.approved_by = request.user
+        close_request.reviewed_at = timezone.now()
+        close_request.save()
+
+        # Update exception status to Closed
+        close_request.exception.status = 'Closed'
+        close_request.exception.save(update_fields=['status'])
+
+        # Create audit log entry
+        AuditLog.objects.create(
+            name='Exception Closed',
+            action=f'Exception {close_request.exception.exception_id} closed by admin approval',
+            message=f'approved_by={request.user.get_full_name() or request.user.username}|approval_comment={approval_comment}',
+            user=request.user,
+            severity='success',
+        )
+
+        messages.success(request, f'Exception {close_request.exception.exception_id} has been closed and marked as completed.')
+    
+    elif action == 'reject':
+        # Reject the close request
+        close_request.status = 'Rejected'
+        close_request.approval_comment = approval_comment
+        close_request.approved_by = request.user
+        close_request.reviewed_at = timezone.now()
+        close_request.save()
+
+        # Create audit log entry
+        AuditLog.objects.create(
+            name='Exception Close Request Rejected',
+            action=f'Close request rejected for exception {close_request.exception.exception_id}',
+            message=f'rejected_by={request.user.get_full_name() or request.user.username}|reason={approval_comment}',
+            user=request.user,
+            severity='warning',
+        )
+
+        messages.warning(request, f'Exception closure request for {close_request.exception.exception_id} has been rejected.')
+
+    return redirect('backup-dashboard')
+
 
 
 def _authenticate_api_user(request):
@@ -1900,6 +2088,14 @@ def auditor_dashboard(request):
 def audit_logs_view(request):
     context = _build_auditor_context(request, page='audit-logs')
     queryset, filters = build_audit_log_queryset(request)
+    # If admin requests their own history, filter logs to the current user
+    if 'show_admin_history' in request.GET:
+        show_audit_panel = True
+        try:
+            queryset = queryset.filter(user=request.user)
+            filters['user'] = request.user.username
+        except Exception:
+            pass
     export_format = (request.GET.get('export') or '').strip().lower()
     if export_format in {'csv', 'excel', 'pdf'}:
         export_response = export_audit_logs(queryset, export_format)
@@ -3054,6 +3250,37 @@ def backup_dashboard(request):
             else:
                 messages.error(request, 'Please select a valid shipment to update.')
                 return redirect('backup-dashboard')
+        elif form_type == 'create_reconciliation_from_request':
+            request_id = request.POST.get('reconciliation_request_id')
+            alert_entry = AuditLog.objects.filter(pk=request_id, name='Reconciliation Requested').first()
+            payload = _parse_reconciliation_request_message(alert_entry.message if alert_entry else '')
+            exception_id = (payload.get('exception_id') or request.POST.get('exception_id') or '').strip()
+            requester_name = (payload.get('requester_name') or request.POST.get('requester_name') or 'DR Team').strip()
+            comment = (payload.get('comment') or request.POST.get('comment') or '').strip()
+            location = (request.POST.get('location') or 'Pending review').strip() or 'Pending review'
+
+            reconciliation = Reconciliation.objects.create(
+                location=location,
+                performed_by=request.user,
+                status='Open',
+                notes=f"Initiated from DR request for exception {exception_id}. {comment}".strip(),
+            )
+            AuditLog.objects.create(
+                name='Reconciliation Created',
+                action=f'Created reconciliation {reconciliation.reconciliation_id} from DR request',
+                user=request.user,
+                severity='success',
+            )
+            if alert_entry and alert_entry.user:
+                AuditLog.objects.create(
+                    name='Reconciliation Authorized',
+                    action=f'Your reconciliation request for exception {exception_id} was approved and opened as {reconciliation.reconciliation_id}',
+                    user=alert_entry.user,
+                    message=f'confirmation_id={reconciliation.reconciliation_id}',
+                    severity='success',
+                )
+            messages.success(request, f'Reconciliation {reconciliation.reconciliation_id} was opened for {requester_name or "the DR team"}.')
+            return redirect(f'{reverse("backup-dashboard")}?show_alerts=1')
         elif form_type == 'add_reconciliation':
             if reconciliation_form.is_valid():
                 reconciliation = reconciliation_form.save(commit=False)
@@ -3422,6 +3649,31 @@ def backup_dashboard(request):
     unread_alert_id_set = set(unread_alert_ids)
     for alert in recent_alerts:
         alert.is_new = alert.pk in unread_alert_id_set
+        # If this alert is a close-request notification, expose a review URL for the template
+        try:
+            if alert.name == 'Exception Close Request Notification' and alert.message:
+                # expected message format: 'requested_by=...|close_request_id=<uuid>'
+                parts = {p.split('=')[0]: p.split('=')[1] for p in (alert.message or '').split('|') if '=' in p}
+                close_request_id = parts.get('close_request_id')
+                if close_request_id:
+                    alert.close_request_id = close_request_id
+                    alert.close_request_url = reverse('approve-close-exception', kwargs={'close_request_id': close_request_id})
+        except Exception:
+            # Fail gracefully; don't break alert rendering
+            pass
+    reconciliation_request_context = None
+    reconciliation_request_id = request.GET.get('reconciliation_request_id') or request.POST.get('reconciliation_request_id')
+    if reconciliation_request_id:
+        reconciliation_request_entry = AuditLog.objects.filter(pk=reconciliation_request_id, name='Reconciliation Requested').first()
+        if reconciliation_request_entry:
+            payload = _parse_reconciliation_request_message(reconciliation_request_entry.message or '')
+            reconciliation_request_context = {
+                'id': str(reconciliation_request_entry.id),
+                'exception_id': payload.get('exception_id', ''),
+                'requester_name': payload.get('requester_name', ''),
+                'comment': payload.get('comment', ''),
+                'entry': reconciliation_request_entry,
+            }
     pending_approval_shipments = Shipment.objects.filter(status='Pending').order_by('-shipment_date')[:8]
 
     queryset, filters = build_audit_log_queryset(request)
@@ -3897,6 +4149,7 @@ def backup_dashboard(request):
         'pending_user_count': pending_users.count(),
         'recent_activities': recent_activities,
         'recent_alerts': recent_alerts,
+        'reconciliation_request_context': reconciliation_request_context,
         'pending_approval_shipments': pending_approval_shipments,
         'approval_shipment': approval_shipment,
         'assignment_form': assignment_form,

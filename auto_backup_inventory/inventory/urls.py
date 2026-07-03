@@ -25,6 +25,9 @@ urlpatterns = [
     # User authentication and dashboard views
     path('signin/', views.signin, name='signin'),
     path('signout/', views.signout, name='signout'),
+    path('initiated-reconciliation-request/', views.initiate_reconciliation_request, name='initiate-reconciliation-request'),
+    path('close-exception/', views.close_exception, name='close-exception'),
+    path('approve-close-exception/<uuid:close_request_id>/', views.approve_close_exception, name='approve-close-exception'),
     # Dashboard and feature-specific views
     path('dashboard/', views.dashboard, name='dashboard'),
     path('backup-dashboard/', views.backup_dashboard, name='backup-dashboard'),

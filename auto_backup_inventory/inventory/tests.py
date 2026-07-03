@@ -24,6 +24,7 @@ from .models import (
     DashboardFeatureExemption,
     DashboardFeaturePermission,
     DeliveryConfirmation,
+    ExceptionCloseRequest,
     Reconciliation,
     Shipment,
     ShipmentApprovalHistory,
@@ -60,6 +61,245 @@ class DrTeamAccessTests(TestCase):
         user.groups.add(Group.objects.get(name='dr team'))
 
         self.assertTrue(is_dr_team(user))
+
+
+class ReconciliationInitiationWorkflowTests(TestCase):
+    def test_dr_team_can_request_reconciliation_from_investigation_dashboard(self):
+        branch = BankBranch.objects.create(branch_code='KLA-010', branch_name='Kampala North Branch', status='Active')
+        dr_group = Group.objects.create(name='DR Team')
+        user = get_user_model().objects.create_user(
+            username='dr-requester',
+            email='dr-requester@example.com',
+            password='StrongPass123!',
+            role='auditor',
+            assigned_branch=branch,
+        )
+        user.groups.add(dr_group)
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Approved',
+            source_location='Kampala North Branch',
+            destination_location='Mbarara Branch',
+            requesting_branch=branch,
+            created_by=user,
+        )
+        exception = ShipmentException.objects.create(
+            shipment=shipment,
+            exception_type='Missing Tape',
+            description='Tape missing during handover.',
+            reported_by=user,
+            severity='High',
+            status='Open',
+        )
+
+        self.client.force_login(user)
+        response = self.client.post(reverse('initiate-reconciliation-request'), {
+            'exception_id': exception.exception_id,
+            'requester_name': user.get_full_name() or user.username,
+            'comment': 'Please open a reconciliation for review.',
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(AuditLog.objects.filter(name='Reconciliation Requested').exists())
+        alert = AuditLog.objects.filter(name='Reconciliation Requested').latest('timestamp')
+        self.assertEqual(alert.user, user)
+        self.assertIn(exception.exception_id, alert.message or alert.action)
+
+    def test_backup_admin_alert_link_can_open_reconciliation_request_context(self):
+        backup_admin = get_user_model().objects.create_superuser(
+            username='backup-admin-alert',
+            email='backup-admin-alert@example.com',
+            password='StrongPass123!',
+        )
+        requester = get_user_model().objects.create_user(
+            username='dr-alert-requester',
+            email='dr-alert-requester@example.com',
+            password='StrongPass123!',
+        )
+        alert = AuditLog.objects.create(
+            name='Reconciliation Requested',
+            action='Reconciliation requested for exception EXC-TEST-001',
+            message='exception_id=EXC-TEST-001|requester_name=DR Team|comment=Please open a reconciliation for review.',
+            user=requester,
+            severity='warning',
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.get(reverse('backup-dashboard'), {
+            'show_alerts': '1',
+            'show_reconciliation': '1',
+            'show_add_reconciliation': '1',
+            'reconciliation_request_id': alert.id,
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Reconciliation request from DR Team')
+        self.assertContains(response, 'Please open a reconciliation for review.')
+
+    def test_dr_team_can_close_exception_with_investigation_results(self):
+        # Setup DR Team group and user
+        dr_group = Group.objects.create(name='DR Team')
+        branch = BankBranch.objects.create(branch_code='KMP-001', branch_name='Kampala', status='Active')
+        dr_user = get_user_model().objects.create_user(
+            username='dr-investigator',
+            email='dr-investigator@example.com',
+            password='pass1234',
+            role='auditor',
+            assigned_branch=branch,
+        )
+        dr_user.groups.add(dr_group)
+
+        # Create test data
+        tape = Tape.objects.create(
+            volser='TAPE-CLOSE-001',
+            barcode='BC-CLOSE-001',
+            tape_type='LTO-8',
+            retention_end_date=date(2028, 1, 1),
+            current_location='Vault',
+        )
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Approved',
+            source_location='Kampala',
+            destination_location='Mbarara',
+            requesting_branch=branch,
+            releasing_custodian='Jane',
+            receiving_custodian='John',
+            created_by=dr_user,
+        )
+        shipment.tapes.add(tape)
+        exception = ShipmentException.objects.create(
+            exception_id='EXC-CLOSE-001',
+            shipment=shipment,
+            tape=tape,
+            exception_type='Discrepancy',
+            description='Test discrepancy',
+            reported_by=dr_user,
+            status='Investigating',
+        )
+
+        # Request to close the exception
+        self.client.force_login(dr_user)
+        response = self.client.post(reverse('close-exception'), {
+            'exception_id': 'EXC-CLOSE-001',
+            'investigator_name': 'DR Investigator',
+            'investigation_results': 'Investigation completed. Tape found in vault.',
+        })
+
+        # Verify redirect and success message
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('investigation-dashboard', response.url)
+
+        # Verify exception status is still 'Investigating' (not yet closed)
+        exception.refresh_from_db()
+        self.assertEqual(exception.status, 'Investigating')
+
+        # Verify ExceptionCloseRequest was created with Pending status
+        close_request = ExceptionCloseRequest.objects.filter(exception=exception).first()
+        self.assertIsNotNone(close_request)
+        self.assertEqual(close_request.status, 'Pending')
+        self.assertEqual(close_request.requested_by, dr_user)
+        self.assertIn('Tape found in vault', close_request.investigation_results)
+
+        # Verify AuditLog entry was created for the request
+        audit_log = AuditLog.objects.filter(
+            name='Exception Close Requested',
+            action__icontains='EXC-CLOSE-001'
+        ).first()
+        self.assertIsNotNone(audit_log)
+        self.assertEqual(audit_log.severity, 'warning')
+
+    def test_admin_can_approve_close_exception_request(self):
+        # Setup users and groups
+        dr_group = Group.objects.create(name='DR Team')
+        admin_group = Group.objects.create(name='Backup Administrator')
+        
+        branch = BankBranch.objects.create(branch_code='KMP-002', branch_name='Kampala', status='Active')
+        
+        dr_user = get_user_model().objects.create_user(
+            username='dr-user-2',
+            email='dr-user-2@example.com',
+            password='pass1234',
+            role='auditor',
+            assigned_branch=branch,
+        )
+        dr_user.groups.add(dr_group)
+        
+        admin_user = get_user_model().objects.create_user(
+            username='admin-approver',
+            email='admin-approver@example.com',
+            password='pass1234',
+            role='admin',
+            assigned_branch=branch,
+        )
+        admin_user.groups.add(admin_group)
+
+        # Create exception and close request
+        tape = Tape.objects.create(
+            volser='TAPE-APPROVE-001',
+            barcode='BC-APPROVE-001',
+            tape_type='LTO-8',
+            retention_end_date=date(2028, 1, 1),
+            current_location='Vault',
+        )
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Approved',
+            source_location='Kampala',
+            destination_location='Mbarara',
+            requesting_branch=branch,
+            releasing_custodian='Jane',
+            receiving_custodian='John',
+            created_by=dr_user,
+        )
+        shipment.tapes.add(tape)
+        exception = ShipmentException.objects.create(
+            exception_id='EXC-APPROVE-001',
+            shipment=shipment,
+            tape=tape,
+            exception_type='Discrepancy',
+            description='Test discrepancy',
+            reported_by=dr_user,
+            status='Investigating',
+        )
+        close_request = ExceptionCloseRequest.objects.create(
+            exception=exception,
+            requested_by=dr_user,
+            investigation_results='Tape found in vault.',
+            status='Pending'
+        )
+
+        # Admin approves the close request
+        self.client.force_login(admin_user)
+        response = self.client.post(reverse('approve-close-exception', kwargs={'close_request_id': close_request.id}), {
+            'action': 'approve',
+            'approval_comment': 'Investigation findings verified.',
+        })
+
+        # Verify redirect
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('backup-dashboard', response.url)
+
+        # Verify close request status is now 'Approved'
+        close_request.refresh_from_db()
+        self.assertEqual(close_request.status, 'Approved')
+        self.assertEqual(close_request.approved_by, admin_user)
+        self.assertIn('verified', close_request.approval_comment)
+
+        # Verify exception status is now 'Closed'
+        exception.refresh_from_db()
+        self.assertEqual(exception.status, 'Closed')
+
+        # Verify success AuditLog entry was created
+        audit_log = AuditLog.objects.filter(
+            name='Exception Closed',
+            action__icontains='EXC-APPROVE-001'
+        ).first()
+        self.assertIsNotNone(audit_log)
+        self.assertEqual(audit_log.severity, 'success')
+
+
 
 
 class DjangoAdminCourierUserCreationTests(TestCase):

@@ -599,6 +599,33 @@ footer{
             {% endif %}
         </div>
 
+        {% if reconciliation_request_context %}
+        <div class="card border-warning mb-4">
+            <div class="card-body">
+                <h6 class="fw-semibold mb-2">Reconciliation request from {{ reconciliation_request_context.requester_name|default:'DR Team' }}</h6>
+                <p class="small text-muted mb-2">Exception ID: {{ reconciliation_request_context.exception_id }}</p>
+                <p class="mb-3">{{ reconciliation_request_context.comment|default:'No additional comment was provided.' }}</p>
+                <form method="post" action="{% url 'backup-dashboard' %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="form_type" value="create_reconciliation_from_request">
+                    <input type="hidden" name="reconciliation_request_id" value="{{ reconciliation_request_context.id }}">
+                    <input type="hidden" name="exception_id" value="{{ reconciliation_request_context.exception_id }}">
+                    <input type="hidden" name="requester_name" value="{{ reconciliation_request_context.requester_name }}">
+                    <input type="hidden" name="comment" value="{{ reconciliation_request_context.comment }}">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label">Reconciliation location</label>
+                            <input class="form-control" name="location" value="{{ reconciliation_request_context.exception_id }}" placeholder="Enter location">
+                        </div>
+                        <div class="col-12">
+                            <button class="btn btn-primary" type="submit">Open Reconciliation</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+
         <div>
             <h6 class="fw-semibold mb-3">Recent alerts</h6>
             {% if recent_alerts %}
@@ -608,7 +635,17 @@ footer{
                     {% else %}
                         <div class="alert alert-warning d-flex justify-content-between align-items-start">
                     {% endif %}
-                        <span>{{ alert.action|default:alert.name }}</span>
+                        {% if alert.name == 'Reconciliation Requested' %}
+                            <a class="text-decoration-none text-dark" href="{% url 'backup-dashboard' %}?show_alerts=1&reconciliation_request_id={{ alert.id }}">
+                                <span>{{ alert.action|default:alert.name }}</span>
+                            </a>
+                        {% elif alert.name == 'Exception Close Request Notification' and alert.close_request_url %}
+                            <a class="text-decoration-none text-dark" href="{{ alert.close_request_url }}">
+                                <span>{{ alert.action|default:alert.name }}</span>
+                            </a>
+                        {% else %}
+                            <span>{{ alert.action|default:alert.name }}</span>
+                        {% endif %}
                         {% if alert.is_new %}
                             <span class="badge bg-primary">New</span>
                         {% endif %}

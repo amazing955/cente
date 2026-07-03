@@ -1151,3 +1151,31 @@ class DashboardFeatureExemption(models.Model):
     def __str__(self):
         feature_name = dict(DASHBOARD_FEATURE_CHOICES).get(self.feature_key, self.feature_key)
         return f"{self.user.username} exempted from {feature_name}"
+
+
+class ExceptionCloseRequest(models.Model):
+    """Model to track exception close requests waiting for admin approval."""
+    
+    STATUS_CHOICES = [
+        ('Pending', 'Pending'),
+        ('Approved', 'Approved'),
+        ('Rejected', 'Rejected'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    exception = models.ForeignKey(ShipmentException, on_delete=models.CASCADE, related_name='close_requests')
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name='close_requests')
+    investigation_results = models.TextField()
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Pending')
+    approval_comment = models.TextField(blank=True)
+    approved_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_close_requests')
+    requested_at = models.DateTimeField(auto_now_add=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    
+    class Meta:
+        verbose_name = 'Exception Close Request'
+        verbose_name_plural = 'Exception Close Requests'
+        ordering = ['-requested_at']
+    
+    def __str__(self):
+        return f"Close request for {self.exception.exception_id} - {self.status}"
