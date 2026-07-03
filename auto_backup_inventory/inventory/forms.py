@@ -930,33 +930,19 @@ class ReturnShipmentActionForm(forms.Form):
 
 
 class ReconciliationForm(forms.ModelForm):
-    assigned_operator = forms.ModelChoiceField(
-        queryset=CustomUser.objects.filter(role='operations_manager').order_by('username'),
-        required=False,
-        label='Assigned Operator',
-        widget=forms.Select(attrs={'class': 'form-select'})
-    )
-
     class Meta:
         model = Reconciliation
         fields = [
             'reconciliation_date',
             'location',
-            'performed_by',
-            'reviewed_by',
-            'approved_by',
-            'assigned_operator',
-            'start_time',
-            'end_time',
             'status',
+            'total_tapes_expected',
             'notes',
         ]
         widgets = {
             'reconciliation_date': forms.DateInput(attrs={'class': 'form-control', 'type': 'date'}),
             'location': forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter reconciliation location'}),
-            'performed_by': forms.Select(attrs={'class': 'form-select'}),
-            'reviewed_by': forms.Select(attrs={'class': 'form-select'}),
-            'approved_by': forms.Select(attrs={'class': 'form-select'}),
+            'total_tapes_expected': forms.NumberInput(attrs={'class': 'form-control', 'min': 0, 'placeholder': 'Expected tape count'}),
             'start_time': forms.DateTimeInput(attrs={'class': 'form-control', 'type': 'datetime-local'}),
             'end_time': forms.DateTimeInput(attrs={'class': 'form-control', 'type': 'datetime-local'}),
             'status': forms.Select(attrs={'class': 'form-select'}),

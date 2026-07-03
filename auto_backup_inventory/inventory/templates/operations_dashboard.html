@@ -784,6 +784,80 @@ body {
     <div id="reconciliationPanel" class="{% if not show_reconciliation_panel %}d-none{% endif %}">
     <div class="row g-3 mb-4" id="reconciliation_review">
         <div class="col-12">
+            <div id="finishScanInlineForm" class="card section-card mb-4 d-none">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="mb-0">Finish Reconciliation Scan</h5>
+                        <small class="text-muted">Provide a backup admin report for the reconciliation before marking it complete.</small>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="cancelFinishScanBtn">Cancel</button>
+                </div>
+                <div class="card-body">
+                    <form method="post" action="{% url 'operations-dashboard' %}" id="finishScanInlineFormElement">
+                        {% csrf_token %}
+                        <input type="hidden" name="form_type" value="finish_reconciliation">
+                        <input type="hidden" name="reconciliation_pk" id="finishScanReconciliationPk" value="">
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-4">
+                                <label class="form-label">Branch</label>
+                                <input type="text" id="finishScanBranch" class="form-control" readonly>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Operator</label>
+                                <input type="text" id="finishScanOperator" class="form-control" readonly>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Start Time</label>
+                                <input type="text" id="finishScanStartTime" class="form-control" readonly>
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-4">
+                                <label class="form-label">End Time</label>
+                                <input type="text" id="finishScanEndTime" class="form-control" readonly>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Number Of Assigned Tapes</label>
+                                <input type="text" id="finishScanAssignedTapes" class="form-control" readonly>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Number Scanned</label>
+                                <input type="text" id="finishScanNumberScanned" class="form-control" readonly>
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-3">
+                            <div class="col-md-4">
+                                <label class="form-label">Missing Tapes Remaining</label>
+                                <input type="text" id="finishScanMissingTapes" class="form-control" readonly>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Damaged Tapes</label>
+                                <input type="text" id="finishScanDamagedTapes" class="form-control" readonly value="N/A">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Comments</label>
+                                <input type="text" id="finishScanComments" class="form-control" readonly>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="id_challenges_encountered" class="form-label">Challenges Encountered</label>
+                            <textarea id="id_challenges_encountered" name="challenges_encountered" class="form-control" rows="3" placeholder="Describe any issues encountered during the scan."></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label for="id_recommendations" class="form-label">Recommendations</label>
+                            <textarea id="id_recommendations" name="recommendations" class="form-control" rows="3" placeholder="Provide recommendations for future reconciliation scans."></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label for="id_report_comment" class="form-label">Comment (optional)</label>
+                            <textarea id="id_report_comment" name="report_comment" class="form-control" rows="3" placeholder="Add any final notes for the backup administrator."></textarea>
+                        </div>
+                        <div class="d-flex justify-content-end gap-2">
+                            <button type="button" class="btn btn-outline-secondary" id="cancelFinishScanBtnBottom">Cancel</button>
+                            <button type="submit" class="btn btn-danger">Submit Report & Finish Scan</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
             <div class="section-card p-4 h-100">
                 <div class="d-flex justify-content-between align-items-center mb-4">
                     <div>
@@ -792,6 +866,105 @@ body {
                     </div>
                     <button class="btn btn-outline-secondary btn-sm back-to-dashboard-btn">Back to Dashboard</button>
                 </div>
+                <div class="row g-3 mb-4">
+                    <div class="col-12 col-md-6 col-xl-3">
+                        <div class="card notification-card p-3 h-100">
+                            <div class="d-flex align-items-center justify-content-between mb-2">
+                                <span class="small-note">Recent Sessions</span>
+                                <span class="fw-semibold">{{ latest_reconciliations|length }}</span>
+                            </div>
+                            <p class="mb-0 small-note">Reconciliations conducted in the latest review window.</p>
+                        </div>
+                    </div>
+                </div>
+                {% if selected_reconciliation %}
+                <div class="card notification-card p-4 mb-4">
+                    <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+                        <div>
+                            <h6 class="fw-semibold mb-1">Selected Reconciliation</h6>
+                            <p class="small-note mb-0">Direct scan queue and session detail for the selected reconciliation.</p>
+                        </div>
+                        <span class="badge bg-{{ selected_reconciliation.status|lower|default:'secondary' }} text-capitalize">{{ selected_reconciliation.status }}</span>
+                    </div>
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-3">
+                            <strong>ID</strong>
+                            <div>{{ selected_reconciliation.reconciliation_id }}</div>
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Date</strong>
+                            <div>{{ selected_reconciliation.reconciliation_date|date:'Y-m-d' }}</div>
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Location</strong>
+                            <div>{{ selected_reconciliation.location }}</div>
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Operator</strong>
+                            <div>{% if selected_reconciliation.assigned_operator %}{{ selected_reconciliation.assigned_operator.username }}{% else %}<span class="text-muted">Unassigned</span>{% endif %}</div>
+                        </div>
+                    </div>
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-4">
+                            <strong>Progress</strong>
+                            <div class="progress" style="height: 1.25rem;">
+                                <div class="progress-bar" role="progressbar" style="width: {{ selected_reconciliation.progress_percent }}%;" aria-valuenow="{{ selected_reconciliation.progress_percent }}" aria-valuemin="0" aria-valuemax="100">{{ selected_reconciliation.progress_percent }}%</div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <strong>Scanned / Expected</strong>
+                            <div>{{ selected_reconciliation.total_tapes_scanned }} / {{ selected_reconciliation.total_tapes_expected }}</div>
+                        </div>
+                        <div class="col-md-4">
+                            <strong>Scan Window</strong>
+                            <div>{% if selected_reconciliation.scan_started_at %}Started {{ selected_reconciliation.scan_started_at|date:'M d, Y H:i' }}{% else %}Not started{% endif %}</div>
+                        </div>
+                    </div>
+                    {% if selected_reconciliation.status == 'Completed' %}
+                    <div class="mb-3">
+                        <form method="post" action="{% url 'operations-dashboard' %}" class="d-inline-block">
+                            {% csrf_token %}
+                            <input type="hidden" name="form_type" value="close_reconciliation">
+                            <input type="hidden" name="reconciliation_pk" value="{{ selected_reconciliation.id }}">
+                            <button type="submit" class="btn btn-warning btn-sm" onclick="return confirm('Close reconciliation {{ selected_reconciliation.reconciliation_id }}? This will mark it as closed and archive the review session.');">Close Reconciliation</button>
+                        </form>
+                    </div>
+                    {% endif %}
+                    {% if show_unscanned_tapes and selected_reconciliation and selected_reconciliation.status != 'Closed' %}
+                    <div class="mt-4">
+                        <h6 class="fw-semibold mb-3">Unscanned Tape Queue</h6>
+                        <div class="table-responsive">
+                            <table class="table table-sm table-bordered mb-0">
+                                <thead class="table-dark">
+                                    <tr>
+                                        <th scope="col">Volser</th>
+                                        <th scope="col">Current Location</th>
+                                        <th scope="col">Scan Status</th>
+                                        <th scope="col">Progress</th>
+                                        <th scope="col">Last Scanned</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for tape in unscanned_tapes %}
+                                    <tr class="table-danger">
+                                        <td class="fw-semibold">{{ tape.volser }}</td>
+                                        <td>{{ tape.current_location|default:'Unknown' }}</td>
+                                        <td>{{ tape.scan_status }}</td>
+                                        <td>{{ tape.scan_progress }}%</td>
+                                        <td>{% if tape.last_scanned_at %}{{ tape.last_scanned_at|date:'M d, Y H:i' }}{% else %}<span class="text-danger">Not scanned</span>{% endif %}</td>
+                                    </tr>
+                                    {% empty %}
+                                    <tr>
+                                        <td colspan="5" class="text-center">No active queue items found for this reconciliation.</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
                 <div class="row g-3 mb-4">
                     <div class="col-12 col-md-6 col-xl-3">
                         <div class="card notification-card p-3 h-100">
@@ -837,8 +1010,11 @@ body {
                                 <th>Reconciliation ID</th>
                                 <th>Location</th>
                                 <th>Status</th>
+                                <th>Operator</th>
+                                <th>Progress</th>
                                 <th>Created</th>
-                                <th>Last Updated</th>
+                                <th>Scan Completed</th>
+                                <th>Action</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -847,11 +1023,27 @@ body {
                                 <td>{{ reconciliation.reconciliation_id }}</td>
                                 <td>{{ reconciliation.location|default:'N/A' }}</td>
                                 <td>{{ reconciliation.status }}</td>
+                                <td>{% if reconciliation.assigned_operator %}{{ reconciliation.assigned_operator.username }}{% else %}—{% endif %}</td>
+                                <td>{{ reconciliation.progress_percent }}%</td>
                                 <td>{{ reconciliation.created_at|date:'M d, Y' }}</td>
-                                <td>{{ reconciliation.updated_at|date:'M d, Y' }}</td>
+                                <td>{% if reconciliation.scan_completed_at %}{{ reconciliation.scan_completed_at|date:'M d, Y' }}{% else %}—{% endif %}</td>
+                                <td>
+                                    {% if reconciliation.status == 'Open' %}
+                                    <form method="post" action="{% url 'operations-dashboard' %}" class="d-inline-block">
+                                        {% csrf_token %}
+                                        <input type="hidden" name="form_type" value="start_reconciliation">
+                                        <input type="hidden" name="reconciliation_pk" value="{{ reconciliation.id }}">
+                                        <button type="submit" class="btn btn-success btn-sm">Start Scan</button>
+                                    </form>
+                                    {% elif reconciliation.status == 'In Progress' %}
+                                        <button type="button" class="btn btn-danger btn-sm finish-scan-btn" data-reconciliation-id="{{ reconciliation.id }}" data-branch="{{ reconciliation.location|default:'N/A' }}" data-operator="{% if reconciliation.assigned_operator %}{{ reconciliation.assigned_operator.username }}{% else %}Unassigned{% endif %}" data-start-time="{% if reconciliation.scan_started_at %}{{ reconciliation.scan_started_at|date:'M d, Y H:i' }}{% else %}Not started{% endif %}" data-end-time="{% if reconciliation.scan_completed_at %}{{ reconciliation.scan_completed_at|date:'M d, Y H:i' }}{% else %}Not completed{% endif %}" data-assigned-tapes="{{ reconciliation.total_tapes_expected|default:0 }}" data-scanned="{{ reconciliation.total_tapes_scanned|default:0 }}" data-missing-tapes="{{ reconciliation.missing_issues_count }}" data-damaged-tapes="{{ reconciliation.damaged_issues_count }}" data-comments="{{ reconciliation.notes|default:'No comments available' }}" onclick="openFinishScanForm(this)">Finish Scan</button>
+                                    {% else %}
+                                        <span class="text-muted">—</span>
+                                    {% endif %}
+                                </td>
                             </tr>
                             {% empty %}
-                            <tr><td colspan="5" class="text-center">No reconciliation review items available.</td></tr>
+                            <tr><td colspan="8" class="text-center">No reconciliation review items available.</td></tr>
                             {% endfor %}
                         </tbody>
                     </table>
@@ -999,10 +1191,14 @@ body {
                             </thead>
                             <tbody>
                                 {% for notification in notification_items %}
-                                <tr class="clickable-row">
+                                <tr class="clickable-row {% if notification.severity|lower == 'error' %}table-danger{% endif %}">
                                     <td>{{ notification.severity|title }}</td>
                                     <td>{{ notification.timestamp|date:'M d, Y H:i' }}</td>
-                                    <td>{{ notification.message|default:notification.action|default:'View notification' }}</td>
+                                    <td>
+                                        <a href="{{ notification.target_url }}" class="text-decoration-none notification-view-link" data-target-url="{{ notification.target_url }}" onclick="handleNotificationAction(this); return false;">
+                                            {{ notification.message|default:notification.action|default:'View notification' }}
+                                        </a>
+                                    </td>
                                 </tr>
                                 {% empty %}
                                 <tr><td colspan="3" class="text-center">No notifications available.</td></tr>
@@ -1810,8 +2006,90 @@ document.addEventListener('click', event => {
     closeEmbeddedPanel();
 });
 
+function openFinishScanForm(button) {
+    const finishScanPanel = document.getElementById('finishScanInlineForm');
+    const reconciliationPkField = document.getElementById('finishScanReconciliationPk');
+    const branchField = document.getElementById('finishScanBranch');
+    const operatorField = document.getElementById('finishScanOperator');
+    const startTimeField = document.getElementById('finishScanStartTime');
+    const endTimeField = document.getElementById('finishScanEndTime');
+    const assignedTapesField = document.getElementById('finishScanAssignedTapes');
+    const numberScannedField = document.getElementById('finishScanNumberScanned');
+    const missingTapesField = document.getElementById('finishScanMissingTapes');
+    const damagedTapesField = document.getElementById('finishScanDamagedTapes');
+    const commentsField = document.getElementById('finishScanComments');
+    const reconciliationPk = button.dataset.reconciliationId;
+    const branch = button.dataset.branch || '';
+    const operator = button.dataset.operator || '';
+    const startTime = button.dataset.startTime || '';
+    const endTime = button.dataset.endTime || '';
+    const assignedTapes = button.dataset.assignedTapes || '';
+    const numberScanned = button.dataset.scanned || '';
+    const missingTapes = button.dataset.missingTapes || '';
+    const damagedTapes = button.dataset.damagedTapes || 'N/A';
+    const comments = button.dataset.comments || '';
+
+    if (reconciliationPkField) {
+        reconciliationPkField.value = reconciliationPk;
+    }
+    if (branchField) {
+        branchField.value = branch;
+    }
+    if (operatorField) {
+        operatorField.value = operator;
+    }
+    if (startTimeField) {
+        startTimeField.value = startTime;
+    }
+    if (endTimeField) {
+        endTimeField.value = endTime;
+    }
+    if (assignedTapesField) {
+        assignedTapesField.value = assignedTapes;
+    }
+    if (numberScannedField) {
+        numberScannedField.value = numberScanned;
+    }
+    if (missingTapesField) {
+        missingTapesField.value = missingTapes;
+    }
+    if (damagedTapesField) {
+        damagedTapesField.value = damagedTapes;
+    }
+    if (commentsField) {
+        commentsField.value = comments;
+    }
+    if (finishScanPanel) {
+        finishScanPanel.classList.remove('d-none');
+        finishScanPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     attachEmbeddedHandlers();
+    const finishScanPanel = document.getElementById('finishScanInlineForm');
+    const reconciliationPkField = document.getElementById('finishScanReconciliationPk');
+    const reconciliationNameField = document.getElementById('finishScanReconciliationName');
+    const cancelButtons = document.querySelectorAll('#cancelFinishScanBtn, #cancelFinishScanBtnBottom');
+
+    function hideFinishScanPanel() {
+        if (finishScanPanel) {
+            finishScanPanel.classList.add('d-none');
+        }
+        if (reconciliationPkField) {
+            reconciliationPkField.value = '';
+        }
+        if (reconciliationNameField) {
+            reconciliationNameField.value = '';
+        }
+    }
+
+    cancelButtons.forEach(button => {
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            hideFinishScanPanel();
+        });
+    });
 });
 
 document.querySelectorAll('a.analytics-toggle').forEach(link => {
@@ -1952,6 +2230,12 @@ function handleNotificationAction(link) {
 
     if (params.get('show_reports') || params.get('report_category')) {
         showReportsPanel();
+        window.history.pushState({}, '', url.pathname + url.search);
+        return;
+    }
+
+    if (params.get('show_reconciliation') === '1' || params.get('reconciliation_pk')) {
+        showReconciliationPanel();
         window.history.pushState({}, '', url.pathname + url.search);
         return;
     }

@@ -411,6 +411,7 @@ class Reconciliation(models.Model):
     progress_percent = models.PositiveSmallIntegerField(default=0)
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         verbose_name = 'Reconciliation'
@@ -434,6 +435,14 @@ class Reconciliation(models.Model):
         if self.progress_percent == 100 and not self.scan_completed_at:
             self.scan_completed_at = timezone.now()
         self.save(update_fields=['total_tapes_expected', 'total_tapes_scanned', 'progress_percent', 'scan_started_at', 'scan_completed_at'])
+
+    @property
+    def missing_issues_count(self):
+        return self.results.filter(issue_type='Missing').count()
+
+    @property
+    def damaged_issues_count(self):
+        return self.results.filter(issue_type='Damaged').count()
 
 
 class ReconciliationResult(models.Model):

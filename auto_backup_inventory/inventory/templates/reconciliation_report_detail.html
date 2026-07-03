@@ -1,0 +1,135 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Reconciliation Report Detail{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="mb-1">{{ reconciliation.reconciliation_id }}</h2>
+            <p class="text-muted mb-0">{{ reconciliation.location }} · {{ reconciliation.reconciliation_date|date:'Y-m-d' }}</p>
+        </div>
+        <a href="{% url 'reconciliation-reports' %}" class="btn btn-secondary">
+            <i class="bi bi-arrow-left me-1"></i> Back to Reports
+        </a>
+    </div>
+
+    <div class="row gy-4">
+        <div class="col-lg-4">
+            <div class="card shadow-sm">
+                <div class="card-header">Session Overview</div>
+                <div class="card-body">
+                    <dl class="row">
+                        <dt class="col-5">Status</dt>
+                        <dd class="col-7">{{ reconciliation.status }}</dd>
+                        <dt class="col-5">Performed By</dt>
+                        <dd class="col-7">
+                            {% if reconciliation.performed_by %}
+                                {{ reconciliation.performed_by.username }}
+                            {% else %}
+                                System
+                            {% endif %}
+                        </dd>
+                        <dt class="col-5">Reviewed By</dt>
+                        <dd class="col-7">
+                            {% if reconciliation.reviewed_by %}
+                                {{ reconciliation.reviewed_by.username }}
+                            {% else %}
+                                -
+                            {% endif %}
+                        </dd>
+                        <dt class="col-5">Approved By</dt>
+                        <dd class="col-7">
+                            {% if reconciliation.approved_by %}
+                                {{ reconciliation.approved_by.username }}
+                            {% else %}
+                                -
+                            {% endif %}
+                        </dd>
+                        <dt class="col-5">Branch</dt>
+                        <dd class="col-7">{{ reconciliation.location }}</dd>
+                        <dt class="col-5">Assigned Operator</dt>
+                        <dd class="col-7">{% if reconciliation.assigned_operator %}{{ reconciliation.assigned_operator.username }}{% else %}-{% endif %}</dd>
+                        <dt class="col-5">Start Time</dt>
+                        <dd class="col-7">
+                            {% if reconciliation.scan_started_at %}
+                                {{ reconciliation.scan_started_at|date:'Y-m-d H:i' }}
+                            {% elif reconciliation.start_time %}
+                                {{ reconciliation.start_time|date:'Y-m-d H:i' }}
+                            {% else %}
+                                -
+                            {% endif %}
+                        </dd>
+                        <dt class="col-5">End Time</dt>
+                        <dd class="col-7">
+                            {% if reconciliation.scan_completed_at %}
+                                {{ reconciliation.scan_completed_at|date:'Y-m-d H:i' }}
+                            {% elif reconciliation.end_time %}
+                                {{ reconciliation.end_time|date:'Y-m-d H:i' }}
+                            {% else %}
+                                -
+                            {% endif %}
+                        </dd>
+                        <dt class="col-5">Total Issues</dt>
+                        <dd class="col-7">{{ total_issues }}</dd>
+                        <dt class="col-5">Open Issues</dt>
+                        <dd class="col-7">{{ open_issues }}</dd>
+                    </dl>
+                </div>
+            </div>
+
+            <div class="card shadow-sm mt-4">
+                <div class="card-header">Session Notes</div>
+                <div class="card-body">
+                    <p class="mb-0 text-muted">{{ reconciliation.notes|default:'No notes were recorded for this session.' }}</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-8">
+            <div class="card shadow-sm">
+                <div class="card-header">Discrepancy Details</div>
+                <div class="card-body p-0">
+                    <div class="table-responsive">
+                        <table class="table table-hover mb-0">
+                            <thead class="table-secondary">
+                                <tr>
+                                    <th scope="col">Tape</th>
+                                    <th scope="col">Barcode</th>
+                                    <th scope="col">Issue Type</th>
+                                    <th scope="col">Expected</th>
+                                    <th scope="col">Actual</th>
+                                    <th scope="col">Resolution</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for result in reconciliation.results.all %}
+                                    <tr>
+                                        <td>
+                                            {% if result.tape %}
+                                                {{ result.tape.volser }}
+                                            {% else %}
+                                                Unknown
+                                            {% endif %}
+                                        </td>
+                                        <td>{{ result.barcode|default:'-' }}</td>
+                                        <td>{{ result.issue_type }}</td>
+                                        <td>{{ result.expected_location|default:'-' }}</td>
+                                        <td>{{ result.actual_location|default:'-' }}</td>
+                                        <td>{{ result.resolution_status }}</td>
+                                    </tr>
+                                {% empty %}
+                                    <tr>
+                                        <td colspan="6" class="text-center text-muted">No discrepancy results recorded.</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

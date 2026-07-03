@@ -2120,6 +2120,8 @@ def auditor_dashboard(request):
 def audit_logs_view(request):
     context = _build_auditor_context(request, page='audit-logs')
     queryset, filters = build_audit_log_queryset(request)
+    show_admin_history = 'show_admin_history' in request.GET
+    show_audit_panel = False
     # If viewing admin history, restrict audit logs to the current user
     if show_admin_history:
         try:
@@ -2313,15 +2315,23 @@ def compliance_reports_view(request):
                 reconciliation_report_rows = []
                 for reconciliation in qs:
                     reconciliation_report_rows.append({
+                        'pk': reconciliation.id,
+                        'id': reconciliation.id,
                         'reconciliation_id': reconciliation.reconciliation_id,
                         'location': reconciliation.location,
-                        'expected_tapes': reconciliation.results.count(),
-                        'scanned_tapes': reconciliation.results.count(),
+                        'expected_tapes': reconciliation.total_tapes_expected,
+                        'scanned_tapes': reconciliation.total_tapes_scanned,
                         'missing_tapes': reconciliation.results.filter(issue_type='Missing').count(),
                         'misplaced_tapes': reconciliation.results.filter(issue_type='Misplaced').count(),
                         'unexpected_tapes': reconciliation.results.filter(issue_type='Unexpected').count(),
+                        'damaged_tapes': reconciliation.results.filter(issue_type='Damaged').count(),
                         'reconciliation_date': reconciliation.reconciliation_date,
                         'status': reconciliation.status,
+                        'branch': reconciliation.location,
+                        'operator': reconciliation.assigned_operator.username if reconciliation.assigned_operator else 'Unassigned',
+                        'start_time': reconciliation.scan_started_at,
+                        'end_time': reconciliation.scan_completed_at,
+                        'comments': reconciliation.notes,
                     })
                 report_table_columns = [
                     {'key': 'reconciliation_id', 'label': 'Reconciliation ID'},
@@ -2890,7 +2900,7 @@ def dashboard(request):
     return render(request, "dashboard.html", context)
 
 
-@user_passes_test(lambda u: u.is_superuser or is_backup_administrator(u), login_url='signin')
+@user_passes_test(lambda u: u.is_superuser or is_backup_administrator(u) or is_operations_manager(u), login_url='signin')
 @login_required(login_url='signin')
 def backup_dashboard(request):
     tape_form = AddTapeForm(request.POST or None)
@@ -2909,6 +2919,7 @@ def backup_dashboard(request):
     show_reconciliation_panel = False
     show_reconciliation_reports_panel = False
     show_add_reconciliation_panel = False
+    show_unscanned_tapes = False
     show_print_barcodes_panel = False
     show_admin_panel = False
     show_admin_history = False
@@ -3333,12 +3344,111 @@ def backup_dashboard(request):
                     user=request.user,
                     severity='success',
                 )
+                if reconciliation.assigned_operator:
+                    AuditLog.objects.create(
+                        name='Reconciliation Assigned',
+                        action=f'Reconciliation {reconciliation.reconciliation_id} assigned to {reconciliation.assigned_operator.username}',
+                        user=reconciliation.assigned_operator,
+                        message=f'reconciliation_id={reconciliation.reconciliation_id}',
+                        severity='warning',
+                    )
                 messages.success(request, 'Reconciliation created successfully.')
-                return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1')
+                return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={reconciliation.id}&show_unscanned_tapes=1')
             else:
                 show_reconciliation_panel = True
                 show_add_reconciliation_panel = True
                 messages.error(request, 'Please correct the reconciliation form errors and try again.')
+        elif form_type == 'start_reconciliation':
+            reconciliation_pk = request.POST.get('reconciliation_pk')
+            selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
+            if selected_reconciliation:
+                if selected_reconciliation.status == 'Open':
+                    selected_reconciliation.status = 'In Progress'
+                    selected_reconciliation.scan_started_at = timezone.localtime()
+                    selected_reconciliation.save(update_fields=['status', 'scan_started_at'])
+                    AuditLog.objects.create(
+                        name='Reconciliation Started',
+                        action=f'Started reconciliation {selected_reconciliation.reconciliation_id}',
+                        user=request.user,
+                        message=f'reconciliation_id={selected_reconciliation.reconciliation_id}',
+                        severity='info',
+                    )
+                    messages.success(request, 'Reconciliation scan started.')
+                else:
+                    messages.info(request, 'Reconciliation is already in progress.')
+            else:
+                messages.error(request, 'Unable to start the selected reconciliation.')
+            return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}&show_unscanned_tapes=1')
+        elif form_type == 'finish_reconciliation':
+            reconciliation_pk = request.POST.get('reconciliation_pk')
+            selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
+            if selected_reconciliation:
+                if selected_reconciliation.status == 'In Progress':
+                    selected_reconciliation.status = 'Completed'
+                    selected_reconciliation.scan_completed_at = timezone.localtime()
+                    if selected_reconciliation.total_tapes_expected > 0:
+                        selected_reconciliation.progress_percent = 100
+                    selected_reconciliation.save(update_fields=['status', 'scan_completed_at', 'progress_percent'])
+                    AuditLog.objects.create(
+                        name='Reconciliation Finished',
+                        action=f'Finished reconciliation {selected_reconciliation.reconciliation_id}',
+                        user=request.user,
+                        message=f'reconciliation_id={selected_reconciliation.reconciliation_id}|reconciliation_pk={selected_reconciliation.id}',
+                        severity='success',
+                    )
+                    messages.success(request, 'Reconciliation scan finished.')
+                else:
+                    messages.info(request, 'Reconciliation is not currently in progress.')
+            else:
+                messages.error(request, 'Unable to finish the selected reconciliation.')
+            return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}&show_unscanned_tapes=1')
+        elif form_type == 'close_reconciliation':
+            reconciliation_pk = request.POST.get('reconciliation_pk')
+            selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
+            if selected_reconciliation:
+                if selected_reconciliation.status == 'Completed':
+                    selected_reconciliation.status = 'Closed'
+                    selected_reconciliation.save(update_fields=['status', 'updated_at'])
+                    AuditLog.objects.create(
+                        name='Reconciliation Closed',
+                        action=f'Closed reconciliation {selected_reconciliation.reconciliation_id}',
+                        user=request.user,
+                        message=f'reconciliation_id={selected_reconciliation.reconciliation_id}|reconciliation_pk={selected_reconciliation.id}',
+                        severity='success',
+                    )
+                    messages.success(request, 'Reconciliation has been closed successfully.')
+                else:
+                    messages.info(request, 'Only completed reconciliations can be closed.')
+            else:
+                messages.error(request, 'Unable to close the selected reconciliation.')
+            return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}&show_unscanned_tapes=1')
+        elif form_type == 'shift_reconciliation':
+            reconciliation_pk = request.POST.get('reconciliation_pk')
+            operator_pk = request.POST.get('operator_pk')
+            selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
+            selected_operator = get_object_by_uuid_pk(CustomUser, operator_pk)
+            if selected_reconciliation and selected_operator:
+                selected_reconciliation.assigned_operator = selected_operator
+                selected_reconciliation.save(update_fields=['assigned_operator'])
+                reassigned_count = Tape.objects.filter(scan_status__in=['Pending', 'Assigned', 'Scanning']).update(scan_status='Assigned')
+                AuditLog.objects.create(
+                    name='Reconciliation Shifted',
+                    action=f'Scan duty for reconciliation {selected_reconciliation.reconciliation_id} was forwarded to {selected_operator.username}',
+                    user=selected_operator,
+                    message=f'reconciliation_id={selected_reconciliation.reconciliation_id}|reconciliation_pk={selected_reconciliation.id}|operator={selected_operator.username}|assigned_count={reassigned_count}',
+                    severity='error',
+                )
+                AuditLog.objects.create(
+                    name='Reconciliation Shift Notification',
+                    action=f'Scan duty for reconciliation {selected_reconciliation.reconciliation_id} was forwarded to {selected_operator.username}',
+                    user=request.user,
+                    message=f'reconciliation_id={selected_reconciliation.reconciliation_id}|reconciliation_pk={selected_reconciliation.id}|operator={selected_operator.username}|assigned_count={reassigned_count}',
+                    severity='info',
+                )
+                messages.success(request, f'Scan duty shifted to {selected_operator.username}.')
+            else:
+                messages.error(request, 'Please select a valid operator and reconciliation.')
+            return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}&show_unscanned_tapes=1')
         elif form_type == 'add_reconciliation_result':
             reconciliation_pk = request.POST.get('reconciliation_pk')
             selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
@@ -3354,6 +3464,8 @@ def backup_dashboard(request):
                         user=request.user,
                         severity='info',
                     )
+                    if selected_reconciliation.total_tapes_expected > 0:
+                        selected_reconciliation.update_progress(scanned=selected_reconciliation.total_tapes_scanned, expected=selected_reconciliation.total_tapes_expected)
                     messages.success(request, 'Reconciliation result saved successfully.')
                     return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={selected_reconciliation.id}')
                 else:
@@ -3362,6 +3474,50 @@ def backup_dashboard(request):
             else:
                 messages.error(request, 'Please select a valid reconciliation session.')
                 return redirect('backup-dashboard')
+        elif form_type == 'record_reconciliation_scan':
+            reconciliation_pk = request.POST.get('reconciliation_pk')
+            tape_id = request.POST.get('scan_tape_id')
+            scan_status = request.POST.get('scan_status')
+            scan_progress = request.POST.get('scan_progress')
+            selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
+            tape = get_object_by_uuid_pk(Tape, tape_id)
+            if selected_reconciliation and tape and scan_status:
+                was_scanned = tape.scan_status in ['Scanned', 'Verified']
+                tape.scan_status = scan_status
+                tape.last_scanned_at = timezone.localtime()
+                tape.last_scanned_by = request.user
+                if scan_progress:
+                    try:
+                        tape.scan_progress = min(100, max(0, int(scan_progress)))
+                    except (ValueError, TypeError):
+                        pass
+                tape.save(update_fields=['scan_status', 'scan_progress', 'last_scanned_at', 'last_scanned_by'])
+
+                is_scanned_now = scan_status in ['Scanned', 'Verified']
+                if not was_scanned and is_scanned_now:
+                    selected_reconciliation.total_tapes_scanned = selected_reconciliation.total_tapes_scanned + 1
+                    if selected_reconciliation.total_tapes_expected > 0:
+                        selected_reconciliation.total_tapes_scanned = min(
+                            selected_reconciliation.total_tapes_scanned,
+                            selected_reconciliation.total_tapes_expected
+                        )
+
+                selected_reconciliation.update_progress(scanned=selected_reconciliation.total_tapes_scanned, expected=selected_reconciliation.total_tapes_expected)
+
+                if selected_reconciliation.progress_percent == 100 and selected_reconciliation.status != 'Completed':
+                    selected_reconciliation.status = 'Completed'
+                    selected_reconciliation.save(update_fields=['status'])
+                AuditLog.objects.create(
+                    name='Reconciliation Scan Updated',
+                    action=f'Tape {tape.volser} scan status updated to {tape.scan_status} for {selected_reconciliation.reconciliation_id}',
+                    user=request.user,
+                    message=f'reconciliation_id={selected_reconciliation.reconciliation_id}|tape={tape.volser}|scan_status={tape.scan_status}|progress={tape.scan_progress}',
+                    severity='info',
+                )
+                messages.success(request, 'Scan record saved and reconciliation progress updated.')
+            else:
+                messages.error(request, 'Please provide a valid reconciliation, tape, and scan status.')
+            return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}')
         elif form_type == 'system_settings':
             settings_form = SystemSettingsForm(request.POST, instance=application_settings)
             if settings_form.is_valid():
@@ -3583,6 +3739,8 @@ def backup_dashboard(request):
         selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
         if selected_reconciliation:
             show_reconciliation_panel = True
+    if request.GET.get('show_unscanned_tapes') == '1':
+        show_unscanned_tapes = True
     edit_shipment_pk = request.GET.get('edit_shipment_pk')
     if edit_shipment_pk:
         selected_shipment = get_object_by_uuid_pk(Shipment, edit_shipment_pk)
@@ -3687,6 +3845,14 @@ def backup_dashboard(request):
         reconciliation.total_issues = reconciliation.results.count()
         reconciliation.open_issues = reconciliation.results.filter(resolution_status__in=['Open', 'Under Investigation']).count()
     reconciliation_results = selected_reconciliation.results.order_by('-updated_at') if selected_reconciliation else ReconciliationResult.objects.none()
+    unscanned_tapes = Tape.objects.none()
+    available_operators = CustomUser.objects.filter(
+        is_active=True,
+    ).filter(
+        Q(role='operations_manager') | Q(groups__name='Operations Manager')
+    ).order_by('username').distinct()
+    if selected_reconciliation and show_unscanned_tapes:
+        unscanned_tapes = Tape.objects.filter(scan_status__in=['Pending', 'Assigned', 'Scanning']).order_by('volser')
     recent_activities = AuditLog.objects.order_by('-timestamp')[:6]
     recent_alerts = list(AuditLog.objects.filter(severity__in=['warning', 'error']).order_by('-timestamp')[:5])
     unread_alert_id_set = set(unread_alert_ids)
@@ -3701,6 +3867,12 @@ def backup_dashboard(request):
                 if close_request_id:
                     alert.close_request_id = close_request_id
                     alert.close_request_url = reverse('approve-close-exception', kwargs={'close_request_id': close_request_id})
+            if alert.message and 'reconciliation_pk=' in alert.message:
+                parts = {p.split('=')[0]: p.split('=')[1] for p in (alert.message or '').split('|') if '=' in p}
+                reconciliation_pk = parts.get('reconciliation_pk')
+                if reconciliation_pk:
+                    alert.reconciliation_pk = reconciliation_pk
+                    alert.reconciliation_open_url = f"{reverse('backup-dashboard')}?show_reconciliation=1&show_unscanned_tapes=1&reconciliation_pk={reconciliation_pk}"
         except Exception:
             # Fail gracefully; don't break alert rendering
             pass
@@ -3892,6 +4064,7 @@ def backup_dashboard(request):
                     reconciliation_report_rows = []
                     for reconciliation in qs:
                         reconciliation_report_rows.append({
+                            'id': reconciliation.id,
                             'reconciliation_id': reconciliation.reconciliation_id,
                             'location': reconciliation.location,
                             'expected_tapes': reconciliation.results.count(),
@@ -3899,6 +4072,7 @@ def backup_dashboard(request):
                             'missing_tapes': reconciliation.results.filter(issue_type='Missing').count(),
                             'misplaced_tapes': reconciliation.results.filter(issue_type='Misplaced').count(),
                             'unexpected_tapes': reconciliation.results.filter(issue_type='Unexpected').count(),
+                            'damaged_tapes': reconciliation.results.filter(issue_type='Damaged').count(),
                             'reconciliation_date': reconciliation.reconciliation_date,
                             'status': reconciliation.status,
                         })
@@ -4257,6 +4431,9 @@ def backup_dashboard(request):
         'reconciliations': reconciliations,
         'reconciliation_results': reconciliation_results,
         'selected_reconciliation': selected_reconciliation,
+        'show_unscanned_tapes': show_unscanned_tapes,
+        'unscanned_tapes': unscanned_tapes,
+        'available_operators': available_operators,
         'settings_form': settings_form,
         'profile_form': profile_form,
         'application_settings': application_settings,
@@ -4298,6 +4475,9 @@ def backup_dashboard(request):
         'report_date_to': report_date_to,
         'report_sort': report_sort,
         'report_order': report_order,
+        'selected_reconciliation': selected_reconciliation,
+        'show_unscanned_tapes': show_unscanned_tapes,
+        'unscanned_tapes': unscanned_tapes,
         'schema_preview': schema_preview,
     }
     return render(request, 'backup_dashboard.html', context)
@@ -4362,17 +4542,25 @@ def operations_dashboard(request):
     tapes = Tape.objects.all()
     reconciliations = Reconciliation.objects.order_by('-reconciliation_date')[:5]
     reconciliation_results = ReconciliationResult.objects.order_by('-created_at')
+    selected_reconciliation = None
+    show_unscanned_tapes = False
     audit_logs = AuditLog.objects.order_by('-timestamp')[:12]
 
     unread_alert_count = AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).count()
     notification_items = []
     for item in AuditLog.objects.filter(severity__in=['warning', 'error']).order_by('-timestamp')[:10]:
+        target_url = f"{reverse('operations-dashboard')}?show_notifications=1"
+        if item.message and 'reconciliation_pk=' in item.message:
+            parts = {p.split('=')[0]: p.split('=')[1] for p in (item.message or '').split('|') if '=' in p}
+            reconciliation_pk = parts.get('reconciliation_pk')
+            if reconciliation_pk:
+                target_url = f"{reverse('operations-dashboard')}?show_reconciliation=1&show_unscanned_tapes=1&reconciliation_pk={reconciliation_pk}"
         notification_items.append({
             'severity': item.severity,
             'timestamp': item.timestamp,
             'message': item.message or item.action or item.name,
             'action': 'View',
-            'target_url': f"{reverse('operations-dashboard')}?show_notifications=1",
+            'target_url': target_url,
             'is_read': item.is_read,
         })
     show_profile_panel = False
@@ -4382,6 +4570,7 @@ def operations_dashboard(request):
     show_monitoring_panel = False
     show_exception_panel = False
     show_custody_panel = False
+    show_reconciliation_panel = False
     show_compliance_panel = False
     show_admin_history = False
     profile_form = UserProfileForm(instance=request.user)
@@ -4389,6 +4578,25 @@ def operations_dashboard(request):
     if request.method == 'GET' and request.GET.get('mark_notifications_read') == '1':
         AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).update(is_read=True, read_at=timezone.now())
         unread_alert_count = 0
+
+    reconciliation_pk = request.GET.get('reconciliation_pk')
+    if reconciliation_pk:
+        selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
+        if selected_reconciliation:
+            show_reconciliation_panel = True
+
+    if request.GET.get('show_reconciliation') == '1' or 'show_reconciliation' in request.GET:
+        show_reconciliation_panel = True
+
+    if request.GET.get('show_unscanned_tapes') == '1':
+        show_unscanned_tapes = True
+
+    if show_unscanned_tapes and not selected_reconciliation:
+        show_unscanned_tapes = False
+
+    unscanned_tapes = Tape.objects.none()
+    if selected_reconciliation and show_unscanned_tapes:
+        unscanned_tapes = Tape.objects.filter(scan_status__in=['Pending', 'Assigned', 'Scanning']).order_by('volser')
 
     tape_request_form = TapeRequestForm(request.POST or None)
 
@@ -4425,6 +4633,85 @@ def operations_dashboard(request):
             redirect_url = reverse('operations-dashboard') + '?show_reports=reports&report_category=reconciliation&report_period=2026-07&report_type=monthly&report_only=1'
             return redirect(redirect_url)
         messages.error(request, 'Please provide the requester name and request details.')
+
+    if request.method == 'POST' and request.POST.get('form_type') == 'start_reconciliation':
+        reconciliation_pk = request.POST.get('reconciliation_pk')
+        selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
+        if selected_reconciliation:
+            if selected_reconciliation.status == 'Open':
+                selected_reconciliation.status = 'In Progress'
+                selected_reconciliation.scan_started_at = timezone.localtime()
+                selected_reconciliation.save(update_fields=['status', 'scan_started_at'])
+                AuditLog.objects.create(
+                    name='Reconciliation Started',
+                    action=f'Started reconciliation {selected_reconciliation.reconciliation_id}',
+                    user=request.user,
+                    message=f'reconciliation_id={selected_reconciliation.reconciliation_id}',
+                    severity='info',
+                )
+                messages.success(request, 'Reconciliation scan started.')
+            else:
+                messages.info(request, 'Reconciliation is already in progress or cannot be started.')
+        else:
+            messages.error(request, 'Unable to start the selected reconciliation.')
+        return redirect(f'{reverse("operations-dashboard")}?show_reconciliation=1&show_unscanned_tapes=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}')
+
+    if request.method == 'POST' and request.POST.get('form_type') == 'finish_reconciliation':
+        reconciliation_pk = request.POST.get('reconciliation_pk')
+        report_comment = (request.POST.get('report_comment') or '').strip()
+        selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
+        if selected_reconciliation:
+            if selected_reconciliation.status == 'In Progress':
+                selected_reconciliation.status = 'Completed'
+                selected_reconciliation.scan_completed_at = timezone.localtime()
+                if selected_reconciliation.total_tapes_expected > 0:
+                    selected_reconciliation.progress_percent = 100
+                selected_reconciliation.save(update_fields=['status', 'scan_completed_at', 'progress_percent'])
+                AuditLog.objects.create(
+                    name='Reconciliation Finished',
+                    action=f'Finished reconciliation {selected_reconciliation.reconciliation_id}',
+                    user=request.user,
+                    message=f'reconciliation_id={selected_reconciliation.reconciliation_id}|reconciliation_pk={selected_reconciliation.id}|report_comment={report_comment}',
+                    severity='success',
+                )
+                backup_admins = User.objects.filter(is_active=True, groups__name='Backup Administrator').distinct()
+                recipients = [admin.email for admin in backup_admins if admin.email]
+                if recipients:
+                    subject = f'Reconciliation {selected_reconciliation.reconciliation_id} finished'
+                    body = (
+                        f'Reconciliation {selected_reconciliation.reconciliation_id} has been marked as completed by {request.user.username}.\n\n'
+                        f'Report details:\n{report_comment or "No additional details provided."}\n\n'
+                        f'View the reconciliation in the Operations Dashboard for follow-up.'
+                    )
+                    if ApplicationSetting.objects.first() and ApplicationSetting.objects.first().email_alerts_enabled:
+                        send_email_alert(subject, body, recipients)
+                messages.success(request, 'Reconciliation scan finished and backup admin notified.')
+            else:
+                messages.info(request, 'Reconciliation is not currently in progress.')
+        else:
+            messages.error(request, 'Unable to finish the selected reconciliation.')
+        return redirect(f'{reverse("operations-dashboard")}?show_reconciliation=1&show_unscanned_tapes=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}')
+
+    if request.method == 'POST' and request.POST.get('form_type') == 'close_reconciliation':
+        reconciliation_pk = request.POST.get('reconciliation_pk')
+        selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
+        if selected_reconciliation:
+            if selected_reconciliation.status == 'Completed':
+                selected_reconciliation.status = 'Closed'
+                selected_reconciliation.save(update_fields=['status', 'updated_at'])
+                AuditLog.objects.create(
+                    name='Reconciliation Closed',
+                    action=f'Closed reconciliation {selected_reconciliation.reconciliation_id}',
+                    user=request.user,
+                    message=f'reconciliation_id={selected_reconciliation.reconciliation_id}|reconciliation_pk={selected_reconciliation.id}',
+                    severity='success',
+                )
+                messages.success(request, 'Reconciliation has been closed successfully.')
+            else:
+                messages.info(request, 'Only completed reconciliations can be closed.')
+        else:
+            messages.error(request, 'Unable to close the selected reconciliation.')
+        return redirect(f'{reverse("operations-dashboard")}?show_reconciliation=1&show_unscanned_tapes=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}')
 
     show_reports_panel = request.GET.get('show_reports') in {'1', 'reports'} or 'show_reports' in request.GET
     active_feature_key = request.GET.get('feature_key') or request.POST.get('feature_key')
@@ -4756,6 +5043,7 @@ def operations_dashboard(request):
         'show_monitoring_panel': show_monitoring_panel,
         'show_exception_panel': show_exception_panel,
         'show_custody_panel': show_custody_panel,
+        'show_reconciliation_panel': show_reconciliation_panel,
         'show_compliance_panel': show_compliance_panel,
         'show_reports_panel': show_reports_panel,
         'active_feature_key': active_feature_key,
@@ -4781,6 +5069,9 @@ def operations_dashboard(request):
         'pending_tape_requests': pending_tape_requests,
         'my_tape_requests': my_tape_requests,
         'shipment_request_form': shipment_request_form,
+        'selected_reconciliation': selected_reconciliation,
+        'show_unscanned_tapes': show_unscanned_tapes,
+        'unscanned_tapes': unscanned_tapes,
         **chart_data,
     }
     # If admin requested their own history, build and filter the audit queryset
@@ -5537,10 +5828,21 @@ def reconciliation_report_detail(request, pk):
     )
     total_issues = reconciliation.results.count()
     open_issues = reconciliation.results.filter(resolution_status__in=['Open', 'Under Investigation']).count()
+    reconciliation_report_summary = {
+        'total_reconciliations': 1,
+        'total_discrepancies': total_issues,
+        'open_issues': open_issues,
+        'completed_reconciliations': 1 if reconciliation.status == 'Completed' else 0,
+        'open_reconciliations': 0 if reconciliation.status == 'Completed' else 1,
+    }
     context = {
-        'reconciliation': reconciliation,
+        'selected_reconciliation_report': reconciliation,
         'total_issues': total_issues,
         'open_issues': open_issues,
+        'show_reconciliation_report_detail_panel': True,
+        'show_reconciliation_reports_panel': False,
+        'reconciliation_report_summary': reconciliation_report_summary,
+        'report_export_url': reverse('backup-dashboard') + '?show_reconciliation_reports=reconciliation-reports',
     }
-    return render(request, 'report_detail.html', context)
+    return render(request, 'backup_dashboard.html', context)
 

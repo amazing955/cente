@@ -683,19 +683,37 @@ footer{
                     {% else %}
                         <div class="alert alert-warning d-flex justify-content-between align-items-start">
                     {% endif %}
-                        {% if alert.name == 'Reconciliation Requested' %}
+                        {% if alert.reconciliation_open_url %}
+                            <a class="text-decoration-none text-dark w-100" href="{{ alert.reconciliation_open_url }}">
+                                <div class="d-flex justify-content-between align-items-start">
+                                    <div>
+                                        <strong>{{ alert.action|default:alert.name }}</strong>
+                                        <div class="small text-muted">Open tape scan queue for this reconciliation.</div>
+                                    </div>
+                                    {% if alert.is_new %}
+                                        <span class="badge bg-primary ms-3">New</span>
+                                    {% endif %}
+                                </div>
+                            </a>
+                        {% elif alert.name == 'Reconciliation Requested' %}
                             <a class="text-decoration-none text-dark" href="{% url 'backup-dashboard' %}?show_alerts=1&reconciliation_request_id={{ alert.id }}">
                                 <span>{{ alert.action|default:alert.name }}</span>
                             </a>
+                            {% if alert.is_new %}
+                                <span class="badge bg-primary">New</span>
+                            {% endif %}
                         {% elif alert.name == 'Exception Close Request Notification' and alert.close_request_url %}
                             <a class="text-decoration-none text-dark" href="{{ alert.close_request_url }}">
                                 <span>{{ alert.action|default:alert.name }}</span>
                             </a>
+                            {% if alert.is_new %}
+                                <span class="badge bg-primary">New</span>
+                            {% endif %}
                         {% else %}
                             <span>{{ alert.action|default:alert.name }}</span>
-                        {% endif %}
-                        {% if alert.is_new %}
-                            <span class="badge bg-primary">New</span>
+                            {% if alert.is_new %}
+                                <span class="badge bg-primary">New</span>
+                            {% endif %}
                         {% endif %}
                     </div>
                 {% endfor %}
@@ -727,13 +745,21 @@ footer{
                     <input type="hidden" name="form_type" value="add_reconciliation">
                     {{ reconciliation_form.non_field_errors }}
                     <div class="row g-3">
-                        <div class="col-md-6">
+                        <div class="col-md-4">
+                            <label class="form-label">Reconciliation Date</label>
+                            {{ reconciliation_form.reconciliation_date }}
+                        </div>
+                        <div class="col-md-4">
                             <label class="form-label">Location</label>
                             {{ reconciliation_form.location }}
                         </div>
-                        <div class="col-md-6">
+                        <div class="col-md-4">
                             <label class="form-label">Status</label>
                             {{ reconciliation_form.status }}
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">Expected Tape Count</label>
+                            {{ reconciliation_form.total_tapes_expected }}
                         </div>
                         <div class="col-12">
                             <label class="form-label">Notes</label>
@@ -774,9 +800,138 @@ footer{
                         <div>{% if selected_reconciliation.performed_by %}{{ selected_reconciliation.performed_by.username }}{% else %}<span class="text-muted">Unknown</span>{% endif %}</div>
                     </div>
                 </div>
+                <div class="row g-3 mb-3">
+                    <div class="col-md-4">
+                        <strong>Assigned Operator</strong>
+                        <div>{% if selected_reconciliation.assigned_operator %}{{ selected_reconciliation.assigned_operator.username }}{% else %}<span class="text-muted">Unassigned</span>{% endif %}</div>
+                    </div>
+                    <div class="col-md-4">
+                        <strong>Scan Progress</strong>
+                        <div class="progress" style="height: 1.5rem;">
+                            <div class="progress-bar" role="progressbar" style="width: {{ selected_reconciliation.progress_percent }}%;" aria-valuenow="{{ selected_reconciliation.progress_percent }}" aria-valuemin="0" aria-valuemax="100">
+                                {{ selected_reconciliation.progress_percent }}%
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <strong>Scanned / Expected</strong>
+                        <div>{{ selected_reconciliation.total_tapes_scanned }} / {{ selected_reconciliation.total_tapes_expected }}</div>
+                    </div>
+                </div>
                 <div class="mt-3">
                     <strong>Notes</strong>
                     <p class="text-muted">{{ selected_reconciliation.notes|default:'No notes provided.' }}</p>
+                </div>
+                {% if show_unscanned_tapes and selected_reconciliation.status != 'Closed' %}
+                <div class="mt-4 d-flex justify-content-between align-items-center flex-wrap gap-3">
+                    <div>
+                        <h6 class="fw-semibold mb-0">Unscanned Tape Queue</h6>
+                        {% if selected_reconciliation.status == 'Open' %}
+                        <span class="badge bg-warning mt-2">Open</span>
+                        {% elif selected_reconciliation.status == 'In Progress' %}
+                        <span class="badge bg-success mt-2">Scan in progress</span>
+                        {% else %}
+                        <span class="badge bg-secondary mt-2">{{ selected_reconciliation.status }}</span>
+                        {% endif %}
+                    </div>
+                    <div class="d-flex align-items-center gap-2 flex-wrap">
+                        {% if selected_reconciliation.status == 'Open' %}
+                        <form method="post" action="{% url 'backup-dashboard' %}">
+                            {% csrf_token %}
+                            <input type="hidden" name="form_type" value="start_reconciliation">
+                            <input type="hidden" name="reconciliation_pk" value="{{ selected_reconciliation.id }}">
+                            <button type="submit" class="btn btn-success">Start Scan</button>
+                        </form>
+                        {% elif selected_reconciliation.status == 'In Progress' %}
+                        <form method="post" action="{% url 'backup-dashboard' %}">
+                            {% csrf_token %}
+                            <input type="hidden" name="form_type" value="finish_reconciliation">
+                            <input type="hidden" name="reconciliation_pk" value="{{ selected_reconciliation.id }}">
+                            <button type="submit" class="btn btn-danger">Finish Scan</button>
+                        </form>
+                        {% endif %}
+                        <form method="post" action="{% url 'backup-dashboard' %}">
+                            {% csrf_token %}
+                            <input type="hidden" name="form_type" value="shift_reconciliation">
+                            <input type="hidden" name="reconciliation_pk" value="{{ selected_reconciliation.id }}">
+                            <div class="input-group">
+                                <select name="operator_pk" class="form-select form-select-sm" required>
+                                    <option value="">Assign to operator</option>
+                                    {% for operator in available_operators %}
+                                    <option value="{{ operator.id }}">{{ operator.username }}</option>
+                                    {% endfor %}
+                                </select>
+                                <button type="submit" class="btn btn-outline-primary btn-sm">Shift Scan Duty</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+                <div class="table-responsive mt-3">
+                    <table class="table table-sm table-bordered mb-0">
+                        <thead class="table-dark">
+                            <tr>
+                                <th scope="col">Volser</th>
+                                <th scope="col">Current Location</th>
+                                <th scope="col">Scan Status</th>
+                                <th scope="col">Progress</th>
+                                <th scope="col">Last Scanned</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for tape in unscanned_tapes %}
+                            <tr class="table-danger">
+                                <td class="fw-semibold">{{ tape.volser }}</td>
+                                <td>{{ tape.current_location|default:'Unknown' }}</td>
+                                <td>{{ tape.scan_status }}</td>
+                                <td>{{ tape.scan_progress }}%</td>
+                                <td>{% if tape.last_scanned_at %}{{ tape.last_scanned_at|date:'Y-m-d H:i' }}{% else %}<span class="text-danger">Not scanned</span>{% endif %}</td>
+                            </tr>
+                            {% empty %}
+                            <tr>
+                                <td colspan="5" class="text-center text-success">No unscanned tapes found.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+                <div class="mt-4">
+                    <h6 class="fw-semibold">Record Scan Progress</h6>
+                    <form method="post" action="{% url 'backup-dashboard' %}">
+                        {% csrf_token %}
+                        <input type="hidden" name="form_type" value="record_reconciliation_scan">
+                        <input type="hidden" name="reconciliation_pk" value="{{ selected_reconciliation.id }}">
+                        <div class="row g-3">
+                            <div class="col-md-4">
+                                <label class="form-label">Tape</label>
+                                <select name="scan_tape_id" class="form-select">
+                                    <option value="">Select Tape</option>
+                                    {% for tape in tapes %}
+                                        <option value="{{ tape.id }}">{{ tape.volser }} - {{ tape.current_location|default:'Unknown location' }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Scan Status</label>
+                                <select name="scan_status" class="form-select">
+                                    <option value="">Select status</option>
+                                    <option value="Pending">Pending</option>
+                                    <option value="Assigned">Assigned</option>
+                                    <option value="Scanning">Scanning</option>
+                                    <option value="Scanned">Scanned</option>
+                                    <option value="Verified">Verified</option>
+                                    <option value="Exception">Exception</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">Tape Progress (%)</label>
+                                <input type="number" name="scan_progress" class="form-control" min="0" max="100" step="1" placeholder="0-100">
+                            </div>
+                        </div>
+                        <div class="mt-3 text-end">
+                            <button type="submit" class="btn btn-primary">Save Scan Record</button>
+                        </div>
+                    </form>
                 </div>
                 <div class="mt-4">
                     <h6 class="fw-semibold">Report a Discrepancy</h6>
@@ -842,8 +997,16 @@ footer{
                             <td>{{ reconciliation.status }}</td>
                             <td>{% if reconciliation.performed_by %}{{ reconciliation.performed_by.username }}{% else %}<span class="text-muted">Unknown</span>{% endif %}</td>
                             <td>{{ reconciliation.total_issues }}</td>
-                            <td>
+                            <td class="d-flex gap-2 flex-wrap">
                                 <a href="{% url 'backup-dashboard' %}?show_reconciliation=1&reconciliation_pk={{ reconciliation.id }}" class="btn btn-sm btn-outline-secondary">View</a>
+                                {% if reconciliation.status == 'Completed' %}
+                                <form method="post" action="{% url 'backup-dashboard' %}" class="d-inline-block">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="form_type" value="close_reconciliation">
+                                    <input type="hidden" name="reconciliation_pk" value="{{ reconciliation.id }}">
+                                    <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Close reconciliation {{ reconciliation.reconciliation_id }}? This will mark the session as closed for backup admin review.');">Close</button>
+                                </form>
+                                {% endif %}
                             </td>
                         </tr>
                     {% empty %}
@@ -853,6 +1016,130 @@ footer{
                     {% endfor %}
                 </tbody>
             </table>
+        </div>
+    </div>
+</div>
+{% elif show_reconciliation_report_detail_panel %}
+<div class="card shadow-sm mb-4" style="min-height:70vh;">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+            <h5 class="mb-0">Reconciliation Report Detail</h5>
+            <small class="text-muted">Review reconciliation session details and discrepancy results within the backup dashboard.</small>
+        </div>
+        <div class="btn-toolbar gap-2">
+            <a href="{% url 'backup-dashboard' %}?show_reconciliation_reports=reconciliation-reports" class="btn btn-outline-secondary btn-sm">
+                <i class="bi bi-arrow-left me-1"></i> Back to Reports
+            </a>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="row gy-4">
+            <div class="col-lg-4">
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header">Session Overview</div>
+                    <div class="card-body">
+                        <dl class="row">
+                            <dt class="col-5">Status</dt>
+                            <dd class="col-7">{{ selected_reconciliation_report.status }}</dd>
+                            <dt class="col-5">Performed By</dt>
+                            <dd class="col-7">
+                                {% if selected_reconciliation_report.performed_by %}
+                                    {{ selected_reconciliation_report.performed_by.username }}
+                                {% else %}
+                                    System
+                                {% endif %}
+                            </dd>
+                            <dt class="col-5">Reviewed By</dt>
+                            <dd class="col-7">
+                                {% if selected_reconciliation_report.reviewed_by %}
+                                    {{ selected_reconciliation_report.reviewed_by.username }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </dd>
+                            <dt class="col-5">Approved By</dt>
+                            <dd class="col-7">
+                                {% if selected_reconciliation_report.approved_by %}
+                                    {{ selected_reconciliation_report.approved_by.username }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </dd>
+                            <dt class="col-5">Branch</dt>
+                            <dd class="col-7">{{ selected_reconciliation_report.location }}</dd>
+                            <dt class="col-5">Assigned Operator</dt>
+                            <dd class="col-7">{% if selected_reconciliation_report.assigned_operator %}{{ selected_reconciliation_report.assigned_operator.username }}{% else %}-{% endif %}</dd>
+                            <dt class="col-5">Start Time</dt>
+                            <dd class="col-7">
+                                {% if selected_reconciliation_report.scan_started_at %}
+                                    {{ selected_reconciliation_report.scan_started_at|date:'Y-m-d H:i' }}
+                                {% elif selected_reconciliation_report.start_time %}
+                                    {{ selected_reconciliation_report.start_time|date:'Y-m-d H:i' }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </dd>
+                            <dt class="col-5">End Time</dt>
+                            <dd class="col-7">
+                                {% if selected_reconciliation_report.scan_completed_at %}
+                                    {{ selected_reconciliation_report.scan_completed_at|date:'Y-m-d H:i' }}
+                                {% elif selected_reconciliation_report.end_time %}
+                                    {{ selected_reconciliation_report.end_time|date:'Y-m-d H:i' }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </dd>
+                            <dt class="col-5">Total Issues</dt>
+                            <dd class="col-7">{{ total_issues }}</dd>
+                            <dt class="col-5">Open Issues</dt>
+                            <dd class="col-7">{{ open_issues }}</dd>
+                        </dl>
+                    </div>
+                </div>
+                <div class="card shadow-sm">
+                    <div class="card-header">Session Notes</div>
+                    <div class="card-body">
+                        <p class="mb-0 text-muted">{{ selected_reconciliation_report.notes|default:'No notes were recorded for this session.' }}</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-8">
+                <div class="card shadow-sm">
+                    <div class="card-header">Discrepancy Details</div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-hover mb-0">
+                                <thead class="table-secondary">
+                                    <tr>
+                                        <th scope="col">Tape</th>
+                                        <th scope="col">Barcode</th>
+                                        <th scope="col">Issue Type</th>
+                                        <th scope="col">Expected</th>
+                                        <th scope="col">Actual</th>
+                                        <th scope="col">Resolution</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for result in selected_reconciliation_report.results.all %}
+                                        <tr>
+                                            <td>{% if result.tape %}{{ result.tape.volser }}{% else %}Unknown{% endif %}</td>
+                                            <td>{{ result.barcode|default:'-' }}</td>
+                                            <td>{{ result.issue_type }}</td>
+                                            <td>{{ result.expected_location|default:'-' }}</td>
+                                            <td>{{ result.actual_location|default:'-' }}</td>
+                                            <td>{{ result.resolution_status }}</td>
+                                        </tr>
+                                    {% empty %}
+                                        <tr>
+                                            <td colspan="6" class="text-center text-muted">No discrepancy results recorded.</td>
+                                        </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -1227,6 +1514,7 @@ footer{
                             <th>Unexpected Tapes</th>
                             <th>Reconciliation Date</th>
                             <th>Status</th>
+                            <th></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -1241,6 +1529,11 @@ footer{
                                 <td>{{ row.unexpected_tapes }}</td>
                                 <td>{{ row.reconciliation_date|date:'Y-m-d' }}</td>
                                 <td>{{ row.status }}</td>
+                                <td class="text-end">
+                                    <a href="{% url 'reconciliation-report-detail' row.id %}" class="btn btn-sm btn-outline-secondary">
+                                        View More
+                                    </a>
+                                </td>
                             </tr>
                         {% endfor %}
                     </tbody>
