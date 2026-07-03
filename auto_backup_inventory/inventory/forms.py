@@ -930,6 +930,13 @@ class ReturnShipmentActionForm(forms.Form):
 
 
 class ReconciliationForm(forms.ModelForm):
+    assigned_operator = forms.ModelChoiceField(
+        queryset=CustomUser.objects.filter(role='operations_manager').order_by('username'),
+        required=False,
+        label='Assigned Operator',
+        widget=forms.Select(attrs={'class': 'form-select'})
+    )
+
     class Meta:
         model = Reconciliation
         fields = [
@@ -938,6 +945,7 @@ class ReconciliationForm(forms.ModelForm):
             'performed_by',
             'reviewed_by',
             'approved_by',
+            'assigned_operator',
             'start_time',
             'end_time',
             'status',

@@ -333,6 +333,38 @@ def exception_investigation_view(request, exception_id):
             'actor': getattr(approval.user, 'username', None) or 'system',
         })
 
+    # Add explicit pickup and delivery timeline entries when available
+    try:
+        # detect a pickup transport event (common event_type labels)
+        pickup_event = next((e for e in transport_events if e.event_type and e.event_type.lower() in ('picked up', 'pickup', 'pickup_confirmed', 'picked_up')), None)
+        if pickup_event:
+            pickup_ts = None
+            if getattr(pickup_event, 'event_date', None) and getattr(pickup_event, 'event_time', None):
+                pickup_ts = datetime.combine(pickup_event.event_date, pickup_event.event_time).isoformat()
+            timeline.append({
+                'type': 'picked_up',
+                'timestamp': pickup_ts,
+                'message': f"Shipment picked up - {pickup_event.comments or 'No notes'}",
+                'actor': getattr(pickup_event.courier, 'full_name', None) or 'courier',
+            })
+
+        # use shipment delivery_date/delivery_time if present
+        if getattr(shipment, 'delivery_date', None) or getattr(shipment, 'delivery_time', None):
+            delivered_ts = None
+            if getattr(shipment, 'delivery_date', None) and getattr(shipment, 'delivery_time', None):
+                delivered_ts = datetime.combine(shipment.delivery_date, shipment.delivery_time).isoformat()
+            elif getattr(shipment, 'delivery_date', None):
+                delivered_ts = datetime.combine(shipment.delivery_date, datetime.min.time()).isoformat()
+            timeline.append({
+                'type': 'delivered',
+                'timestamp': delivered_ts,
+                'message': f"Shipment delivered - {getattr(shipment, 'delivery_status', '') or 'Delivered'}",
+                'actor': getattr(shipment, 'received_by', None) or 'operator',
+            })
+    except Exception:
+        # defensive: don't break the investigation view if ancillary fields are missing
+        pass
+
     chain_of_custody = []
     if shipment.releasing_custodian:
         chain_of_custody.append({'role': 'releasing_custodian', 'value': shipment.releasing_custodian})
@@ -2088,6 +2120,14 @@ def auditor_dashboard(request):
 def audit_logs_view(request):
     context = _build_auditor_context(request, page='audit-logs')
     queryset, filters = build_audit_log_queryset(request)
+    # If viewing admin history, restrict audit logs to the current user
+    if show_admin_history:
+        try:
+            queryset = queryset.filter(user=request.user)
+            filters['user'] = request.user.username
+            show_audit_panel = True
+        except Exception:
+            pass
     # If admin requests their own history, filter logs to the current user
     if 'show_admin_history' in request.GET:
         show_audit_panel = True
@@ -2871,6 +2911,7 @@ def backup_dashboard(request):
     show_add_reconciliation_panel = False
     show_print_barcodes_panel = False
     show_admin_panel = False
+    show_admin_history = False
     selected_shipment = None
     selected_reconciliation = None
     approval_shipment = None
@@ -3469,6 +3510,8 @@ def backup_dashboard(request):
         show_print_barcodes_panel = True
     if 'show_admin' in request.GET:
         show_admin_panel = True
+    if 'show_admin_history' in request.GET:
+        show_admin_history = True
     if 'show_profile' in request.GET:
         show_profile_panel = True
     if 'show_settings' in request.GET:
@@ -4197,6 +4240,7 @@ def backup_dashboard(request):
         'hide_dashboard_sidebar': hide_dashboard_sidebar,
         'show_audit_panel': show_audit_panel,
         'show_alerts_panel': show_alerts_panel,
+        'show_admin_history': show_admin_history,
         'show_reports_panel': show_reports_panel,
         'show_reconciliation_reports_panel': show_reconciliation_reports_panel,
         'active_feature_key': active_feature_key,
@@ -4339,6 +4383,7 @@ def operations_dashboard(request):
     show_exception_panel = False
     show_custody_panel = False
     show_compliance_panel = False
+    show_admin_history = False
     profile_form = UserProfileForm(instance=request.user)
 
     if request.method == 'GET' and request.GET.get('mark_notifications_read') == '1':
@@ -4624,7 +4669,7 @@ def operations_dashboard(request):
     monthly_exceptions = []
     today = timezone.localdate()
     for offset in range(5, -1, -1):
-        month = (today.replace(day=1) - timezone.timedelta(days=offset * 30)).strftime('%b %Y')
+        month = (today.replace(day=1) - timedelta(days=offset * 30)).strftime('%b %Y')
         monthly_labels.append(month)
         monthly_shipments.append(
             shipments.filter(shipment_date__year=today.year, shipment_date__month=(today.month - offset - 1) % 12 + 1).count()
@@ -4738,9 +4783,38 @@ def operations_dashboard(request):
         'shipment_request_form': shipment_request_form,
         **chart_data,
     }
+    # If admin requested their own history, build and filter the audit queryset
+    audit_page_obj = None
+    audit_paginator = None
+    if 'show_admin_history' in request.GET:
+        show_admin_history = True
+        queryset, filters = build_audit_log_queryset(request)
+        try:
+            queryset = queryset.filter(user=request.user)
+            filters['user'] = request.user.username
+        except Exception:
+            pass
+        export_format = (request.GET.get('export') or '').strip().lower()
+        if export_format in {'csv', 'excel', 'pdf'}:
+            export_response = export_audit_logs(queryset, export_format)
+            if export_response is not None:
+                return export_response
+        per_page = filters.get('per_page', 25)
+        audit_paginator = Paginator(queryset, per_page)
+        audit_page = request.GET.get('audit_page') or request.GET.get('page') or 1
+        audit_page_obj = audit_paginator.get_page(audit_page)
+
     if report_only and report_category:
         context['report_only'] = True
         return render(request, 'operations_dashboard.html', context)
+
+    # attach audit pagination objects when admin history requested
+    if show_admin_history:
+        context['audit_logs'] = audit_page_obj.object_list if audit_page_obj else []
+        context['page_obj'] = audit_page_obj
+        context['paginator'] = audit_paginator
+        context['show_admin_history'] = True
+
     return render(request, 'operations_dashboard.html', context)
 
 

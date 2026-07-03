@@ -185,12 +185,31 @@ class Tape(models.Model):
         ('Missing', 'Missing'),
     ]
 
+    SCAN_STATUS_CHOICES = [
+        ('Pending', 'Pending'),
+        ('Assigned', 'Assigned'),
+        ('Scanning', 'Scanning'),
+        ('Scanned', 'Scanned'),
+        ('Verified', 'Verified'),
+        ('Exception', 'Exception'),
+    ]
+
     volser = models.CharField(max_length=100, unique=True)
     barcode = models.CharField(max_length=100, unique=True)
     rfid_tag = models.CharField(max_length=100, blank=True, null=True)
     tape_type = models.CharField(max_length=10, choices=TAPE_TYPE_CHOICES)
     manufacturer = models.CharField(max_length=150, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Active')
+    scan_status = models.CharField(max_length=20, choices=SCAN_STATUS_CHOICES, default='Pending', db_index=True)
+    scan_progress = models.PositiveSmallIntegerField(default=0)
+    last_scanned_at = models.DateTimeField(null=True, blank=True)
+    last_scanned_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='scanned_tapes'
+    )
     current_location = models.CharField(max_length=200, blank=True)
     retention_end_date = models.DateField()
     legal_hold = models.BooleanField(default=False)
@@ -378,6 +397,18 @@ class Reconciliation(models.Model):
     start_time = models.DateTimeField(null=True, blank=True)
     end_time = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Open')
+    assigned_operator = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='assigned_reconciliations'
+    )
+    scan_started_at = models.DateTimeField(null=True, blank=True)
+    scan_completed_at = models.DateTimeField(null=True, blank=True)
+    total_tapes_expected = models.PositiveIntegerField(default=0)
+    total_tapes_scanned = models.PositiveIntegerField(default=0)
+    progress_percent = models.PositiveSmallIntegerField(default=0)
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -388,6 +419,21 @@ class Reconciliation(models.Model):
 
     def __str__(self):
         return f"{self.reconciliation_id} - {self.location}"
+
+    def update_progress(self, scanned=0, expected=None):
+        if expected is not None:
+            self.total_tapes_expected = expected
+        if scanned is not None:
+            self.total_tapes_scanned = scanned
+        if self.total_tapes_expected > 0:
+            self.progress_percent = min(100, int((self.total_tapes_scanned / self.total_tapes_expected) * 100))
+        else:
+            self.progress_percent = 0
+        if self.total_tapes_scanned and not self.scan_started_at:
+            self.scan_started_at = timezone.now()
+        if self.progress_percent == 100 and not self.scan_completed_at:
+            self.scan_completed_at = timezone.now()
+        self.save(update_fields=['total_tapes_expected', 'total_tapes_scanned', 'progress_percent', 'scan_started_at', 'scan_completed_at'])
 
 
 class ReconciliationResult(models.Model):
