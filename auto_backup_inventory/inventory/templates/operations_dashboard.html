@@ -762,6 +762,7 @@ body {
                                 <th>Current Holder</th>
                                 <th>Destination</th>
                                 <th>Estimated Handoff</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -772,9 +773,12 @@ body {
                                 <td>{{ shipment.current_holder|default:'Unknown' }}</td>
                                 <td>{{ shipment.destination_location }}</td>
                                 <td>{{ shipment.expected_delivery_date|date:'M d, Y' }}</td>
+                                <td>
+                                    <a class="btn btn-sm btn-outline-primary partial-load" data-url="{% url 'shipment-detail' shipment.pk %}?partial=1" data-panel="#custody_governance" href="{% url 'shipment-detail' shipment.pk %}?partial=1">Return Tape</a>
+                                </td>
                             </tr>
                             {% empty %}
-                            <tr><td colspan="5" class="text-center">No custody governance records available.</td></tr>
+                            <tr><td colspan="6" class="text-center">No custody governance records available.</td></tr>
                             {% endfor %}
                         </tbody>
                     </table>

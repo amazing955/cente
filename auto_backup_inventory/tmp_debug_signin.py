@@ -22,3 +22,5 @@ with override_settings(ALLOWED_HOSTS=['testserver','localhost','127.0.0.1']):
     print('step2 url', response2.url if hasattr(response2, 'url') else None)
     print('step2 location', response2.get('Location'))
     print('step2 content start', response2.content[:2000].decode('utf-8', errors='ignore'))
+
+    

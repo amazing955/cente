@@ -138,6 +138,40 @@
                 </form>
             </div>
         </div>
+
+        <div class="card shadow-sm border-0 mb-3">
+            <div class="card-body">
+                <h5 class="mb-3">Return Shipment</h5>
+                <form method="post" action="{% url 'shipment-detail' shipment.pk %}?partial=1">
+                    {% csrf_token %}
+                    <input type="hidden" name="form_type" value="backup_admin_assignment">
+                    <input type="hidden" name="shipment_id" value="{{ shipment.pk }}">
+                    {% if assignment_form.non_field_errors %}
+                        <div class="alert alert-danger">{{ assignment_form.non_field_errors }}</div>
+                    {% endif %}
+                    <div class="mb-3">
+                        <label class="form-label">Attach Tape</label>
+                        {{ assignment_form.barcode }}
+                        {% if assignment_form.barcode.errors %}<div class="text-danger small mt-1">{{ assignment_form.barcode.errors|join:", " }}</div>{% endif %}
+                        {{ assignment_form.tape }}
+                        {% if assignment_form.tape.errors %}<div class="text-danger small mt-1">{{ assignment_form.tape.errors|join:", " }}</div>{% endif %}
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Assign Courier</label>
+                        {{ assignment_form.courier }}
+                        {% if assignment_form.courier.errors %}<div class="text-danger small mt-1">{{ assignment_form.courier.errors|join:", " }}</div>{% endif %}
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Comments</label>
+                        {{ assignment_form.comments }}
+                    </div>
+                    <div class="d-flex gap-2">
+                        <button class="btn btn-success w-100" type="submit" name="submit_action" value="approve">Return to Source</button>
+                        <button class="btn btn-outline-danger w-100" type="submit" name="submit_action" value="reject">Cancel Return</button>
+                    </div>
+                </form>
+            </div>
+        </div>
         {% endif %}
 
        
