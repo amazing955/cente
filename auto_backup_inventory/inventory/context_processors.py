@@ -1,22 +1,15 @@
-from urllib.parse import urlencode
-
 from django.urls import reverse
 
 from .models import DashboardFeatureExemption, DashboardFeaturePermission, get_dashboard_feature_catalog
 
 
 def build_feature_target_url(feature, feature_key):
-    url_params = dict(feature.get('url_params', {}))
-    if feature.get('url_name') == 'feature-module':
-        url_params.pop('feature_key', None)
-    else:
-        url_params['feature_key'] = feature_key
+    from .views import build_signed_dashboard_navigation_token
 
-    url_kwargs = dict(feature.get('url_kwargs', {}))
-    url_kwargs.setdefault('feature_key', feature_key)
-
-    base_url = reverse(feature['url_name'], kwargs=url_kwargs)
-    return f"{base_url}?{urlencode(url_params)}" if url_params else base_url
+    signed_token = build_signed_dashboard_navigation_token(feature_key, {
+        f'show_{feature_key}': '1',
+    })
+    return reverse('backup-dashboard-navigation', kwargs={'signed_token': signed_token})
 
 
 def dashboard_features(request):

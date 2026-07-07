@@ -7,7 +7,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
-from django.core import mail
+from django.core import mail, signing
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
@@ -98,6 +98,71 @@ class PasswordResetFlowTests(TestCase):
 
         self.assertRedirects(response, reverse('password_reset_done'))
         self.assertEqual(len(mail.outbox), 1)
+
+
+class BackupDashboardSignedNavigationTests(TestCase):
+    def test_backup_admin_can_access_signed_navigation_and_feature_module(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-admin-access-check',
+            email='backup-admin-access-check@example.com',
+            password='StrongPass123!',
+        )
+        backup_admin.groups.add(backup_group)
+        self.client.force_login(backup_admin)
+
+        signed_token = signing.dumps(
+            {'feature': 'tape_inventory', 'params': {'show_tape_inventory': '1'}},
+            salt='inventory-dashboard-navigation',
+            compress=True,
+        )
+
+        nav_response = self.client.get(reverse('backup-dashboard-navigation', kwargs={'signed_token': signed_token}))
+        feature_response = self.client.get(reverse('feature-module', kwargs={'feature_key': 'tape_inventory'}))
+
+        self.assertEqual(nav_response.status_code, 200)
+        self.assertEqual(feature_response.status_code, 200)
+        self.assertEqual(nav_response.context['active_feature_key'], 'tape_inventory')
+        self.assertEqual(feature_response.context['active_feature_key'], 'tape_inventory')
+
+    def test_signed_navigation_redirects_to_dashboard_panel(self):
+        backup_admin = get_user_model().objects.create_superuser(
+            username='backup-admin-signed-nav',
+            email='backup-admin-signed-nav@example.com',
+            password='StrongPass123!',
+        )
+        self.client.force_login(backup_admin)
+
+        signed_token = signing.dumps(
+            {'feature': 'tape_inventory', 'params': {'show_tape_inventory': '1'}},
+            salt='inventory-dashboard-navigation',
+            compress=True,
+        )
+
+        response = self.client.get(reverse('backup-dashboard-navigation', kwargs={'signed_token': signed_token}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['active_feature_key'], 'tape_inventory')
+        self.assertTrue(response.context['show_tape_inventory_panel'])
+
+    def test_tampered_signed_navigation_returns_bad_request(self):
+        backup_admin = get_user_model().objects.create_superuser(
+            username='backup-admin-tampered-nav',
+            email='backup-admin-tampered-nav@example.com',
+            password='StrongPass123!',
+        )
+        self.client.force_login(backup_admin)
+
+        signed_token = signing.dumps(
+            {'feature': 'tape_inventory', 'params': {'show_tape_inventory': '1'}},
+            salt='inventory-dashboard-navigation',
+            compress=True,
+        )
+        tampered_token = signed_token[:-1] + ('A' if signed_token[-1] != 'A' else 'B')
+
+        response = self.client.get(reverse('backup-dashboard-navigation', kwargs={'signed_token': tampered_token}))
+
+        self.assertEqual(response.status_code, 400)
 
 
 class ReconciliationInitiationWorkflowTests(TestCase):
@@ -645,6 +710,60 @@ class ExceptionInvestigationApiTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()['exception']['id'], exception.exception_id)
+
+    def test_investigation_api_allows_forwarded_exceptions_in_investigating_state(self):
+        branch = BankBranch.objects.create(branch_code='KLA-004', branch_name='Kampala Central Branch', status='Active')
+        dr_group = Group.objects.create(name='DR Team')
+        user = get_user_model().objects.create_user(
+            username='investigator-forwarded',
+            email='investigator-forwarded@example.com',
+            password='pass1234',
+            role='auditor',
+            assigned_branch=branch,
+        )
+        user.groups.add(dr_group)
+        tape = Tape.objects.create(
+            volser='TAPE-INV-003',
+            barcode='BC-INV-003',
+            tape_type='LTO-8',
+            retention_end_date=date(2028, 1, 1),
+            current_location='Kampala Vault',
+        )
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Approved',
+            source_location='Kampala Branch',
+            destination_location='Mbarara Branch',
+            requesting_branch=branch,
+            created_by=user,
+        )
+        shipment.tapes.add(tape)
+        exception = ShipmentException.objects.create(
+            shipment=shipment,
+            tape=tape,
+            exception_type='Missing Tape',
+            description='Tape missing during handover.',
+            reported_by=user,
+            severity='High',
+            status='Investigating',
+        )
+
+        auth_response = self.client.post(
+            reverse('token_obtain_pair'),
+            {'username': user.username, 'password': 'pass1234'},
+            content_type='application/json',
+        )
+        self.assertEqual(auth_response.status_code, 200)
+        access_token = auth_response.json()['access']
+
+        response = self.client.get(
+            reverse('exception-investigation', kwargs={'exception_id': exception.exception_id}),
+            HTTP_AUTHORIZATION=f'Bearer {access_token}',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['exception']['id'], exception.exception_id)
+        self.assertEqual(response.json()['exception']['status'], 'Investigating')
 
 
 class JwtAuthenticationAndAuthorizationTests(TestCase):
@@ -1288,9 +1407,8 @@ class DashboardFeatureNavigationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload['load_mode'], 'page')
-        self.assertIn(reverse('feature-module', kwargs={'feature_key': 'shipment_approvals'}), payload['target_url'])
-        self.assertNotIn('partial=1', payload['target_url'])
-        self.assertIn('partial=1', payload['fragment_url'])
+        self.assertIn('backup-dashboard/nav/', payload['target_url'])
+        self.assertEqual(payload['target_url'], payload['fragment_url'])
 
     def test_feature_permission_does_not_confer_backup_admin_role(self):
         group = Group.objects.create(name='Operations Manager')

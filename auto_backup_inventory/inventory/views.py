@@ -4,10 +4,12 @@ from django.contrib.auth.models import Group
 from django.conf import settings
 import base64
 import inspect
+import logging
 import random
 import re
 import string
 from urllib.parse import urlencode
+from django.core import signing
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.mail import EmailMessage, send_mail
 from django.core.paginator import Paginator
@@ -25,7 +27,7 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 from django.contrib import messages
 from django.db import connection, transaction
 from django.db.models import Q, Count
-from django.http import Http404, HttpResponse, JsonResponse
+from django.http import Http404, HttpResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
@@ -33,6 +35,10 @@ from django.utils import timezone
 from .authentication import AuditedJWTAuthentication
 from .permissions import InvestigationPermission
 from .serializer import AuditLogSerializer, ShipmentSerializer, TapeSerializer
+
+logger = logging.getLogger(__name__)
+DASHBOARD_NAVIGATION_SALT = 'inventory-dashboard-navigation'
+DASHBOARD_NAVIGATION_MAX_AGE = 1800
 
 
 def _build_investigation_log_entry(exception, request):
@@ -72,6 +78,62 @@ def _parse_auditlog_metadata(message):
         key, value = part.split('=', 1)
         metadata[key] = value
     return metadata
+
+
+def build_signed_dashboard_navigation_token(feature_key, params=None):
+    payload = {
+        'feature': feature_key,
+        'params': params or {},
+    }
+    return signing.dumps(payload, salt=DASHBOARD_NAVIGATION_SALT, compress=True)
+
+
+@login_required(login_url='signin')
+def backup_dashboard_navigation(request, signed_token):
+    try:
+        payload = signing.loads(signed_token, salt=DASHBOARD_NAVIGATION_SALT, max_age=DASHBOARD_NAVIGATION_MAX_AGE)
+    except signing.SignatureExpired:
+        logger.warning('Dashboard navigation token expired', extra={'path': request.path})
+        return HttpResponseBadRequest('Dashboard navigation link has expired.')
+    except signing.BadSignature:
+        logger.warning('Dashboard navigation token failed verification', extra={'path': request.path})
+        return HttpResponseBadRequest('Dashboard navigation link is invalid.')
+    except Exception as exc:
+        logger.warning('Dashboard navigation token could not be parsed', extra={'path': request.path, 'error': str(exc)})
+        return HttpResponseBadRequest('Dashboard navigation link is invalid.')
+
+    if not isinstance(payload, dict):
+        logger.warning('Dashboard navigation token payload was malformed', extra={'path': request.path})
+        return HttpResponseBadRequest('Dashboard navigation link is invalid.')
+
+    feature_key = payload.get('feature')
+    params = payload.get('params') or {}
+    if not isinstance(params, dict):
+        logger.warning('Dashboard navigation token had invalid params payload', extra={'path': request.path})
+        return HttpResponseBadRequest('Dashboard navigation link is invalid.')
+
+    if not feature_key:
+        logger.warning('Dashboard navigation token was missing a feature key', extra={'path': request.path})
+        return HttpResponseBadRequest('Dashboard navigation link is invalid.')
+
+    if not has_dashboard_feature_access(request.user, feature_key):
+        raise PermissionDenied
+
+    request.GET = request.GET.copy()
+    request.GET['feature_key'] = feature_key
+    request.POST = request.POST.copy() if request.method == 'POST' else request.POST
+    if request.method == 'POST':
+        request.POST['feature_key'] = feature_key
+    request.signed_dashboard_navigation = True
+
+    for key, value in params.items():
+        if value is None:
+            continue
+        request.GET[key] = str(value)
+        if request.method == 'POST':
+            request.POST[key] = str(value)
+
+    return backup_dashboard(request)
 
 
 def _parse_exception_metadata(alert):
@@ -356,8 +418,8 @@ def exception_investigation_view(request, exception_id):
     if not exception_obj:
         return JsonResponse({'detail': 'Exception not found.'}, status=404)
 
-    if exception_obj.status != 'Open':
-        return JsonResponse({'detail': 'Exception is not open.'}, status=400)
+    if exception_obj.status not in {'Open', 'Investigating'}:
+        return JsonResponse({'detail': 'Exception is not open or under investigation.'}, status=400)
 
     shipment = exception_obj.shipment
     tape = exception_obj.tape
@@ -809,13 +871,13 @@ def api_feature_navigation(request, feature_key):
     if not feature:
         return JsonResponse({'detail': 'Feature not found.'}, status=404)
 
-    target_url = reverse('feature-module', kwargs={'feature_key': feature_key})
-    fragment_url = f"{target_url}?partial=1"
+    signed_token = build_signed_dashboard_navigation_token(feature_key, {f'show_{feature_key}': '1'})
+    target_url = reverse('backup-dashboard-navigation', kwargs={'signed_token': signed_token})
 
     return JsonResponse({
         'feature_key': feature_key,
         'target_url': target_url,
-        'fragment_url': fragment_url,
+        'fragment_url': target_url,
         'load_mode': 'page',
         'scope': feature.get('scope'),
     })
@@ -1901,6 +1963,9 @@ def has_dashboard_feature_access(user, feature_key):
     if not user or not user.is_authenticated or not feature_key:
         return False
     if user.is_superuser:
+        return True
+
+    if is_backup_administrator(user):
         return True
 
     if DashboardFeatureExemption.objects.filter(user=user, feature_key=feature_key, is_active=True).exists():
@@ -3081,7 +3146,7 @@ def backup_dashboard(request):
     hide_dashboard_sidebar = False
 
     active_feature_key = request.GET.get('feature_key') or request.POST.get('feature_key')
-    if active_feature_key:
+    if active_feature_key and not getattr(request, 'signed_dashboard_navigation', False):
         hide_dashboard_sidebar = True
     feature_panel_state = get_feature_panel_state(active_feature_key)
     if feature_panel_state:
@@ -4559,6 +4624,20 @@ def backup_dashboard(request):
 
     alert_count = AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).count()
 
+    dashboard_nav_urls = {
+        'add_tape': build_signed_dashboard_navigation_token('add_tape', {'show_add_tape': '1'}),
+        'tape_inventory': build_signed_dashboard_navigation_token('tape_inventory', {'show_tape_inventory': '1'}),
+        'shipments': build_signed_dashboard_navigation_token('shipments', {'show_shipments': '1'}),
+        'settings': build_signed_dashboard_navigation_token('settings', {'show_settings': '1'}),
+        'reconciliation': build_signed_dashboard_navigation_token('reconciliation', {'show_reconciliation': '1'}),
+        'reports': build_signed_dashboard_navigation_token('reports', {'show_reports': 'reports'}),
+        'reconciliation_reports': build_signed_dashboard_navigation_token('reconciliation_reports', {'show_reconciliation_reports': 'reconciliation-reports'}),
+        'audit_logs': build_signed_dashboard_navigation_token('audit_logs', {'show_audit': '1'}),
+        'alerts': build_signed_dashboard_navigation_token('alerts', {'show_alerts': '1'}),
+        'admin': build_signed_dashboard_navigation_token('admin', {'show_admin': '1'}),
+        'profile': build_signed_dashboard_navigation_token('profile', {'show_profile': '1'}),
+    }
+
     context = {
         'tapes': tapes,
         'tape_search': tape_search,
@@ -4632,6 +4711,7 @@ def backup_dashboard(request):
         'show_edit_shipment_panel': show_edit_shipment_panel,
         'show_reconciliation_panel': show_reconciliation_panel,
         'show_add_reconciliation_panel': show_add_reconciliation_panel,
+        'dashboard_nav_urls': dashboard_nav_urls,
         'add_shipment_form': add_shipment_form,
         'edit_shipment_form': edit_shipment_form,
         'selected_shipment': selected_shipment,
@@ -5211,7 +5291,6 @@ def operations_dashboard(request):
 
     context = {
         'dashboard_tabs': OPERATIONS_FEATURE_TABS,
-        'dashboard_features': [],
         'current_datetime': timezone.localtime(),
         'today': today,
         'monthly_labels': monthly_labels,
