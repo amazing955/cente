@@ -4,12 +4,14 @@ from .models import DashboardFeatureExemption, DashboardFeaturePermission, get_d
 
 
 def build_feature_target_url(feature, feature_key):
-    from .views import build_signed_dashboard_navigation_token
+    from .views import build_dashboard_navigation_url
 
-    signed_token = build_signed_dashboard_navigation_token(feature_key, {
-        f'show_{feature_key}': '1',
-    })
-    return reverse('backup-dashboard-navigation', kwargs={'signed_token': signed_token})
+    params = dict(feature.get('url_params', {}) or {})
+    if not params:
+        params = {f'show_{feature_key}': '1'}
+
+    dashboard = 'operations' if feature.get('scope') == 'operations' else 'backup'
+    return build_dashboard_navigation_url(feature_key, params=params, dashboard=dashboard)
 
 
 def dashboard_features(request):

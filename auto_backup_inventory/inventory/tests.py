@@ -101,6 +101,52 @@ class PasswordResetFlowTests(TestCase):
 
 
 class BackupDashboardSignedNavigationTests(TestCase):
+    def test_operations_dashboard_renders_when_notifications_exist(self):
+        operations_group = Group.objects.create(name='Operations Manager')
+        operations_user = get_user_model().objects.create_user(
+            username='operations-notifications-user',
+            email='operations-notifications-user@example.com',
+            password='StrongPass123!',
+        )
+        operations_user.groups.add(operations_group)
+        DashboardFeaturePermission.objects.create(role=operations_group, feature_key='operations_dashboard', can_view=True)
+        AuditLog.objects.create(
+            name='Exception Alert Forwarded',
+            action='Forwarded exception alert',
+            message='exception_id=EX-100|description=Needs review',
+            user=operations_user,
+            severity='warning',
+        )
+        self.client.force_login(operations_user)
+
+        response = self.client.get(reverse('operations-dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Operations Manager Dashboard')
+
+    def test_operations_dashboard_supports_signed_navigation_for_history_panel(self):
+        operations_group = Group.objects.create(name='Operations Manager')
+        operations_user = get_user_model().objects.create_user(
+            username='operations-signed-nav',
+            email='operations-signed-nav@example.com',
+            password='StrongPass123!',
+        )
+        operations_user.groups.add(operations_group)
+        DashboardFeaturePermission.objects.create(role=operations_group, feature_key='operations_dashboard', can_view=True)
+        self.client.force_login(operations_user)
+
+        signed_token = signing.dumps(
+            {'feature': 'operations_dashboard', 'params': {'show_admin': '1', 'show_admin_history': '1'}, 'dashboard': 'operations'},
+            salt='inventory-dashboard-navigation',
+            compress=True,
+        )
+
+        response = self.client.get(reverse('operations-dashboard-navigation', kwargs={'signed_token': signed_token}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['show_admin_history'])
+        self.assertEqual(response.context['active_feature_key'], 'operations_dashboard')
+
     def test_backup_admin_can_access_signed_navigation_and_feature_module(self):
         backup_group = Group.objects.create(name='Backup Administrator')
         backup_admin = get_user_model().objects.create_user(
@@ -166,6 +212,47 @@ class BackupDashboardSignedNavigationTests(TestCase):
 
 
 class ReconciliationInitiationWorkflowTests(TestCase):
+    def test_shift_reconciliation_allows_multiple_operator_selection(self):
+        backup_admin = get_user_model().objects.create_superuser(
+            username='backup-admin-shift-multi',
+            email='backup-admin-shift-multi@example.com',
+            password='StrongPass123!',
+        )
+        first_operator = get_user_model().objects.create_user(
+            username='operator-one',
+            email='operator-one@example.com',
+            password='StrongPass123!',
+            role='operations_manager',
+        )
+        second_operator = get_user_model().objects.create_user(
+            username='operator-two',
+            email='operator-two@example.com',
+            password='StrongPass123!',
+            role='operations_manager',
+        )
+        reconciliation = Reconciliation.objects.create(
+            location='Head Office',
+            performed_by=backup_admin,
+            status='Open',
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.post(reverse('backup-dashboard'), {
+            'form_type': 'shift_reconciliation',
+            'reconciliation_pk': str(reconciliation.id),
+            'operator_pks': [str(first_operator.id), str(second_operator.id)],
+        })
+
+        self.assertEqual(response.status_code, 302)
+        reconciliation.refresh_from_db()
+        self.assertEqual(reconciliation.assigned_operator, first_operator)
+        self.assertTrue(
+            AuditLog.objects.filter(
+                name='Reconciliation Shifted',
+                action__icontains=first_operator.username,
+            ).exists()
+        )
+
     def test_dr_team_can_request_reconciliation_from_investigation_dashboard(self):
         branch = BankBranch.objects.create(branch_code='KLA-010', branch_name='Kampala North Branch', status='Active')
         dr_group = Group.objects.create(name='DR Team')
@@ -1407,7 +1494,7 @@ class DashboardFeatureNavigationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload['load_mode'], 'page')
-        self.assertIn('backup-dashboard/nav/', payload['target_url'])
+        self.assertIn('/operations-dashboard/nav/', payload['target_url'])
         self.assertEqual(payload['target_url'], payload['fragment_url'])
 
     def test_feature_permission_does_not_confer_backup_admin_role(self):

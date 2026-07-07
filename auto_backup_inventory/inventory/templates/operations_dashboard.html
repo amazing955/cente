@@ -173,7 +173,7 @@ body {
                 </div>
             {% endif %}
             <a href="{% url 'start-shipment-request' %}" class="btn btn-outline-primary btn-sm partial-load" id="startShipmentBtn" data-url="{% url 'start-shipment-request' %}?partial=1" data-panel="#shipment_approvals"><i class="bi bi-truck"></i> Start a shipment</a>
-            <a href="{% url 'operations-dashboard' %}?show_admin=1&show_admin_history=1" class="btn btn-outline-secondary btn-sm ms-2" id="myHistoryBtn"><i class="bi bi-clock-history"></i> My History</a>
+            <a href="{{ operations_dashboard_nav_urls.history }}" class="btn btn-outline-secondary btn-sm ms-2" id="myHistoryBtn"><i class="bi bi-clock-history"></i> My History</a>
             <button class="btn btn-outline-secondary btn-sm position-relative" id="notificationBellBtn" title="Notifications">
                 <i class="bi bi-bell"></i>
                 <span class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger{% if unread_alert_count == 0 %} d-none{% endif %}" id="notificationBadge">{{ unread_alert_count }}</span>
@@ -247,7 +247,7 @@ body {
                 <h5 class="mb-0">My Action History</h5>
                 <small class="text-muted">Actions you performed as the logged-in user</small>
             </div>
-            <a href="{% url 'operations-dashboard' %}" class="btn btn-outline-secondary btn-sm" aria-label="Close action history">
+            <a href="{{ operations_dashboard_nav_urls.dashboard }}" class="btn btn-outline-secondary btn-sm" aria-label="Close action history">
                 <i class="bi bi-x-lg"></i>
             </a>
         </div>
@@ -280,13 +280,13 @@ body {
             <nav aria-label="Page navigation" class="mt-2">
                 <ul class="pagination pagination-sm">
                     {% if page_obj.has_previous %}
-                        <li class="page-item"><a class="page-link" href="?show_admin=1&show_admin_history=1&page={{ page_obj.previous_page_number }}">Previous</a></li>
+                        <li class="page-item"><a class="page-link" href="{{ operations_dashboard_nav_urls.history }}&page={{ page_obj.previous_page_number }}">Previous</a></li>
                     {% else %}
                         <li class="page-item disabled"><span class="page-link">Previous</span></li>
                     {% endif %}
                     <li class="page-item disabled"><span class="page-link">Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span></li>
                     {% if page_obj.has_next %}
-                        <li class="page-item"><a class="page-link" href="?show_admin=1&show_admin_history=1&page={{ page_obj.next_page_number }}">Next</a></li>
+                        <li class="page-item"><a class="page-link" href="{{ operations_dashboard_nav_urls.history }}&page={{ page_obj.next_page_number }}">Next</a></li>
                     {% else %}
                         <li class="page-item disabled"><span class="page-link">Next</span></li>
                     {% endif %}
@@ -1128,7 +1128,7 @@ body {
                                 <td>{{ alert.date|date:'M d, Y' }}</td>
                                 <td>{{ alert.description }}</td>
                                 <td>
-                                    <a href="{% if alert.target_url %}{{ alert.target_url }}{% else %}{% url 'operations-dashboard' %}?show_notifications=1{% endif %}" class="text-decoration-none notification-view-link" data-target-url="{% if alert.target_url %}{{ alert.target_url }}{% else %}{% url 'operations-dashboard' %}?show_notifications=1{% endif %}" onclick="handleNotificationAction(this); return false;">
+                                    <a href="{% if alert.target_url %}{{ alert.target_url }}{% else %}{{ operations_dashboard_nav_urls.notifications }}{% endif %}" class="text-decoration-none notification-view-link" data-target-url="{% if alert.target_url %}{{ alert.target_url }}{% else %}{{ operations_dashboard_nav_urls.notifications }}{% endif %}" onclick="handleNotificationAction(this); return false;">
                                         {{ alert.action }}
                                     </a>
                                 </td>
@@ -1333,7 +1333,7 @@ body {
                         <div class="border rounded-4 p-3 h-100">
                             <h6 class="mb-3">Profile Settings</h6>
                             <p class="small-note">Manage your profile details, password, and account security settings.</p>
-                            <a href="{% url 'operations-dashboard' %}?show_profile=1&edit_profile=1" class="btn btn-sm btn-primary">Edit Profile</a>
+                            <a href="{{ operations_dashboard_nav_urls.profile_edit }}" class="btn btn-sm btn-primary">Edit Profile</a>
                         </div>
                     </div>
                     <div class="col-12 col-md-6">
@@ -1389,7 +1389,7 @@ body {
                             </div>
                         </div>
                         <div class="mt-4 d-flex justify-content-end gap-2">
-                            <a href="{% url 'operations-dashboard' %}?show_profile=1" class="btn btn-outline-secondary">Cancel</a>
+                            <a href="{{ operations_dashboard_nav_urls.profile }}" class="btn btn-outline-secondary">Cancel</a>
                             <button type="submit" class="btn btn-primary">Save Profile</button>
                         </div>
                         {% if profile_form.non_field_errors %}

@@ -876,9 +876,8 @@ footer{
                             {% csrf_token %}
                             <input type="hidden" name="form_type" value="shift_reconciliation">
                             <input type="hidden" name="reconciliation_pk" value="{{ selected_reconciliation.id }}">
-                            <div class="input-group">
-                                <select name="operator_pk" class="form-select form-select-sm" required>
-                                    <option value="">Assign to operator</option>
+                            <div class="d-flex flex-column gap-2 align-items-start">
+                                <select name="operator_pks" class="form-select form-select-sm" multiple size="4" required>
                                     {% for operator in available_operators %}
                                     <option value="{{ operator.id }}">{{ operator.username }}</option>
                                     {% endfor %}

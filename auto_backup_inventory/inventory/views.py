@@ -80,32 +80,23 @@ def _parse_auditlog_metadata(message):
     return metadata
 
 
-def build_signed_dashboard_navigation_token(feature_key, params=None):
+def build_signed_dashboard_navigation_token(feature_key, params=None, dashboard='backup'):
     payload = {
         'feature': feature_key,
+        'dashboard': dashboard,
         'params': params or {},
     }
     return signing.dumps(payload, salt=DASHBOARD_NAVIGATION_SALT, compress=True)
 
 
-@login_required(login_url='signin')
-def backup_dashboard_navigation(request, signed_token):
-    try:
-        payload = signing.loads(signed_token, salt=DASHBOARD_NAVIGATION_SALT, max_age=DASHBOARD_NAVIGATION_MAX_AGE)
-    except signing.SignatureExpired:
-        logger.warning('Dashboard navigation token expired', extra={'path': request.path})
-        return HttpResponseBadRequest('Dashboard navigation link has expired.')
-    except signing.BadSignature:
-        logger.warning('Dashboard navigation token failed verification', extra={'path': request.path})
-        return HttpResponseBadRequest('Dashboard navigation link is invalid.')
-    except Exception as exc:
-        logger.warning('Dashboard navigation token could not be parsed', extra={'path': request.path, 'error': str(exc)})
-        return HttpResponseBadRequest('Dashboard navigation link is invalid.')
+def build_dashboard_navigation_url(feature_key, params=None, dashboard='backup'):
+    signed_token = build_signed_dashboard_navigation_token(feature_key, params=params, dashboard=dashboard)
+    if dashboard == 'operations':
+        return reverse('operations-dashboard-navigation', kwargs={'signed_token': signed_token})
+    return reverse('backup-dashboard-navigation', kwargs={'signed_token': signed_token})
 
-    if not isinstance(payload, dict):
-        logger.warning('Dashboard navigation token payload was malformed', extra={'path': request.path})
-        return HttpResponseBadRequest('Dashboard navigation link is invalid.')
 
+def _apply_signed_dashboard_navigation(request, payload):
     feature_key = payload.get('feature')
     params = payload.get('params') or {}
     if not isinstance(params, dict):
@@ -133,7 +124,57 @@ def backup_dashboard_navigation(request, signed_token):
         if request.method == 'POST':
             request.POST[key] = str(value)
 
+    return None
+
+
+@login_required(login_url='signin')
+def backup_dashboard_navigation(request, signed_token):
+    try:
+        payload = signing.loads(signed_token, salt=DASHBOARD_NAVIGATION_SALT, max_age=DASHBOARD_NAVIGATION_MAX_AGE)
+    except signing.SignatureExpired:
+        logger.warning('Dashboard navigation token expired', extra={'path': request.path})
+        return HttpResponseBadRequest('Dashboard navigation link has expired.')
+    except signing.BadSignature:
+        logger.warning('Dashboard navigation token failed verification', extra={'path': request.path})
+        return HttpResponseBadRequest('Dashboard navigation link is invalid.')
+    except Exception as exc:
+        logger.warning('Dashboard navigation token could not be parsed', extra={'path': request.path, 'error': str(exc)})
+        return HttpResponseBadRequest('Dashboard navigation link is invalid.')
+
+    if not isinstance(payload, dict):
+        logger.warning('Dashboard navigation token payload was malformed', extra={'path': request.path})
+        return HttpResponseBadRequest('Dashboard navigation link is invalid.')
+
+    invalid_payload = _apply_signed_dashboard_navigation(request, payload)
+    if invalid_payload is not None:
+        return invalid_payload
+
     return backup_dashboard(request)
+
+
+@login_required(login_url='signin')
+def operations_dashboard_navigation(request, signed_token):
+    try:
+        payload = signing.loads(signed_token, salt=DASHBOARD_NAVIGATION_SALT, max_age=DASHBOARD_NAVIGATION_MAX_AGE)
+    except signing.SignatureExpired:
+        logger.warning('Operations dashboard navigation token expired', extra={'path': request.path})
+        return HttpResponseBadRequest('Dashboard navigation link has expired.')
+    except signing.BadSignature:
+        logger.warning('Operations dashboard navigation token failed verification', extra={'path': request.path})
+        return HttpResponseBadRequest('Dashboard navigation link is invalid.')
+    except Exception as exc:
+        logger.warning('Operations dashboard navigation token could not be parsed', extra={'path': request.path, 'error': str(exc)})
+        return HttpResponseBadRequest('Dashboard navigation link is invalid.')
+
+    if not isinstance(payload, dict):
+        logger.warning('Operations dashboard navigation token payload was malformed', extra={'path': request.path})
+        return HttpResponseBadRequest('Dashboard navigation link is invalid.')
+
+    invalid_payload = _apply_signed_dashboard_navigation(request, payload)
+    if invalid_payload is not None:
+        return invalid_payload
+
+    return operations_dashboard(request)
 
 
 def _parse_exception_metadata(alert):
@@ -871,8 +912,9 @@ def api_feature_navigation(request, feature_key):
     if not feature:
         return JsonResponse({'detail': 'Feature not found.'}, status=404)
 
-    signed_token = build_signed_dashboard_navigation_token(feature_key, {f'show_{feature_key}': '1'})
-    target_url = reverse('backup-dashboard-navigation', kwargs={'signed_token': signed_token})
+    dashboard = 'operations' if feature.get('scope') == 'operations' else 'backup'
+    signed_token = build_signed_dashboard_navigation_token(feature_key, {f'show_{feature_key}': '1'}, dashboard=dashboard)
+    target_url = build_dashboard_navigation_url(feature_key, {f'show_{feature_key}': '1'}, dashboard=dashboard)
 
     return JsonResponse({
         'feature_key': feature_key,
@@ -3684,28 +3726,34 @@ def backup_dashboard(request):
             return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}&show_unscanned_tapes=1')
         elif form_type == 'shift_reconciliation':
             reconciliation_pk = request.POST.get('reconciliation_pk')
-            operator_pk = request.POST.get('operator_pk')
             selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
-            selected_operator = get_object_by_uuid_pk(CustomUser, operator_pk)
-            if selected_reconciliation and selected_operator:
-                selected_reconciliation.assigned_operator = selected_operator
-                selected_reconciliation.save(update_fields=['assigned_operator'])
-                reassigned_count = Tape.objects.filter(scan_status__in=['Pending', 'Assigned', 'Scanning']).update(scan_status='Assigned')
-                AuditLog.objects.create(
-                    name='Reconciliation Shifted',
-                    action=f'Scan duty for reconciliation {selected_reconciliation.reconciliation_id} was forwarded to {selected_operator.username}',
-                    user=selected_operator,
-                    message=f'reconciliation_id={selected_reconciliation.reconciliation_id}|reconciliation_pk={selected_reconciliation.id}|operator={selected_operator.username}|assigned_count={reassigned_count}',
-                    severity='error',
-                )
-                AuditLog.objects.create(
-                    name='Reconciliation Shift Notification',
-                    action=f'Scan duty for reconciliation {selected_reconciliation.reconciliation_id} was forwarded to {selected_operator.username}',
-                    user=request.user,
-                    message=f'reconciliation_id={selected_reconciliation.reconciliation_id}|reconciliation_pk={selected_reconciliation.id}|operator={selected_operator.username}|assigned_count={reassigned_count}',
-                    severity='info',
-                )
-                messages.success(request, f'Scan duty shifted to {selected_operator.username}.')
+            operator_pks = request.POST.getlist('operator_pks') or request.POST.getlist('operator_pk') or []
+            operator_pks = [pk for pk in operator_pks if pk]
+            if selected_reconciliation and operator_pks:
+                selected_operators = list(CustomUser.objects.filter(pk__in=operator_pks, is_active=True))
+                if selected_operators:
+                    selected_reconciliation.assigned_operator = selected_operators[0]
+                    selected_reconciliation.save(update_fields=['assigned_operator'])
+                    reassigned_count = Tape.objects.filter(scan_status__in=['Pending', 'Assigned', 'Scanning']).update(scan_status='Assigned')
+                    operator_names = ', '.join(operator.username for operator in selected_operators)
+                    for selected_operator in selected_operators:
+                        AuditLog.objects.create(
+                            name='Reconciliation Shifted',
+                            action=f'Scan duty for reconciliation {selected_reconciliation.reconciliation_id} was forwarded to {selected_operator.username}',
+                            user=selected_operator,
+                            message=f'reconciliation_id={selected_reconciliation.reconciliation_id}|reconciliation_pk={selected_reconciliation.id}|operator={selected_operator.username}|assigned_count={reassigned_count}',
+                            severity='error',
+                        )
+                    AuditLog.objects.create(
+                        name='Reconciliation Shift Notification',
+                        action=f'Scan duty for reconciliation {selected_reconciliation.reconciliation_id} was forwarded to {operator_names}',
+                        user=request.user,
+                        message=f'reconciliation_id={selected_reconciliation.reconciliation_id}|reconciliation_pk={selected_reconciliation.id}|operators={operator_names}|assigned_count={reassigned_count}',
+                        severity='info',
+                    )
+                    messages.success(request, f'Scan duty shifted to {operator_names}.')
+                else:
+                    messages.error(request, 'Please select at least one valid operator and reconciliation.')
             else:
                 messages.error(request, 'Please select a valid operator and reconciliation.')
             return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}&show_unscanned_tapes=1')
@@ -4835,10 +4883,18 @@ def operations_dashboard(request):
     show_unscanned_tapes = False
     audit_logs = AuditLog.objects.order_by('-timestamp')[:12]
 
+    operations_dashboard_nav_urls = {
+        'dashboard': build_dashboard_navigation_url('operations_dashboard', {}, dashboard='operations'),
+        'history': build_dashboard_navigation_url('operations_dashboard', {'show_admin': '1', 'show_admin_history': '1'}, dashboard='operations'),
+        'notifications': build_dashboard_navigation_url('operations_dashboard', {'show_notifications': '1'}, dashboard='operations'),
+        'profile': build_dashboard_navigation_url('operations_dashboard', {'show_profile': '1'}, dashboard='operations'),
+        'profile_edit': build_dashboard_navigation_url('operations_dashboard', {'show_profile': '1', 'edit_profile': '1'}, dashboard='operations'),
+    }
+
     unread_alert_count = AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).count()
     notification_items = []
     for item in AuditLog.objects.filter(severity__in=['warning', 'error']).order_by('-timestamp')[:10]:
-        target_url = f"{reverse('operations-dashboard')}?show_notifications=1"
+        target_url = operations_dashboard_nav_urls['notifications']
         metadata = _parse_auditlog_metadata(item.message)
         if metadata.get('target_url'):
             target_url = metadata.get('target_url')
@@ -5266,7 +5322,7 @@ def operations_dashboard(request):
             'date': item.timestamp,
             'description': item.action or item.name or item.message,
             'action': 'Review',
-            'target_url': f"{reverse('operations-dashboard')}?show_notifications=1",
+            'target_url': operations_dashboard_nav_urls['notifications'],
         })
     reconciliation_alerts = reconciliation_results.filter(issue_type__in=['Missing', 'Damaged', 'Unexpected']).order_by('-created_at')[:3]
     for result in reconciliation_alerts:
@@ -5350,6 +5406,7 @@ def operations_dashboard(request):
         'report_order': report_order,
         'report_title': report_title,
         'report_subtitle': report_subtitle,
+        'operations_dashboard_nav_urls': operations_dashboard_nav_urls,
         'inventory_report_tapes': inventory_report_tapes,
         'shipment_report_rows': shipment_report_rows,
         'report_table_columns': report_table_columns,

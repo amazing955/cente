@@ -50,6 +50,7 @@ urlpatterns = [
     # Dashboard and feature-specific views
     path('dashboard/', views.dashboard, name='dashboard'),
     path('backup-dashboard/nav/<str:signed_token>/', views.backup_dashboard_navigation, name='backup-dashboard-navigation'),
+    path('operations-dashboard/nav/<str:signed_token>/', views.operations_dashboard_navigation, name='operations-dashboard-navigation'),
     path('backup-dashboard/', views.backup_dashboard, name='backup-dashboard'),
     path('operations-dashboard/', views.operations_dashboard, name='operations-dashboard'),
     path('operations-dashboard/start-shipment-request/', views.start_shipment_request, name='start-shipment-request'),
