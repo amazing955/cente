@@ -1,0 +1,40 @@
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h1 class="h3">Request Return for Shipment {{ shipment.shipment_id }}</h1>
+        <p class="text-muted">Submit a return request, assign a courier, and notify the backup administrator.</p>
+    </div>
+    <div class="col-md-4 text-end">
+        <a href="{% url 'shipment-detail' shipment.pk %}" class="btn btn-outline-secondary">Back to Shipment</a>
+    </div>
+</div>
+
+<div class="card shadow-sm border-0">
+    <div class="card-body">
+        <form method="post" action="{% url 'request-return-shipment' shipment.pk %}">
+            {% csrf_token %}
+            <div class="mb-3">
+                {{ return_form.tape.label_tag }}
+                {{ return_form.tape }}
+                {% if return_form.tape.errors %}
+                    <div class="invalid-feedback d-block">{{ return_form.tape.errors|join:', ' }}</div>
+                {% endif %}
+            </div>
+            <div class="mb-3">
+                {{ return_form.courier.label_tag }}
+                {{ return_form.courier }}
+                {% if return_form.courier.errors %}
+                    <div class="invalid-feedback d-block">{{ return_form.courier.errors|join:', ' }}</div>
+                {% endif %}
+            </div>
+            <div class="mb-3">
+                {{ return_form.comments.label_tag }}
+                {{ return_form.comments }}
+                {% if return_form.comments.errors %}
+                    <div class="invalid-feedback d-block">{{ return_form.comments.errors|join:', ' }}</div>
+                {% endif %}
+            </div>
+            <button type="submit" class="btn btn-primary">Submit Return Request</button>
+            <a href="{% url 'shipment-detail' shipment.pk %}" class="btn btn-secondary ms-2">Cancel</a>
+        </form>
+    </div>
+</div>

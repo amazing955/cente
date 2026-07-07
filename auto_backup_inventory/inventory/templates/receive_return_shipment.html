@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% block title %}Receive Return Shipment{% endblock %}
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-8">
+        <h1 class="h3">Receive Return Shipment</h1>
+        <p class="text-muted">Finalize return receipt for shipment {{ shipment.shipment_id }} and update courier status.</p>
+    </div>
+    <div class="col-md-4 text-end">
+        <a href="{% url 'shipment-detail' shipment.pk %}" class="btn btn-outline-secondary">Back to Shipment</a>
+    </div>
+</div>
+
+<div class="card shadow-sm border-0">
+    <div class="card-body">
+        <form method="post">
+            {% csrf_token %}
+            <div class="mb-3">
+                {{ form.receiving_custodian.label_tag }}
+                {{ form.receiving_custodian }}
+                {% if form.receiving_custodian.errors %}
+                    <div class="invalid-feedback d-block">{{ form.receiving_custodian.errors|join:', ' }}</div>
+                {% endif %}
+            </div>
+            <div class="mb-3">
+                {{ form.decision.label_tag }}
+                {{ form.decision }}
+                {% if form.decision.errors %}
+                    <div class="invalid-feedback d-block">{{ form.decision.errors|join:', ' }}</div>
+                {% endif %}
+            </div>
+            <div class="mb-3">
+                {{ form.receipt_notes.label_tag }}
+                {{ form.receipt_notes }}
+                {% if form.receipt_notes.errors %}
+                    <div class="invalid-feedback d-block">{{ form.receipt_notes.errors|join:', ' }}</div>
+                {% endif %}
+            </div>
+            <button type="submit" class="btn btn-primary">Submit Return Receipt</button>
+            <a href="{% url 'shipment-detail' shipment.pk %}" class="btn btn-secondary ms-2">Cancel</a>
+        </form>
+    </div>
+</div>
+{% endblock %}

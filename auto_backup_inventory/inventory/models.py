@@ -505,9 +505,12 @@ class Shipment(models.Model):
         ('Dispatched', 'Dispatched'),
         ('Picked Up', 'Picked Up'),
         ('In Transit', 'In Transit'),
+        ('Return Requested', 'Return Requested'),
+        ('Return Accepted', 'Return Accepted'),
+        ('Return In Transit', 'Return In Transit'),
+        ('Return Rejected', 'Return Rejected'),
         ('Delivered', 'Delivered'),
         ('Completed', 'Completed'),
-        ('Return Accepted', 'Return Accepted'),
         ('Cancelled', 'Cancelled'),
     ]
 
@@ -566,6 +569,39 @@ class Shipment(models.Model):
     )
     approval_date = models.DateTimeField(null=True, blank=True)
     approval_remarks = models.TextField(blank=True)
+    return_requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='return_requests'
+    )
+    return_requested_at = models.DateTimeField(null=True, blank=True)
+    return_request_comments = models.TextField(blank=True)
+    return_assigned_courier_profile = models.ForeignKey(
+        'CourierProfile',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='return_assignments'
+    )
+    return_assigned_courier_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='assigned_return_shipments'
+    )
+    return_courier_response_status = models.CharField(
+        max_length=20,
+        choices=[
+            ('Pending', 'Pending'),
+            ('Accepted', 'Accepted'),
+            ('Rejected', 'Rejected'),
+        ],
+        default='Pending',
+    )
+    return_courier_response_at = models.DateTimeField(null=True, blank=True)
 
     delivery_date = models.DateField(null=True, blank=True)
     delivery_time = models.TimeField(null=True, blank=True)
@@ -855,7 +891,9 @@ class ShipmentTransportEvent(models.Model):
         ('In Transit', 'In Transit'),
         ('Delayed', 'Delayed'),
         ('Delivered', 'Delivered'),
+        ('Return Requested', 'Return Requested'),
         ('Return Accepted', 'Return Accepted'),
+        ('Return Rejected', 'Return Rejected'),
         ('Return Delivered', 'Return Delivered'),
     ]
 

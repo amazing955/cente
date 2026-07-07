@@ -34,8 +34,12 @@
                         <td>{{ shipment.destination_location|default:'N/A' }}</td>
                         <td>
                             <a href="{% url 'manifest-detail' shipment.pk %}" class="btn btn-sm btn-outline-primary">Manifest</a>
-                            {% if shipment.status == 'Return Accepted' %}
+                            {% if shipment.status == 'Return Requested' %}
+                            <a href="{% url 'courier-return-response' shipment.pk %}" class="btn btn-sm btn-outline-warning ms-1">Respond to Return</a>
+                            {% elif shipment.status == 'Return Accepted' %}
                             <a href="{% url 'delivery-confirmation' shipment.pk %}" class="btn btn-sm btn-outline-info ms-1">Confirm Delivery</a>
+                            {% elif shipment.status == 'Return Rejected' %}
+                            <span class="badge bg-danger ms-1">Rejected</span>
                             {% endif %}
                         </td>
                     </tr>

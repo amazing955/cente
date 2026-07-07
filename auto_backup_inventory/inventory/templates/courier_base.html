@@ -2,14 +2,15 @@
 {% load static %}
 {% block sidebar_class %}app-sidebar-dark{% endblock %}
 {% block sidebar %}
-<div class="sidebar-logo">
-    <img src="{% static 'inventory/round.jpg' %}" alt="Courier Logo" class="rounded-circle shadow-sm">
+<div class="logo" style="margin-top: 30px;">
+    <center> <img src="{% static 'inventory/lo.jpg' %}" alt="logo" width="150"  height="100" style="padding-bottom:20px; border-radius:10px; box-shadow:0 0 10px rgba(255,255,255,0.5);">
     <h3 class="mb-1">Courier Hub</h3>
-    <small class="text-white-50">Route Control</small>
+    <small class="text-white-50">Route Control</small></center>
 </div>
 <nav class="nav flex-column gap-2 sidebar-menu px-3 pb-4">
     <a class="nav-link {% if request.resolver_match.url_name == 'courier-dashboard' %}active{% endif %}" href="{% url 'courier-dashboard' %}"><i class="bi bi-speedometer2 me-2"></i>Dashboard</a>
     <a class="nav-link {% if request.resolver_match.url_name == 'assigned-shipments' %}active{% endif %}" href="{% url 'assigned-shipments' %}"><i class="bi bi-card-list me-2"></i>Assigned Shipments</a>
+    <a class="nav-link {% if request.resolver_match.url_name == 'return-shipments' %}active{% endif %}" href="{% url 'return-shipments' %}"><i class="bi bi-arrow-repeat me-2"></i>Return Shipments</a>
     <a class="nav-link {% if request.resolver_match.url_name == 'incident-management' %}active{% endif %}" href="{% url 'incident-management' %}"><i class="bi bi-exclamation-triangle me-2"></i>Incident Management</a>
     <a class="nav-link {% if request.resolver_match.url_name == 'activity-log' %}active{% endif %}" href="{% url 'activity-log' %}"><i class="bi bi-clock-history me-2"></i>Activity Log</a>
     <a class="nav-link text-danger mt-3" href="{% url 'signout' %}"><i class="bi bi-box-arrow-right me-2"></i>Logout</a>

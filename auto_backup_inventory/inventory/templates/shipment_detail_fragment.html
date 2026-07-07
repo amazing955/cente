@@ -6,6 +6,15 @@
     <div class="col-md-4 text-md-end align-self-center">
         <a class="btn btn-outline-secondary me-2" href="{% url 'shipment-approvals' %}"><i class="bi bi-arrow-left me-1"></i> Back to Approvals</a>
         <a class="btn btn-primary" href="{% url 'approval-history' shipment.pk %}"><i class="bi bi-clock-history me-1"></i> View History</a>
+        {% if shipment.status != 'Cancelled' and shipment.status != 'Rejected' %}
+            {% if shipment.shipment_type == 'Return' or shipment.status == 'Return Accepted' or shipment.status == 'Return Requested' %}
+                <button type="button" class="btn btn-success ms-2" onclick="document.getElementById('returnShipmentCard').scrollIntoView({behavior: 'smooth', block: 'start'});">
+                    <i class="bi bi-arrow-repeat me-1"></i> Review Return & Assign Courier
+                </button>
+            {% else %}
+                <a href="{% url 'request-return-shipment' shipment.pk %}?partial=1" class="btn btn-success ms-2"><i class="bi bi-arrow-repeat me-1"></i> Request Return</a>
+            {% endif %}
+        {% endif %}
     </div>
 </div>
 
@@ -139,7 +148,7 @@
             </div>
         </div>
 
-        <div class="card shadow-sm border-0 mb-3">
+        <div class="card shadow-sm border-0 mb-3" id="returnShipmentCard">
             <div class="card-body">
                 <h5 class="mb-3">Return Shipment</h5>
                 <form method="post" action="{% url 'shipment-detail' shipment.pk %}?partial=1">

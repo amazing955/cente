@@ -1,4 +1,5 @@
 import json
+import uuid
 from datetime import date
 from io import BytesIO
 from unittest.mock import patch
@@ -1705,6 +1706,7 @@ class OperationsDashboardNotificationsTests(TestCase):
         AuditLog.objects.create(
             name='Shipment Request Submitted',
             action='Shipment request was submitted for review.',
+            message=f'target_url={reverse("pickup-confirmation", args=[uuid.uuid4()])}',
             user=user,
             severity='warning',
             is_read=False,
@@ -1716,6 +1718,7 @@ class OperationsDashboardNotificationsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'notification-view-link')
         self.assertContains(response, 'data-target-url=')
+        self.assertContains(response, 'pickup-confirmation')
 
 
 class OperationsDashboardReportsTests(TestCase):
@@ -1910,6 +1913,32 @@ class BackupDashboardShipmentApprovalTests(TestCase):
         self.assertTrue(alert.is_read)
         self.assertIsNotNone(alert.read_at)
 
+    def test_backup_dashboard_alert_renders_clickable_target_url(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-clickable-alert',
+            email='backup-clickable-alert@example.com',
+            password='pass1234',
+        )
+        backup_admin.groups.add(backup_group)
+
+        target_url = reverse('shipment-detail', args=[uuid.uuid4()])
+        AuditLog.objects.create(
+            name='Pickup Confirmed',
+            action='Pickup confirmed for shipment SH-12345.',
+            message=f'target_url={target_url}',
+            user=backup_admin,
+            severity='warning',
+            is_read=False,
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.get(reverse('backup-dashboard'), {'show_alerts': '1'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, target_url)
+        self.assertContains(response, 'text-decoration-none text-dark w-100')
+
     def test_backup_admin_can_approve_pending_shipment_from_dashboard_with_barcode_and_courier(self):
         operations_group = Group.objects.create(name='Operations Manager')
         backup_group = Group.objects.create(name='Backup Administrator')
@@ -1994,6 +2023,127 @@ class BackupDashboardShipmentApprovalTests(TestCase):
         self.assertTrue(
             AuditLog.objects.filter(user=courier_user, action__icontains='approved').exists()
         )
+
+    def test_backup_admin_assignment_sends_email_to_profile_only_courier(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        courier_group = Group.objects.create(name='Courier')
+
+        operator = get_user_model().objects.create_user(
+            username='operator-profile-email',
+            email='operator-profile-email@example.com',
+            password='pass1234',
+        )
+        operator.groups.add(backup_group)
+
+        courier_profile = CourierProfile.objects.create(
+            user=None,
+            courier_id='CR-EMAIL-001',
+            full_name='Profile Courier',
+            email='profile-courier@example.com',
+            vehicle_number='KDA 321B',
+            active_status=True,
+        )
+
+        tape = Tape.objects.create(
+            volser='TAPE-888',
+            barcode='BAR-888',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+            status='Active',
+            current_location='Vault B',
+        )
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            status='Pending',
+            releasing_custodian='Op User',
+            created_by=operator,
+        )
+
+        self.client.force_login(operator)
+        with patch('inventory.views.send_mail') as mock_send_mail:
+            response = self.client.post(
+                reverse('backup-dashboard'),
+                {
+                    'form_type': 'backup_admin_assignment',
+                    'shipment_id': shipment.pk,
+                    'barcode': tape.barcode,
+                    'courier': courier_profile.pk,
+                    'decision': 'approve',
+                    'comments': 'Approved for dispatch.',
+                },
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(mock_send_mail.called)
+        args, kwargs = mock_send_mail.call_args
+        self.assertIn('Shipment', args[0])
+        self.assertEqual(args[3], ['profile-courier@example.com'])
+        self.assertEqual(kwargs.get('fail_silently'), True)
+
+        # Confirm notification payload includes actionable pickup URL metadata.
+        self.assertTrue(
+            AuditLog.objects.filter(
+                name='Shipment Assigned',
+                message__contains='target_url=',
+            ).exists()
+        )
+
+    def test_assignment_form_adds_notification_payload_for_courier_profile(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        courier_group = Group.objects.create(name='Courier')
+
+        operator = get_user_model().objects.create_user(
+            username='operator-profile-notify',
+            email='operator-profile-notify@example.com',
+            password='pass1234',
+        )
+        operator.groups.add(backup_group)
+
+        courier_profile = CourierProfile.objects.create(
+            user=None,
+            courier_id='CR-NOTIFY-001',
+            full_name='Notification Courier',
+            email='notification-courier@example.com',
+            vehicle_number='KDA 654B',
+            active_status=True,
+        )
+
+        tape = Tape.objects.create(
+            volser='TAPE-999',
+            barcode='BAR-999',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+            status='Active',
+            current_location='Vault B',
+        )
+
+        shipment = Shipment.objects.create(
+            shipment_type='Return',
+            source_location='Nairobi Branch',
+            status='Pending',
+            releasing_custodian='Op User',
+            created_by=operator,
+        )
+
+        self.client.force_login(operator)
+        response = self.client.post(
+            reverse('backup-dashboard'),
+            {
+                'form_type': 'backup_admin_assignment',
+                'shipment_id': shipment.pk,
+                'barcode': tape.barcode,
+                'courier': courier_profile.pk,
+                'decision': 'approve',
+                'comments': 'Ready for pickup and return review.',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        notification_log = AuditLog.objects.filter(name='Shipment Assigned', message__contains='target_url=').latest('timestamp')
+        self.assertIsNotNone(notification_log)
+        self.assertIn(reverse('pickup-confirmation', args=[shipment.pk]), notification_log.message)
 
     def test_assignment_form_includes_courier_group_user_without_existing_profile(self):
         courier_group = Group.objects.create(name='Courier')
@@ -2186,6 +2336,35 @@ class BackupDashboardShipmentApprovalTests(TestCase):
             ).exists()
         )
 
+    def test_courier_dashboard_shows_notification_alerts_to_courier(self):
+        courier_group = Group.objects.create(name='Courier')
+        courier_user = get_user_model().objects.create_user(
+            username='courier-notify',
+            email='courier-notify@example.com',
+            password='pass1234',
+            first_name='Courier',
+            last_name='Notify',
+        )
+        courier_user.groups.add(courier_group)
+
+        target_url = reverse('pickup-confirmation', args=[uuid.uuid4()])
+        AuditLog.objects.create(
+            name='Shipment Assigned',
+            action='Shipment SH-12345 assigned to you.',
+            message=f'target_url={target_url}',
+            user=courier_user,
+            severity='warning',
+            is_read=False,
+        )
+
+        self.client.force_login(courier_user)
+        response = self.client.get(reverse('courier-dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Notifications')
+        self.assertContains(response, 'Shipment SH-12345 assigned to you.')
+        self.assertContains(response, target_url)
+
     def test_pickup_confirmation_autofills_manifest_and_notifies_backup_admin(self):
         backup_group = Group.objects.create(name='Backup Administrator')
         backup_admin = get_user_model().objects.create_user(
@@ -2259,6 +2438,12 @@ class BackupDashboardShipmentApprovalTests(TestCase):
                 action__icontains='MANIFEST-001',
             ).filter(
                 action__icontains='KDA 123A',
+            ).exists()
+        )
+        self.assertTrue(
+            AuditLog.objects.filter(
+                user=backup_admin,
+                message__icontains='target_url=',
             ).exists()
         )
 
@@ -2665,3 +2850,65 @@ class InventoryReportExportTests(TestCase):
         self.assertEqual(response.status_code, 302)
         follow_response = self.client.get(response.url)
         self.assertContains(follow_response, 'Report sharing failed')
+
+
+class ShipmentDetailConfirmationTests(TestCase):
+    def test_confirm_shipment_review_marks_shipment_as_completed(self):
+        user = get_user_model().objects.create_superuser(
+            username='shipment-reviewer',
+            email='shipment-reviewer@example.com',
+            password='StrongPass123!',
+        )
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Approved',
+            source_location='Acacia',
+            destination_location='Acacia',
+            releasing_custodian='Mukendi Olivier',
+            receiving_organization='Pending review',
+            courier_name='mars brunos',
+            tracking_number='TRK-SHP-CD5A',
+            created_by=user,
+        )
+
+        self.client.force_login(user)
+        response = self.client.post(
+            reverse('shipment-detail', args=[shipment.pk]),
+            {'form_type': 'confirm_shipment_review'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        shipment.refresh_from_db()
+        self.assertEqual(shipment.status, 'Completed')
+        self.assertEqual(shipment.delivery_status, 'Delivered')
+        self.assertTrue(AuditLog.objects.filter(name='Shipment Review Confirmed').exists())
+
+    def test_confirm_shipment_review_creates_notification_with_target_url(self):
+        user = get_user_model().objects.create_superuser(
+            username='shipment-review-notify',
+            email='shipment-review-notify@example.com',
+            password='StrongPass123!',
+        )
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Approved',
+            source_location='Acacia',
+            destination_location='Acacia',
+            releasing_custodian='Mukendi Olivier',
+            receiving_organization='Pending review',
+            courier_name='mars brunos',
+            tracking_number='TRK-SHP-CD6B',
+            created_by=user,
+        )
+
+        self.client.force_login(user)
+        response = self.client.post(
+            reverse('shipment-detail', args=[shipment.pk]),
+            {'form_type': 'confirm_shipment_review'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        audit_log = AuditLog.objects.filter(name='Shipment Review Confirmed').latest('timestamp')
+        self.assertEqual(audit_log.user, user)
+        self.assertIn('target_url=', audit_log.message)
+        self.assertEqual(audit_log.severity, 'warning')

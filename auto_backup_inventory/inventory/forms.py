@@ -388,6 +388,7 @@ class BackupShipmentAssignmentForm(forms.Form):
     )
 
     def __init__(self, *args, **kwargs):
+        self.shipment = kwargs.pop('shipment', None)
         super().__init__(*args, **kwargs)
         self.fields['tape'].queryset = Tape.objects.filter(status='Active').order_by('volser')
 
@@ -467,7 +468,7 @@ class BackupShipmentAssignmentForm(forms.Form):
         if submit_action == 'reject':
             return cleaned_data
 
-        if not tape:
+        if not tape and not (self.shipment and getattr(self.shipment, 'shipment_type', '') == 'Return'):
             raise forms.ValidationError('Please provide a valid tape by scanning its barcode or selecting one from the list.')
 
         if not courier:
@@ -481,6 +482,108 @@ class BackupShipmentAssignmentForm(forms.Form):
             cleaned_data['courier'] = str(courier)
 
         return cleaned_data
+
+
+class ReturnShipmentRequestForm(forms.Form):
+    tape = forms.ModelChoiceField(
+        queryset=Tape.objects.none(),
+        label='Select Tape',
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        required=False,
+    )
+    courier = forms.ChoiceField(
+        label='Assign Courier',
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        required=True,
+    )
+    comments = forms.CharField(
+        required=True,
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Describe the return request and any handover notes'}),
+        label='Return Notes',
+    )
+
+    def __init__(self, *args, **kwargs):
+        shipment = kwargs.pop('shipment', None)
+        super().__init__(*args, **kwargs)
+        if shipment is not None:
+            self.fields['tape'].queryset = shipment.tapes.order_by('volser')
+        profile_couriers = CourierProfile.objects.filter(active_status=True).order_by('full_name')
+        courier_group = Group.objects.filter(name__iexact='Courier').first()
+        courier_user_qs = get_user_model().objects.all()
+        if courier_group:
+            courier_user_qs = courier_user_qs.filter(Q(groups=courier_group) | Q(role='courier'))
+        else:
+            courier_user_qs = courier_user_qs.filter(Q(role='courier'))
+        courier_users = courier_user_qs.distinct().order_by('username')
+
+        courier_choices = [('', 'Select a courier')]
+        seen_values = set()
+        seen_user_ids = set()
+
+        for profile in profile_couriers:
+            profile_value = str(profile.pk)
+            for value, label in ((f'profile:{profile_value}', str(profile)), (profile_value, str(profile))):
+                if value in seen_values:
+                    continue
+                seen_values.add(value)
+                courier_choices.append((value, label))
+
+        for user in courier_users:
+            if user.pk in seen_user_ids:
+                continue
+            seen_user_ids.add(user.pk)
+            user_value = str(user.pk)
+            display_name = user.get_full_name() or user.username
+            for value, label in ((f'user:{user_value}', display_name), (user_value, display_name)):
+                if value in seen_values:
+                    continue
+                seen_values.add(value)
+                courier_choices.append((value, label))
+
+        self.fields['courier'].choices = courier_choices
+
+    def clean_courier(self):
+        courier_value = self.cleaned_data.get('courier')
+        if not courier_value:
+            raise forms.ValidationError('Please select a courier.')
+
+        if isinstance(courier_value, str) and courier_value.startswith(('profile:', 'user:')):
+            return courier_value
+
+        return str(courier_value)
+
+
+class CourierReturnAcceptanceForm(forms.Form):
+    decision = forms.ChoiceField(
+        choices=[('accept', 'Accept Return'), ('reject', 'Reject Return')],
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        label='Decision',
+        required=True,
+    )
+    comments = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Add comments for the courier acceptance decision'}),
+        label='Comments',
+    )
+
+
+class ReturnReceiveForm(forms.Form):
+    receiving_custodian = forms.CharField(
+        required=True,
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter receiving custodian name'}),
+        label='Receiving Custodian',
+    )
+    decision = forms.ChoiceField(
+        choices=[('accept', 'Accept Return'), ('reject', 'Reject Return')],
+        widget=forms.Select(attrs={'class': 'form-select'}),
+        label='Decision',
+        required=True,
+    )
+    receipt_notes = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Add any return inspection or receipt notes'}),
+        label='Return Notes',
+    )
 
 
 class TapeRequestForm(forms.ModelForm):

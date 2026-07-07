@@ -20,7 +20,7 @@ body {
     left: 0;
     width: 260px;
     height: 100vh;
-    background: linear-gradient(135deg,#0548ad,#001f54);
+    background: #023586;
     color: #ffffff;
     padding: 2rem 1.25rem;
     z-index: 10;
@@ -121,7 +121,7 @@ body {
 <body>
 <div class="sidebar">
     <div class="mb-5 text-center">
-        <img src="{% static 'inventory/round.jpg' %}" alt="Banking Logo" width="72" height="72" class="rounded-circle mb-3 border border-white border-2 shadow-sm">
+        <img src="{% static 'inventory/lo.jpg' %}" alt="Banking Logo" width="72" height="72" class="rounded-circle mb-3 border border-white border-2 shadow-sm">
         <h3 class="mb-1">Ops Manager</h3>
         <p class="small text-white-50 mb-0">Backup Tape Governance</p>
     </div>
@@ -1639,14 +1639,7 @@ function attachEmbeddedHandlers() {
         });
     });
 
-    embedded.querySelectorAll('form[action*="shipment-approvals"]').forEach(form => {
-        form.addEventListener('submit', event => {
-            event.preventDefault();
-            submitEmbeddedApprovalForm(event.currentTarget);
-        });
-    });
-
-    embedded.querySelectorAll('form[action*="shipment-detail"]').forEach(form => {
+    embedded.querySelectorAll('form[action*="shipment-approvals"], form[action*="shipment-detail"], form[action*="request-return-shipment"]').forEach(form => {
         form.addEventListener('submit', event => {
             event.preventDefault();
             submitEmbeddedApprovalForm(event.currentTarget);

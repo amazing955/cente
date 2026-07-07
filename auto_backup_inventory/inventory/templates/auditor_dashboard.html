@@ -14,9 +14,10 @@
         .sidebar {
             position: sticky;
             top: 0;
+            margin-left: 0;
             align-self: flex-start;
             min-height: 100vh;
-            background: linear-gradient(135deg,#0548ad,#001f54);
+            background: #023586;
             color: white;
         }
         .sidebar a { color: #dbeafe; text-decoration: none; }
@@ -35,10 +36,11 @@
 <div class="container-fluid">
     <div class="row g-0">
         <aside class="col-lg-2 sidebar p-3">
-             <h4><div class="logo"> 
-            <img src="{% static 'inventory/round.jpg' %}" alt="logo" width="100" height="100" style="padding-bottom:20px; border-radius:10px; box-shadow:0 0 10px rgba(255,255,255,0.5);">
+             <center><h4><div class="logo"> 
+            <img src="{% static 'inventory/lo.jpg' %}" alt="logo" width="130" height="100" style="padding-bottom:20px; border-radius:10px; box-shadow:0 0 10px rgba(255,255,255,0.5);">
         </div> </h4>
             <h4 class="fw-bold mb-4"><i class="bi bi-shield-check"></i> Compliance</h4>
+             </center>
             <ul class="nav flex-column gap-2">
                 <li><a href="{% url 'auditor-dashboard' %}" class="nav-link"><i class="bi bi-speedometer2"></i> Dashboard</a></li>
                 <li><a href="{% url 'auditor-dashboard' %}?view=audit-logs" class="nav-link {% if active_view == 'audit-logs' %}active{% endif %}"><i class="bi bi-journal-text"></i> Audit Logs</a></li>

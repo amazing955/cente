@@ -9,13 +9,30 @@
 
     <style>
         body{
-            background: linear-gradient(135deg, #0d6efd, #001f54);
+            background: #023586;
             height: 100vh;
             display: flex;
             justify-content: center;
             align-items: center;
         }
 
+        .btn-login{
+            background: #023586 !important;
+            border-color: #023586 !important;
+            color: #fff !important;
+        }
+
+        .btn-login:hover{
+           background: #012b6d !important;
+           border-color: #012b6d !important;
+        }
+
+        .btn-login:focus,
+        .btn-login:active{
+           background: #012b6d !important;
+           border-color: #012b6d !important;
+           box-shadow: 0 0 0 0.25rem rgba(2, 53, 134, 0.25);
+        }
         .login-card{
             width: 100%;
             max-width: 450px;
@@ -27,7 +44,7 @@
         .card-header{
             text-align: center;
             padding: 25px;
-            background: #0d6efd;
+            background: #023586;
             color: white;
         }
 
@@ -71,7 +88,7 @@
 
     <div class="card-header">
         <div class="logo"> 
-            <img src="{% static 'inventory/round.jpg' %}" alt="logo" width="100" height="100" style="padding-bottom:20px; border-radius:10px; box-shadow:0 0 10px rgba(255,255,255,0.5);">
+            <img src="{% static 'inventory/lo.jpg' %}" alt="logo" width="140" height="100" style="padding-bottom:20px; border-radius:10px; box-shadow:0 0 10px rgba(255,255,255,0.5);">
         </div>
         <h3>Backup Tape Inventory</h3>
         <small>Secure Tape Management System</small>
@@ -146,7 +163,7 @@
         </form>
 
         <div class="text-center mt-3">
-            <a href="#" class="text-decoration-none">
+            <a href="{% url 'password_reset' %}" class="text-decoration-none">
                 Forgot Password?
             </a>
         </div>

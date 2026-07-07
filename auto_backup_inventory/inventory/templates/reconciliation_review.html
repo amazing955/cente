@@ -1,10 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
 <head><meta charset="UTF-8"><title>Reconciliation Review</title></head>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
 <body>
 <div style="font-family: Arial, sans-serif; padding: 24px;">
     <h2>Reconciliation Review</h2>
-    <table border="1" cellpadding="6" cellspacing="0">
+    <table class="table table-striped table-sm" border="1" cellpadding="6" cellspacing="0">
         <tr><th>Reconciliation ID</th><th>Location</th><th>Missing</th><th>Status</th></tr>
         {% for row in reconciliation_rows %}
         <tr><td>{{ row.reconciliation_id }}</td><td>{{ row.location }}</td><td>{{ row.missing_tapes }}</td><td>{{ row.compliance_status }}</td></tr>

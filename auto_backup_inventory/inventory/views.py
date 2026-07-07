@@ -64,6 +64,16 @@ def _parse_reconciliation_request_message(message):
     return payload
 
 
+def _parse_auditlog_metadata(message):
+    metadata = {}
+    for part in (message or '').split('|'):
+        if '=' not in part:
+            continue
+        key, value = part.split('=', 1)
+        metadata[key] = value
+    return metadata
+
+
 def investigation_dashboard_page(request, exception_id=None):
     requester_name = ''
     if getattr(request.user, 'is_authenticated', False):
@@ -764,6 +774,39 @@ def get_object_by_uuid_pk(model, pk_value):
     if not is_valid_uuid(pk_value):
         return None
     return model.objects.filter(pk=pk_value).first()
+
+
+def _resolve_courier_selection(courier_selection):
+    courier_profile = None
+    courier_user = None
+    courier_name = ''
+    courier_contact = ''
+
+    if not courier_selection:
+        return courier_profile, courier_user, courier_name, courier_contact
+
+    if isinstance(courier_selection, str):
+        if courier_selection.startswith('profile:'):
+            profile_id = courier_selection.split(':', 1)[1]
+            courier_profile = CourierProfile.objects.filter(pk=profile_id).first()
+        elif courier_selection.startswith('user:'):
+            user_id = courier_selection.split(':', 1)[1]
+            courier_user = get_user_model().objects.filter(pk=user_id).first()
+            courier_profile = getattr(courier_user, 'courier_profile', None) if courier_user else None
+        else:
+            courier_profile = CourierProfile.objects.filter(pk=courier_selection).first()
+            if not courier_profile:
+                courier_user = get_user_model().objects.filter(pk=courier_selection).first()
+                courier_profile = getattr(courier_user, 'courier_profile', None) if courier_user else None
+
+    if courier_profile:
+        courier_name = courier_profile.full_name
+        courier_contact = courier_profile.phone_number or courier_profile.email or ''
+    elif courier_user:
+        courier_name = courier_user.get_full_name() or courier_user.username
+        courier_contact = courier_user.email or ''
+
+    return courier_profile, courier_user, courier_name, courier_contact
 
 
 def feature_module(request, feature_key):
@@ -1744,6 +1787,15 @@ def notify_email_alert(application_settings, subject, message):
     if application_settings.email_alerts_enabled:
         recipients = get_notification_recipients()
         send_email_alert(subject, message, recipients)
+
+
+def send_courier_profile_email_alert(courier_profile, subject, message):
+    if not courier_profile or not courier_profile.email:
+        return
+    application_settings = ApplicationSetting.objects.first() or ApplicationSetting.objects.create()
+    if not application_settings.email_alerts_enabled:
+        return
+    send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, [courier_profile.email], fail_silently=True)
 
 
 # Create your views here.
@@ -3054,20 +3106,31 @@ def backup_dashboard(request):
                         courier_message = (
                             f'Shipment {shipment.shipment_id} was approved by you and assigned to {assigned_courier}.'
                         )
+                        pickup_url = reverse('pickup-confirmation', args=[shipment.pk])
                         AuditLog.objects.create(
-                            name='Shipment Approved',
+                            name='Shipment Assigned',
                             action=courier_message,
+                            message=f'target_url={pickup_url}',
                             user=courier_user,
                             severity='warning',
                         )
-                        if application_settings.email_alerts_enabled and courier_user.email:
-                            send_mail(
-                                f'Shipment {shipment.shipment_id} assigned to you',
-                                f'You were assigned to handle shipment {shipment.shipment_id}. The backup administrator approved the request and assigned it to you.',
-                                settings.DEFAULT_FROM_EMAIL,
-                                [courier_user.email],
-                                fail_silently=True,
-                            )
+                    elif courier_profile and courier_profile.email:
+                        courier_message = (
+                            f'Shipment {shipment.shipment_id} was assigned to you and requires pickup confirmation.'
+                        )
+                        pickup_url = reverse('pickup-confirmation', args=[shipment.pk])
+                        AuditLog.objects.create(
+                            name='Shipment Assigned',
+                            action=courier_message,
+                            message=f'target_url={pickup_url}',
+                            user=None,
+                            severity='warning',
+                        )
+                        send_courier_profile_email_alert(
+                            courier_profile,
+                            f'Shipment {shipment.shipment_id} assigned to you',
+                            f'You were assigned to handle shipment {shipment.shipment_id}. Please confirm pickup at {request.build_absolute_uri(pickup_url)}.'
+                        )
 
                     messages.success(request, f'You approved shipment {shipment.shipment_id} requested by {requester_name} and assigned it to {assigned_courier}.')
                 else:
@@ -3406,7 +3469,7 @@ def backup_dashboard(request):
             reconciliation_pk = request.POST.get('reconciliation_pk')
             selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
             if selected_reconciliation:
-                if selected_reconciliation.status == 'Completed':
+                if selected_reconciliation.status in ['Completed', 'Open']:
                     selected_reconciliation.status = 'Closed'
                     selected_reconciliation.save(update_fields=['status', 'updated_at'])
                     AuditLog.objects.create(
@@ -3418,7 +3481,7 @@ def backup_dashboard(request):
                     )
                     messages.success(request, 'Reconciliation has been closed successfully.')
                 else:
-                    messages.info(request, 'Only completed reconciliations can be closed.')
+                    messages.info(request, 'Only open or completed reconciliations can be closed.')
             else:
                 messages.error(request, 'Unable to close the selected reconciliation.')
             return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}&show_unscanned_tapes=1')
@@ -3858,8 +3921,22 @@ def backup_dashboard(request):
     unread_alert_id_set = set(unread_alert_ids)
     for alert in recent_alerts:
         alert.is_new = alert.pk in unread_alert_id_set
+        alert.is_exception = False
+        alert.exception_id = None
+        alert.exception_description = None
+        try:
+            exception_id, description = _parse_exception_metadata(alert)
+            if exception_id:
+                alert.is_exception = True
+                alert.exception_id = exception_id
+                alert.exception_description = description
+        except Exception:
+            pass
         # If this alert is a close-request notification, expose a review URL for the template
         try:
+            metadata = _parse_auditlog_metadata(alert.message)
+            if metadata.get('target_url'):
+                alert.target_url = metadata.get('target_url')
             if alert.name == 'Exception Close Request Notification' and alert.message:
                 # expected message format: 'requested_by=...|close_request_id=<uuid>'
                 parts = {p.split('=')[0]: p.split('=')[1] for p in (alert.message or '').split('|') if '=' in p}
@@ -4550,7 +4627,10 @@ def operations_dashboard(request):
     notification_items = []
     for item in AuditLog.objects.filter(severity__in=['warning', 'error']).order_by('-timestamp')[:10]:
         target_url = f"{reverse('operations-dashboard')}?show_notifications=1"
-        if item.message and 'reconciliation_pk=' in item.message:
+        metadata = _parse_auditlog_metadata(item.message)
+        if metadata.get('target_url'):
+            target_url = metadata.get('target_url')
+        elif item.message and 'reconciliation_pk=' in item.message:
             parts = {p.split('=')[0]: p.split('=')[1] for p in (item.message or '').split('|') if '=' in p}
             reconciliation_pk = parts.get('reconciliation_pk')
             if reconciliation_pk:
@@ -4558,7 +4638,7 @@ def operations_dashboard(request):
         notification_items.append({
             'severity': item.severity,
             'timestamp': item.timestamp,
-            'message': item.message or item.action or item.name,
+            'message': item.action or item.name or item.message,
             'action': 'View',
             'target_url': target_url,
             'is_read': item.is_read,
@@ -4999,6 +5079,7 @@ def operations_dashboard(request):
 
     context = {
         'dashboard_tabs': OPERATIONS_FEATURE_TABS,
+        'dashboard_features': [],
         'current_datetime': timezone.localtime(),
         'today': today,
         'monthly_labels': monthly_labels,
@@ -5284,6 +5365,7 @@ def shipment_detail(request, shipment_pk):
                 Q(rfid_tag__icontains=manifest_query)
             )
 
+    application_settings = ApplicationSetting.objects.first() or ApplicationSetting.objects.create()
     partial_request = request.GET.get('partial') == '1'
 
     if request.method == 'POST':
@@ -5311,16 +5393,139 @@ def shipment_detail(request, shipment_pk):
                 approval_form = ShipmentApprovalDecisionForm(initial={'shipment_pk': shipment.pk})
             else:
                 messages.error(request, 'Please provide a receiving custodian before completing the shipment.')
+        elif request.POST.get('form_type') == 'confirm_shipment_review':
+            shipment.status = 'Completed'
+            shipment.received_by = shipment.receiving_custodian or request.user.get_full_name() or request.user.username
+            shipment.delivery_date = timezone.localdate()
+            shipment.delivery_time = timezone.localtime().time()
+            shipment.delivery_status = 'Delivered'
+            shipment.last_updated_by = request.user
+            shipment.save(update_fields=['status', 'received_by', 'delivery_date', 'delivery_time', 'delivery_status', 'last_updated_by', 'last_updated_at'])
+            AuditLog.objects.create(
+                name='Shipment Review Confirmed',
+                action=f'Shipment {shipment.shipment_id} review was confirmed and finalized',
+                message=f'target_url={reverse("shipment-detail", args=[shipment.pk])}',
+                user=request.user,
+                severity='warning',
+            )
+            messages.success(request, 'Shipment review confirmed and finalized.')
+            approval_form = ShipmentApprovalDecisionForm(initial={'shipment_pk': shipment.pk})
+        elif request.POST.get('form_type') == 'request_return':
+            return_form = ReturnShipmentRequestForm(request.POST or None)
+            if return_form.is_valid():
+                courier_selection = return_form.cleaned_data['courier']
+                comments = return_form.cleaned_data['comments'].strip()
+                courier_profile, courier_user, courier_name, courier_contact = _resolve_courier_selection(courier_selection)
+
+                shipment.return_requested_by = request.user
+                shipment.return_requested_at = timezone.localtime()
+                shipment.return_request_comments = comments
+                shipment.return_assigned_courier_profile = courier_profile
+                shipment.return_assigned_courier_user = courier_user
+                shipment.return_courier_response_status = 'Pending'
+                shipment.status = 'Return Requested'
+                shipment.last_updated_by = request.user
+                shipment.save(update_fields=[
+                    'return_requested_by',
+                    'return_requested_at',
+                    'return_request_comments',
+                    'return_assigned_courier_profile',
+                    'return_assigned_courier_user',
+                    'return_courier_response_status',
+                    'status',
+                    'last_updated_by',
+                    'last_updated_at',
+                ])
+
+                ShipmentApprovalHistory.objects.create(
+                    shipment=shipment,
+                    action='Requested More Information' if shipment.shipment_type != 'Return' else 'Return Requested',
+                    comments=comments,
+                    user=request.user,
+                )
+
+                AuditLog.objects.create(
+                    name='Return Requested',
+                    action=(
+                        f'Return requested for shipment {shipment.shipment_id} and assigned to {courier_name or "selected courier"}.'
+                    ),
+                    message=f'target_url={reverse("courier-dashboard")}',
+                    user=courier_user,
+                    severity='warning',
+                )
+
+                if courier_profile and courier_profile.email:
+                    send_courier_profile_email_alert(
+                        courier_profile,
+                        f'Return request assigned: {shipment.shipment_id}',
+                        f'A return request for shipment {shipment.shipment_id} has been assigned to you. Please respond in the courier dashboard.'
+                    )
+
+                application_settings = ApplicationSetting.objects.first() or ApplicationSetting.objects.create()
+                backup_admins = User.objects.filter(is_active=True, groups__name='Backup Administrator').distinct()
+                for admin in backup_admins:
+                    AuditLog.objects.create(
+                        name='Return Approval Required',
+                        action=f'Return request for shipment {shipment.shipment_id} requires your approval.',
+                        message=f'target_url={reverse("shipment-detail", args=[shipment.pk])}',
+                        user=admin,
+                        severity='warning',
+                    )
+                    if application_settings.email_alerts_enabled and admin.email:
+                        send_mail(
+                            f'Return request requires approval: {shipment.shipment_id}',
+                            f'A return request for shipment {shipment.shipment_id} has been submitted and requires your approval.',
+                            settings.DEFAULT_FROM_EMAIL,
+                            [admin.email],
+                            fail_silently=True,
+                        )
+                messages.success(request, 'Return request submitted and courier assigned. Awaiting courier confirmation and backup admin approval.')
+                return redirect('shipment-detail', shipment_pk=shipment.pk)
+            else:
+                messages.error(request, 'Please select a courier and provide return notes.')
         elif request.POST.get('form_type') == 'backup_admin_assignment':
             if assignment_form.is_valid():
                 tape = assignment_form.cleaned_data['tape']
-                courier_profile = assignment_form.cleaned_data['courier']
+                courier_selection = assignment_form.cleaned_data['courier']
                 decision = assignment_form.cleaned_data['decision']
-                comments = assignment_form.cleaned_data['comments', ''].strip() if isinstance(assignment_form.cleaned_data, dict) else ''
+                comments = assignment_form.cleaned_data.get('comments', '').strip()
+                courier_profile = None
+                courier_user = None
+                courier_name = ''
+                courier_contact = ''
+
+                if courier_selection and isinstance(courier_selection, str):
+                    if courier_selection.startswith('profile:'):
+                        profile_id = courier_selection.split(':', 1)[1]
+                        courier_profile = CourierProfile.objects.filter(pk=profile_id).first()
+                        if courier_profile:
+                            courier_user = courier_profile.user
+                            courier_name = courier_profile.full_name
+                            courier_contact = courier_profile.phone_number
+                    elif courier_selection.startswith('user:'):
+                        user_id = courier_selection.split(':', 1)[1]
+                        courier_user = get_user_model().objects.filter(pk=user_id).first()
+                        if courier_user:
+                            courier_name = courier_user.get_full_name() or courier_user.username
+                            courier_contact = courier_user.email or ''
+                            courier_profile = getattr(courier_user, 'courier_profile', None)
+                    else:
+                        courier_profile = CourierProfile.objects.filter(pk=courier_selection).first()
+                        if courier_profile:
+                            courier_user = courier_profile.user
+                            courier_name = courier_profile.full_name
+                            courier_contact = courier_profile.phone_number
+                        else:
+                            courier_user = get_user_model().objects.filter(pk=courier_selection).first()
+                            if courier_user:
+                                courier_name = courier_user.get_full_name() or courier_user.username
+                                courier_contact = courier_user.email or ''
+                                courier_profile = getattr(courier_user, 'courier_profile', None)
+
                 shipment.tapes.add(tape)
                 shipment.number_of_tapes = shipment.tapes.count()
-                shipment.courier_name = courier_profile.full_name
-                shipment.courier_contact = courier_profile.phone_number
+                shipment.courier_name = courier_name or (courier_profile.full_name if courier_profile else '')
+                shipment.courier_contact = courier_contact or (courier_profile.phone_number if courier_profile else '')
                 shipment.tracking_number = f"TRK-{shipment.shipment_id[:8].upper()}"
                 if decision == 'approve':
                     shipment.status = 'Approved'
@@ -5335,6 +5540,84 @@ def shipment_detail(request, shipment_pk):
                 shipment.last_updated_by = request.user
                 shipment.save(update_fields=['status', 'approved_by', 'approval_date', 'approval_remarks', 'last_updated_by', 'last_updated_at', 'courier_name', 'courier_contact', 'tracking_number', 'number_of_tapes'])
                 ShipmentApprovalHistory.objects.create(shipment=shipment, action='Approved' if decision == 'approve' else 'Rejected', comments=comments, user=request.user)
+                if decision == 'approve':
+                    AuditLog.objects.create(
+                        name='Shipment Assigned',
+                        action=f'Shipment {shipment.shipment_id} assigned to courier {courier_name or (courier_profile.full_name if courier_profile else "selected courier")}',
+                        user=request.user,
+                        severity='success',
+                    )
+
+                    operator = shipment.created_by
+                    assigned_courier = courier_name or (courier_profile.full_name if courier_profile else 'the selected courier')
+                    if operator:
+                        operator_message = (
+                            f'You approved shipment {shipment.shipment_id} requested by {operator.get_full_name() or operator.username} '
+                            f'and assigned it to {assigned_courier}.'
+                        )
+                        AuditLog.objects.create(
+                            name='Shipment Approved',
+                            action=operator_message,
+                            message=f'target_url={reverse("shipment-detail", args=[shipment.pk])}',
+                            user=operator,
+                            severity='warning',
+                        )
+                        if application_settings.email_alerts_enabled and operator.email:
+                            send_mail(
+                                f'Shipment {shipment.shipment_id} approved',
+                                f'Your shipment request {shipment.shipment_id} was approved by the backup administrator and assigned to {assigned_courier}.',
+                                settings.DEFAULT_FROM_EMAIL,
+                                [operator.email],
+                                fail_silently=True,
+                            )
+
+                    pickup_url = reverse('pickup-confirmation', args=[shipment.pk])
+                    if courier_user:
+                        courier_message = (
+                            f'Shipment {shipment.shipment_id} was assigned to you and requires pickup confirmation.'
+                        )
+                        AuditLog.objects.create(
+                            name='Shipment Assigned',
+                            action=courier_message,
+                            message=f'target_url={pickup_url}',
+                            user=courier_user,
+                            severity='warning',
+                        )
+                    elif courier_profile and courier_profile.email:
+                        courier_message = (
+                            f'Shipment {shipment.shipment_id} was assigned to you and requires pickup confirmation.'
+                        )
+                        AuditLog.objects.create(
+                            name='Shipment Assigned',
+                            action=courier_message,
+                            message=f'target_url={pickup_url}',
+                            user=None,
+                            severity='warning',
+                        )
+                        send_courier_profile_email_alert(
+                            courier_profile,
+                            f'Shipment {shipment.shipment_id} assigned to you',
+                            f'You were assigned to handle shipment {shipment.shipment_id}. Please confirm pickup at {request.build_absolute_uri(pickup_url)}.'
+                        )
+                else:
+                    operator = shipment.created_by
+                    if operator:
+                        AuditLog.objects.create(
+                            name='Shipment Rejected',
+                            action=f'Your shipment request {shipment.shipment_id} was rejected. {comments}'.strip(),
+                            message=f'target_url={reverse("shipment-detail", args=[shipment.pk])}',
+                            user=operator,
+                            severity='warning',
+                        )
+                        if application_settings.email_alerts_enabled and operator.email:
+                            send_mail(
+                                f'Shipment {shipment.shipment_id} rejected',
+                                f'Your shipment request {shipment.shipment_id} was rejected by the backup administrator. {comments}'.strip(),
+                                settings.DEFAULT_FROM_EMAIL,
+                                [operator.email],
+                                fail_silently=True,
+                            )
+
                 messages.success(request, 'Shipment assignment updated successfully.')
                 return redirect('shipment-detail', shipment_pk=shipment.pk)
             else:
@@ -5422,6 +5705,294 @@ def approval_history(request, shipment_pk):
     return render(request, 'approval_history.html', context)
 
 
+@user_passes_test(lambda u: u.is_superuser or is_operations_manager(u) or is_backup_administrator(u), login_url='signin')
+@login_required(login_url='signin')
+def request_return_shipment(request, shipment_pk):
+    shipment = get_object_or_404(Shipment.objects.prefetch_related('tapes'), pk=shipment_pk)
+    if shipment.status in ['Cancelled', 'Rejected']:
+        messages.error(request, 'This shipment cannot be returned.')
+        return redirect('shipment-detail', shipment_pk=shipment.pk)
+
+    return_form = ReturnShipmentRequestForm(request.POST or None, shipment=shipment)
+    if request.method == 'POST' and return_form.is_valid():
+        tape = return_form.cleaned_data.get('tape')
+        courier_selection = return_form.cleaned_data['courier']
+        comments = return_form.cleaned_data['comments'].strip()
+        courier_profile, courier_user, courier_name, courier_contact = _resolve_courier_selection(courier_selection)
+
+        shipment.return_requested_by = request.user
+        shipment.return_requested_at = timezone.localtime()
+        shipment.return_request_comments = comments
+        shipment.return_assigned_courier_profile = courier_profile
+        shipment.return_assigned_courier_user = courier_user
+        shipment.return_courier_response_status = 'Pending'
+        shipment.status = 'Return Requested'
+        shipment.courier_name = courier_name
+        shipment.courier_contact = courier_contact
+        shipment.last_updated_by = request.user
+        shipment.save(update_fields=[
+            'return_requested_by',
+            'return_requested_at',
+            'return_request_comments',
+            'return_assigned_courier_profile',
+            'return_assigned_courier_user',
+            'return_courier_response_status',
+            'status',
+            'courier_name',
+            'courier_contact',
+            'last_updated_by',
+            'last_updated_at',
+        ])
+
+        ShipmentApprovalHistory.objects.create(
+            shipment=shipment,
+            action='Return Requested',
+            comments=comments,
+            user=request.user,
+        )
+
+        ShipmentTransportEvent.objects.create(
+            shipment=shipment,
+            courier=courier_profile,
+            event_type='Return Requested',
+            event_date=timezone.localdate(),
+            event_time=timezone.localtime().time(),
+            comments='Return request submitted and courier assigned.',
+        )
+
+        AuditLog.objects.create(
+            name='Return Requested',
+            action=(
+                f'Return requested for shipment {shipment.shipment_id} and assigned to {courier_name or "selected courier"}.'
+            ),
+            message=f'target_url={reverse("courier-dashboard")}',
+            user=courier_user,
+            severity='warning',
+        )
+
+        if courier_profile and courier_profile.email:
+            send_courier_profile_email_alert(
+                courier_profile,
+                f'Return request assigned: {shipment.shipment_id}',
+                f'A return request for shipment {shipment.shipment_id} has been assigned to you. Please respond in the courier dashboard.'
+            )
+
+        backup_admins = User.objects.filter(is_active=True, groups__name='Backup Administrator').distinct()
+        application_settings = ApplicationSetting.objects.first() or ApplicationSetting.objects.create()
+        for admin in backup_admins:
+            AuditLog.objects.create(
+                name='Return Approval Required',
+                action=f'Return request for shipment {shipment.shipment_id} requires your approval.',
+                message=f'target_url={reverse("shipment-detail", args=[shipment.pk])}',
+                user=admin,
+                severity='warning',
+            )
+            if application_settings.email_alerts_enabled and admin.email:
+                send_mail(
+                    f'Return request requires approval: {shipment.shipment_id}',
+                    f'A return request for shipment {shipment.shipment_id} has been submitted and requires your approval.',
+                    settings.DEFAULT_FROM_EMAIL,
+                    [admin.email],
+                    fail_silently=True,
+                )
+
+        messages.success(request, 'Return request submitted and courier assigned. Awaiting courier response and backup admin approval.')
+        if request.GET.get('partial') == '1':
+            return redirect('shipment-detail', shipment_pk=shipment.pk)
+        return redirect('shipment-detail', shipment_pk=shipment.pk)
+
+    context = {
+        'dashboard_tabs': OPERATIONS_FEATURE_TABS,
+        'shipment': shipment,
+        'return_form': return_form,
+    }
+    template = 'request_return_shipment_fragment.html' if request.GET.get('partial') == '1' else 'request_return_shipment.html'
+    return render(request, template, context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_courier(u), login_url='signin')
+@login_required(login_url='signin')
+def courier_return_response(request, shipment_pk):
+    shipment = get_object_or_404(Shipment.objects.prefetch_related('tapes'), pk=shipment_pk)
+    courier = ensure_courier_profile(request.user)
+    is_assigned_courier = (
+        shipment.return_assigned_courier_user == request.user or
+        (courier and shipment.return_assigned_courier_profile == courier)
+    )
+    if not is_assigned_courier:
+        messages.error(request, 'You are not assigned to respond to this return request.')
+        return redirect('courier-dashboard')
+
+    if shipment.status != 'Return Requested':
+        messages.warning(request, 'This return request is not currently pending courier response.')
+        return redirect('courier-dashboard')
+
+    form = CourierReturnAcceptanceForm(request.POST or None)
+    if request.method == 'POST' and form.is_valid():
+        decision = form.cleaned_data['decision']
+        comments = form.cleaned_data['comments'].strip()
+        shipment.return_courier_response_status = 'Accepted' if decision == 'accept' else 'Rejected'
+        shipment.return_courier_response_at = timezone.localtime()
+        shipment.status = 'Return Accepted' if decision == 'accept' else 'Return Rejected'
+        shipment.last_updated_by = request.user
+        shipment.save(update_fields=[
+            'return_courier_response_status',
+            'return_courier_response_at',
+            'status',
+            'last_updated_by',
+            'last_updated_at',
+        ])
+
+        ShipmentTransportEvent.objects.create(
+            shipment=shipment,
+            courier=courier,
+            event_type='Return Accepted' if decision == 'accept' else 'Return Rejected',
+            event_date=timezone.localdate(),
+            event_time=timezone.localtime().time(),
+            comments=comments or 'Courier responded to return request.',
+        )
+
+        ShipmentApprovalHistory.objects.create(
+            shipment=shipment,
+            action='Return Accepted' if decision == 'accept' else 'Return Rejected',
+            comments=comments,
+            user=request.user,
+        )
+
+        if shipment.return_requested_by:
+            AuditLog.objects.create(
+                name='Return Response Recorded',
+                action=(
+                    f'Courier response for return shipment {shipment.shipment_id}: '
+                    f'{"accepted" if decision == "accept" else "rejected"}.'
+                ),
+                message=f'target_url={reverse("shipment-detail", args=[shipment.pk])}',
+                user=shipment.return_requested_by,
+                severity='warning',
+            )
+            application_settings = ApplicationSetting.objects.first() or ApplicationSetting.objects.create()
+            if application_settings.email_alerts_enabled and shipment.return_requested_by.email:
+                send_mail(
+                    f'Return request {"accepted" if decision == "accept" else "rejected"}: {shipment.shipment_id}',
+                    f'The courier has {"accepted" if decision == "accept" else "rejected"} the return request for shipment {shipment.shipment_id}.',
+                    settings.DEFAULT_FROM_EMAIL,
+                    [shipment.return_requested_by.email],
+                    fail_silently=True,
+                )
+
+        messages.success(request, 'Return response submitted successfully.')
+        return redirect('courier-dashboard')
+
+    context = {
+        'courier': courier,
+        'shipment': shipment,
+        'form': form,
+    }
+    return render(request, 'courier_return_response.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_backup_administrator(u), login_url='signin')
+@login_required(login_url='signin')
+def receive_return_shipment(request, shipment_pk):
+    shipment = get_object_or_404(Shipment.objects.prefetch_related('tapes'), pk=shipment_pk)
+    if shipment.status not in ['Return Accepted', 'Return In Transit']:
+        messages.error(request, 'This return shipment is not ready for receipt.')
+        return redirect('shipment-detail', shipment_pk=shipment.pk)
+
+    form = ReturnReceiveForm(request.POST or None, initial={'receiving_custodian': request.user.get_full_name() or request.user.username})
+    if request.method == 'POST' and form.is_valid():
+        receiving_custodian = form.cleaned_data['receiving_custodian'].strip()
+        decision = form.cleaned_data['decision']
+        receipt_notes = form.cleaned_data['receipt_notes'].strip()
+
+        if decision == 'accept':
+            shipment.status = 'Completed'
+            shipment.delivery_status = 'Delivered'
+            shipment.received_by = receiving_custodian
+            shipment.delivery_date = timezone.localdate()
+            shipment.delivery_time = timezone.localtime().time()
+            shipment.delivery_notes = receipt_notes
+            event_type = 'Return Delivered'
+            history_action = 'Return Received'
+            audit_name = 'Return Received'
+            courier_notification = 'accepted'
+        else:
+            shipment.status = 'Return Rejected'
+            event_type = 'Return Rejected'
+            history_action = 'Return Rejected'
+            audit_name = 'Return Rejected'
+            courier_notification = 'rejected'
+
+        shipment.return_courier_response_status = 'Accepted' if decision == 'accept' else 'Rejected'
+        shipment.return_courier_response_at = timezone.localtime()
+        shipment.last_updated_by = request.user
+        shipment.save(update_fields=[
+            'status',
+            'delivery_status',
+            'received_by',
+            'delivery_date',
+            'delivery_time',
+            'delivery_notes',
+            'return_courier_response_status',
+            'return_courier_response_at',
+            'last_updated_by',
+            'last_updated_at',
+        ])
+
+        ShipmentTransportEvent.objects.create(
+            shipment=shipment,
+            courier=shipment.return_assigned_courier_profile,
+            event_type=event_type,
+            event_date=timezone.localdate(),
+            event_time=timezone.localtime().time(),
+            comments=receipt_notes or f'Return shipment {decision} by backup administrator.',
+        )
+
+        ShipmentApprovalHistory.objects.create(
+            shipment=shipment,
+            action=history_action,
+            comments=receipt_notes,
+            user=request.user,
+        )
+
+        if shipment.return_assigned_courier_user:
+            AuditLog.objects.create(
+                name=audit_name,
+                action=(
+                    f'The backup administrator has {courier_notification} the return receipt for shipment {shipment.shipment_id}.'
+                ),
+                message=f'target_url={reverse("courier-dashboard")}',
+                user=shipment.return_assigned_courier_user,
+                severity='success' if decision == 'accept' else 'warning',
+            )
+        elif shipment.return_assigned_courier_profile and shipment.return_assigned_courier_profile.email:
+            send_courier_profile_email_alert(
+                shipment.return_assigned_courier_profile,
+                f'Return receipt {courier_notification}: {shipment.shipment_id}',
+                f'The backup administrator has {courier_notification} the return receipt for shipment {shipment.shipment_id}.',
+            )
+
+        AuditLog.objects.create(
+            name=audit_name,
+            action=(
+                f'Return shipment {shipment.shipment_id} was {courier_notification} by backup administrator.'
+            ),
+            message=f'target_url={reverse("shipment-detail", args=[shipment.pk])}',
+            user=request.user,
+            severity='success' if decision == 'accept' else 'warning',
+        )
+
+        messages.success(request, 'Return receipt processed successfully.')
+        return redirect('shipment-detail', shipment_pk=shipment.pk)
+
+    context = {
+        'dashboard_tabs': OPERATIONS_FEATURE_TABS,
+        'shipment': shipment,
+        'form': form,
+    }
+    return render(request, 'receive_return_shipment.html', context)
+
+
 @user_passes_test(lambda u: u.is_superuser or is_courier(u), login_url='signin')
 @login_required(login_url='signin')
 def courier_dashboard(request):
@@ -5435,6 +6006,27 @@ def courier_dashboard(request):
     recent_events = ShipmentTransportEvent.objects.filter(courier=courier).order_by('-event_date', '-event_time')[:6] if courier else []
     recent_exceptions = ShipmentException.objects.filter(shipment__in=shipments).order_by('-reported_date')[:6]
 
+    notification_items = []
+    courier_alerts = AuditLog.objects.filter(user=request.user, severity__in=['warning', 'error']).order_by('-timestamp')[:10]
+    for item in courier_alerts:
+        metadata = _parse_auditlog_metadata(item.message)
+        target_url = metadata.get('target_url') or reverse('courier-dashboard')
+        notification_items.append({
+            'severity': item.severity,
+            'timestamp': item.timestamp,
+            'message': item.action or item.name or item.message,
+            'action': 'View',
+            'target_url': target_url,
+            'is_read': item.is_read,
+        })
+
+    unread_alert_count = AuditLog.objects.filter(user=request.user, severity__in=['warning', 'error'], is_read=False).count()
+    show_notifications_panel = False
+    if request.GET.get('show_notifications') == '1':
+        show_notifications_panel = True
+        AuditLog.objects.filter(user=request.user, severity__in=['warning', 'error'], is_read=False).update(is_read=True, read_at=timezone.now())
+        unread_alert_count = 0
+
     context = {
         'courier': courier,
         'shipments': shipments,
@@ -5445,6 +6037,9 @@ def courier_dashboard(request):
         'activity_count': activity_count,
         'recent_events': recent_events,
         'recent_exceptions': recent_exceptions,
+        'notification_items': notification_items,
+        'unread_alert_count': unread_alert_count,
+        'show_notifications_panel': show_notifications_panel,
     }
     return render(request, 'courier_dashboard.html', context)
 
@@ -5546,14 +6141,16 @@ def pickup_confirmation(request, shipment_pk):
             vehicle_plate = courier.vehicle_number or shipment.vehicle_number or 'Not provided'
             backup_admins = User.objects.filter(is_active=True, groups__name='Backup Administrator').distinct()
             for backup_admin in backup_admins:
+                receipt_url = reverse('shipment-detail', args=[shipment.pk])
                 AuditLog.objects.create(
                     name='Pickup Confirmed',
                     action=(
                         f'Pickup confirmed for shipment {shipment.shipment_id}. '
                         f'Manifest reference: {manifest_reference}. Vehicle plate: {vehicle_plate}.'
                     ),
+                    message=f'target_url={receipt_url}',
                     user=backup_admin,
-                    severity='success',
+                    severity='warning',
                 )
                 if ApplicationSetting.objects.first() and ApplicationSetting.objects.first().email_alerts_enabled and backup_admin.email:
                     send_mail(
@@ -5638,8 +6235,14 @@ def delivery_confirmation(request, shipment_pk):
 def return_shipments(request):
     courier = get_courier_profile(request.user)
     shipments = Shipment.objects.filter(
-        Q(shipment_type='Return') | Q(status='Return Accepted'),
-        Q(courier_name__iexact=courier.full_name) | Q(courier_contact__iexact=courier.phone_number) | Q(receipts__courier=courier) | Q(deliveries__courier=courier)
+        Q(shipment_type='Return') |
+        Q(status__in=['Return Requested', 'Return Accepted', 'Return In Transit', 'Return Rejected']),
+        Q(courier_name__iexact=courier.full_name) |
+        Q(courier_contact__iexact=courier.phone_number) |
+        Q(receipts__courier=courier) |
+        Q(deliveries__courier=courier) |
+        Q(return_assigned_courier_profile=courier) |
+        Q(return_assigned_courier_user=request.user)
     ).distinct().order_by('-shipment_date') if courier else Shipment.objects.none()
 
     context = {
@@ -5696,8 +6299,16 @@ def activity_log(request):
 
     activity_items = []
     for event in events:
+        event_timestamp = None
+        if event.event_date and event.event_time:
+            event_timestamp = datetime.combine(event.event_date, event.event_time)
+            if timezone.is_naive(event_timestamp):
+                event_timestamp = timezone.make_aware(event_timestamp, timezone.get_current_timezone())
+        else:
+            event_timestamp = event.created_at
+
         activity_items.append({
-            'timestamp': datetime.combine(event.event_date, event.event_time),
+            'timestamp': event_timestamp,
             'title': event.event_type,
             'shipment': event.shipment,
             'courier': event.courier,

@@ -1,4 +1,5 @@
-from django.urls import path, include, re_path
+from django.urls import path, include, re_path, reverse_lazy
+from django.contrib.auth import views as auth_views
 from rest_framework_simplejwt.views import TokenBlacklistView, TokenObtainPairView, TokenRefreshView
 
 from . import views
@@ -25,6 +26,22 @@ urlpatterns = [
     # User authentication and dashboard views
     path('signin/', views.signin, name='signin'),
     path('signout/', views.signout, name='signout'),
+    path('password-reset/', auth_views.PasswordResetView.as_view(
+        template_name='password_reset.html',
+        email_template_name='password_reset_email.html',
+        subject_template_name='password_reset_subject.txt',
+        success_url=reverse_lazy('password_reset_done')
+    ), name='password_reset'),
+    path('password-reset/done/', auth_views.PasswordResetDoneView.as_view(
+        template_name='password_reset_done.html'
+    ), name='password_reset_done'),
+    path('reset/<uidb64>/<token>/', auth_views.PasswordResetConfirmView.as_view(
+        template_name='password_reset_confirm.html',
+        success_url=reverse_lazy('password_reset_complete')
+    ), name='password_reset_confirm'),
+    path('reset/done/', auth_views.PasswordResetCompleteView.as_view(
+        template_name='password_reset_complete.html'
+    ), name='password_reset_complete'),
     path('initiated-reconciliation-request/', views.initiate_reconciliation_request, name='initiate-reconciliation-request'),
     path('close-exception/', views.close_exception, name='close-exception'),
     path('approve-close-exception/<uuid:close_request_id>/', views.approve_close_exception, name='approve-close-exception'),
@@ -37,6 +54,9 @@ urlpatterns = [
     path('operations-dashboard/exception/<uuid:pk>/', views.exception_detail, name='exception-detail'),
     path('shipment-approvals/', views.shipment_approvals, name='shipment-approvals'),
     path('shipment-approvals/<uuid:shipment_pk>/', views.shipment_detail, name='shipment-detail'),
+    path('shipment-approvals/<uuid:shipment_pk>/request-return/', views.request_return_shipment, name='request-return-shipment'),
+    path('shipment-approvals/<uuid:shipment_pk>/courier-response/', views.courier_return_response, name='courier-return-response'),
+    path('shipment-approvals/<uuid:shipment_pk>/receive-return/', views.receive_return_shipment, name='receive-return-shipment'),
     path('shipment-approvals/<uuid:shipment_pk>/history/', views.approval_history, name='approval-history'),
     path('courier-dashboard/', views.courier_dashboard, name='courier-dashboard'),
     path('courier/assigned-shipments/', views.assigned_shipments, name='assigned-shipments'),
