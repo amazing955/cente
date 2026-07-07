@@ -46,6 +46,53 @@
         {% endfor %}
     {% endif %}
 
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <div>
+                <h5 class="mb-0">Forwarded Exception Notifications</h5>
+                <small class="text-muted">Drag a forwarded notification into the investigation zone to inspect it.</small>
+            </div>
+            <span class="badge bg-info">{{ forwarded_notifications|length }} forwarded</span>
+        </div>
+        <div class="card-body">
+            {% if forwarded_notifications %}
+                <div class="dropdown">
+                    <button class="btn btn-secondary dropdown-toggle" type="button" id="forwarded-notifications-dropdown" data-bs-toggle="dropdown" aria-expanded="false">
+                        View forwarded notifications
+                    </button>
+                    <div class="dropdown-menu p-0" aria-labelledby="forwarded-notifications-dropdown" id="forwarded-notifications-menu" style="max-height: 360px; min-width: 380px; overflow-y: auto;">
+                        {% for note in forwarded_notifications %}
+                            <button type="button"
+                                class="dropdown-item forwarded-notification-item d-flex flex-column align-items-start"
+                                draggable="true"
+                                ondragstart="handleDragStart(event)"
+                                onclick="handleNotificationClick(event)"
+                                data-target-url="{{ note.target_url }}"
+                                data-exception-id="{{ note.exception_id|default:'' }}"
+                                data-message="{{ note.description|escapejs }}">
+                                <div class="w-100 d-flex justify-content-between">
+                                    <span><strong>{{ note.action }}</strong></span>
+                                    <small class="text-muted">{{ note.timestamp|date:'M d, Y H:i' }}</small>
+                                </div>
+                                <small class="text-muted">{{ note.description }}</small>
+                                {% if note.exception_id %}
+                                    <small class="text-success">Exception ID: {{ note.exception_id }}</small>
+                                {% else %}
+                                    <small class="text-warning">Exception ID not yet available</small>e4
+                                {% endif %}
+                            </button>
+                        {% endfor %}
+                    </div>
+                </div>
+                <div class="mt-3">
+                    <p class="small text-muted mb-1">Click a notification to load its exception ID into the investigation input field. Drag to inspect the notification in the investigation zone.</p>
+                </div>
+            {% else %}
+                <div class="alert alert-secondary mb-0">No forwarded exception notifications found.</div>
+            {% endif %}
+        </div>
+    </div>
+
     <div id="reconciliation-request-form" class="card mb-4 {% if not reconciliation_requested %}d-none{% endif %}">
         <div class="card-body">
             <h5 class="card-title">Initiate reconciliation request</h5>
@@ -335,6 +382,34 @@
 
     function badgeMarkup(text, cssClass) {
         return `<span class="badge ${cssClass}">${text}</span>`;
+    }
+
+    function handleNotificationClick(event) {
+        const button = event.currentTarget;
+        const exceptionId = (button.dataset.exceptionId || '').trim();
+        const notificationMessage = button.dataset.message || '';
+
+        if (exceptionId) {
+            exceptionIdInput.value = exceptionId;
+            exceptionIdTitle.textContent = exceptionId;
+            loadInvestigation();
+            return;
+        }
+
+        alert('This forwarded notification has no exception ID yet. ' + notificationMessage);
+    }
+
+    function handleDragStart(event) {
+        const button = event.currentTarget;
+        const payload = {
+            targetUrl: button.dataset.targetUrl || '',
+            exceptionId: button.dataset.exceptionId || '',
+            message: button.dataset.message || ''
+        };
+        if (event.dataTransfer) {
+            event.dataTransfer.setData('application/json', JSON.stringify(payload));
+            event.dataTransfer.effectAllowed = 'move';
+        }
     }
 
     function renderValue(elementId, value) {

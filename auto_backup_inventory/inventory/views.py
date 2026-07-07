@@ -74,14 +74,78 @@ def _parse_auditlog_metadata(message):
     return metadata
 
 
+def _parse_exception_metadata(alert):
+    exception_id = None
+    description = None
+
+    if not alert:
+        return None, None
+
+    if alert.message:
+        metadata = _parse_auditlog_metadata(alert.message)
+        exception_id = metadata.get('exception_id')
+        description = metadata.get('description') or metadata.get('exception_description')
+
+    if not exception_id and alert.action:
+        match = re.search(r'exception\s+([A-Z0-9\-]+)', alert.action, re.IGNORECASE)
+        if match:
+            exception_id = match.group(1)
+
+    if exception_id:
+        exception = ShipmentException.objects.filter(exception_id=exception_id).first()
+        if exception:
+            description = description or getattr(exception, 'description', None)
+
+    return exception_id, description
+
+
+def _build_forwarded_notification_context(alert):
+    metadata = _parse_auditlog_metadata(alert.message)
+    exception_id = metadata.get('exception_id')
+    target_url = metadata.get('target_url')
+    if not target_url:
+        if exception_id:
+            target_url = reverse('investigation-dashboard', kwargs={'exception_id': exception_id})
+        else:
+            target_url = reverse('investigation-dashboard')
+
+    description = metadata.get('description') or metadata.get('exception_description') or alert.action or alert.message or alert.name
+    return {
+        'id': str(alert.id),
+        'action': alert.action or alert.name or 'Forwarded exception alert',
+        'exception_id': exception_id,
+        'description': description,
+        'target_url': target_url,
+        'timestamp': alert.timestamp,
+        'severity': alert.severity,
+        'message': alert.message,
+    }
+
+
 def investigation_dashboard_page(request, exception_id=None):
     requester_name = ''
+    forwarded_notifications = []
     if getattr(request.user, 'is_authenticated', False):
         requester_name = request.user.get_full_name() or request.user.username
+        forwarded_alerts = AuditLog.objects.filter(user=request.user, name='Exception Alert Forwarded').order_by('-timestamp')[:12]
+        filtered_alerts = []
+        for alert in forwarded_alerts:
+            metadata = _parse_auditlog_metadata(alert.message)
+            exception_id = metadata.get('exception_id')
+            if not exception_id:
+                filtered_alerts.append(alert)
+                continue
+
+            exception_obj = ShipmentException.objects.filter(exception_id=exception_id).first()
+            if exception_obj is None or exception_obj.status != 'Closed':
+                filtered_alerts.append(alert)
+
+        forwarded_notifications = [_build_forwarded_notification_context(alert) for alert in filtered_alerts]
     return render(request, 'DRdashboard.html', {
         'exception_id': exception_id or '',
         'requester_name': requester_name,
         'reconciliation_requested': request.GET.get('reconciliation_requested') == '1',
+        'forwarded_notifications': forwarded_notifications,
     })
 
 
@@ -1783,6 +1847,33 @@ def send_report_email(subject, message, recipients):
     send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, recipients, fail_silently=True)
 
 
+def get_dr_team_users():
+    return User.objects.filter(is_active=True).filter(
+        Q(groups__name__iexact='DR Team') |
+        Q(groups__name__iexact='dr team') |
+        Q(groups__name__icontains='dr team') |
+        Q(groups__name__icontains='disaster recovery') |
+        Q(role__iexact='dr team') |
+        Q(role__iexact='dr_team') |
+        Q(role__iexact='drteam') |
+        Q(role__iexact='disaster recovery team') |
+        Q(role__iexact='disaster_recovery_team') |
+        Q(role__icontains='dr team') |
+        Q(role__icontains='disaster recovery')
+    ).distinct()
+
+
+def get_dr_team_email_recipients():
+    return sorted({user.email for user in get_dr_team_users().exclude(email='') if user.email})
+
+
+def send_dr_team_email_alert(subject, message):
+    recipients = get_dr_team_email_recipients()
+    if not recipients:
+        return
+    send_mail(subject, message, settings.DEFAULT_FROM_EMAIL, recipients, fail_silently=True)
+
+
 def notify_email_alert(application_settings, subject, message):
     if application_settings.email_alerts_enabled:
         recipients = get_notification_recipients()
@@ -3220,6 +3311,47 @@ def backup_dashboard(request):
                 return redirect(f'{reverse("backup-dashboard")}?show_shipments=1')
             messages.error(request, 'Unable to approve the selected tape request.')
             return redirect(f'{reverse("backup-dashboard")}?show_shipments=1')
+        elif form_type == 'forward_exception_to_dr_team':
+            alert_id = request.POST.get('alert_id')
+            alert_entry = AuditLog.objects.filter(pk=alert_id, severity__in=['warning', 'error']).first()
+            if alert_entry:
+                exception_id, description = _parse_exception_metadata(alert_entry)
+                if exception_id:
+                    exception_obj = ShipmentException.objects.filter(exception_id=exception_id).first()
+                    if exception_obj:
+                        exception_obj.status = 'Investigating'
+                        exception_obj.save(update_fields=['status'])
+
+                    dr_users = get_dr_team_users()
+                    if dr_users.exists():
+                        notification_url = reverse('investigation-dashboard', kwargs={'exception_id': exception_id})
+                        subject = f'Forwarded exception alert: {exception_id}'
+                        body = (
+                            f'An exception alert has been forwarded to the DR team by {request.user.get_full_name() or request.user.username}.\n\n'
+                            f'Exception ID: {exception_id}\n'
+                            f'Description: {description or "No description available."}\n'
+                            f'Original alert: {alert_entry.action or alert_entry.name}\n'
+                            f'Review the exception investigation dashboard: {request.build_absolute_uri(notification_url)}\n'
+                        )
+                        application_settings = ApplicationSetting.objects.first() or ApplicationSetting.objects.create()
+                        if application_settings.email_alerts_enabled:
+                            send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, get_dr_team_email_recipients(), fail_silently=True)
+                        for dr_user in dr_users:
+                            AuditLog.objects.create(
+                                name='Exception Alert Forwarded',
+                                action=f'Exception {exception_id} forwarded to you by {request.user.get_full_name() or request.user.username}',
+                                message=f'exception_id={exception_id}|target_url={notification_url}',
+                                user=dr_user,
+                                severity='warning',
+                            )
+                        messages.success(request, 'Exception alert forwarded to DR team members.')
+                    else:
+                        messages.warning(request, 'No DR team members found to forward the exception alert.')
+                else:
+                    messages.error(request, 'Unable to identify exception details for this alert.')
+            else:
+                messages.error(request, 'Selected alert could not be found.')
+            return redirect(f'{reverse("backup-dashboard")}?show_alerts=1')
         elif form_type == 'add_tape':
             if tape_form.is_valid():
                 tape = tape_form.save()

@@ -7,6 +7,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.contrib.contenttypes.models import ContentType
+from django.core import mail
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
@@ -62,6 +63,41 @@ class DrTeamAccessTests(TestCase):
         user.groups.add(Group.objects.get(name='dr team'))
 
         self.assertTrue(is_dr_team(user))
+
+
+class PasswordResetFlowTests(TestCase):
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_password_reset_requires_matching_username_and_email(self):
+        user = get_user_model().objects.create_user(
+            username='reset-user',
+            email='reset-user@example.com',
+            password='StrongPass123!',
+        )
+
+        response = self.client.post(reverse('password_reset'), {
+            'username': 'reset-user',
+            'email': 'different@example.com',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'does not match the account for that username')
+        self.assertEqual(len(mail.outbox), 0)
+
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_password_reset_sends_link_for_matching_username_and_email(self):
+        get_user_model().objects.create_user(
+            username='reset-user',
+            email='reset-user@example.com',
+            password='StrongPass123!',
+        )
+
+        response = self.client.post(reverse('password_reset'), {
+            'username': 'reset-user',
+            'email': 'reset-user@example.com',
+        })
+
+        self.assertRedirects(response, reverse('password_reset_done'))
+        self.assertEqual(len(mail.outbox), 1)
 
 
 class ReconciliationInitiationWorkflowTests(TestCase):
@@ -137,6 +173,130 @@ class ReconciliationInitiationWorkflowTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'Reconciliation request from DR Team')
         self.assertContains(response, 'Please open a reconciliation for review.')
+
+    def test_backup_admin_can_forward_exception_alert_to_dr_team(self):
+        dr_group = Group.objects.create(name='DR Team')
+        backup_admin = get_user_model().objects.create_superuser(
+            username='backup-admin-forward',
+            email='backup-admin-forward@example.com',
+            password='StrongPass123!',
+        )
+        dr_user = get_user_model().objects.create_user(
+            username='dr-forward-user',
+            email='dr-forward-user@example.com',
+            password='StrongPass123!',
+            role='auditor',
+        )
+        dr_user.groups.add(dr_group)
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Approved',
+            source_location='Kampala North Branch',
+            destination_location='Mbarara Branch',
+            requesting_branch=BankBranch.objects.create(branch_code='KLA-001', branch_name='Kampala North Branch', status='Active'),
+            created_by=backup_admin,
+        )
+        ShipmentException.objects.create(
+            shipment=shipment,
+            exception_id='EXC-TEST-002',
+            exception_type='Missing Tape',
+            description='Tape missing during handover.',
+            reported_by=backup_admin,
+            severity='High',
+            status='Open',
+        )
+
+        alert = AuditLog.objects.create(
+            name='Shipment Exception Reported',
+            action='Reported exception EXC-TEST-002 for shipment SHP-0001',
+            message='exception_id=EXC-TEST-002|description=Tape missing during handover.',
+            user=backup_admin,
+            severity='warning',
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.post(reverse('backup-dashboard'), {
+            'form_type': 'forward_exception_to_dr_team',
+            'alert_id': str(alert.id),
+        })
+
+        self.assertRedirects(response, reverse('backup-dashboard') + '?show_alerts=1')
+        exception = ShipmentException.objects.get(exception_id='EXC-TEST-002')
+        self.assertEqual(exception.status, 'Investigating')
+        self.assertTrue(
+            AuditLog.objects.filter(
+                name='Exception Alert Forwarded',
+                user=dr_user,
+                message__contains='exception_id=EXC-TEST-002'
+            ).exists()
+        )
+
+    def test_dr_dashboard_shows_forwarded_exception_notification_without_exception_id(self):
+        dr_group = Group.objects.create(name='DR Team')
+        dr_user = get_user_model().objects.create_user(
+            username='dr-forward-display',
+            email='dr-forward-display@example.com',
+            password='StrongPass123!',
+            role='auditor',
+        )
+        dr_user.groups.add(dr_group)
+
+        AuditLog.objects.create(
+            name='Exception Alert Forwarded',
+            action='Forwarded exception alert for review',
+            message='description=Pending exception details|target_url=/investigation-dashboard/',
+            user=dr_user,
+            severity='warning',
+        )
+
+        self.client.force_login(dr_user)
+        response = self.client.get(reverse('investigation-dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Forwarded Exception Notifications')
+        self.assertContains(response, 'Exception ID not yet available')
+
+    def test_closed_exceptions_do_not_appear_in_dr_notifications(self):
+        dr_group = Group.objects.create(name='DR Team')
+        dr_user = get_user_model().objects.create_user(
+            username='dr-closed-notify',
+            email='dr-closed-notify@example.com',
+            password='StrongPass123!',
+            role='auditor',
+        )
+        dr_user.groups.add(dr_group)
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Approved',
+            source_location='Kampala North Branch',
+            destination_location='Mbarara Branch',
+            requesting_branch=BankBranch.objects.create(branch_code='KLA-002', branch_name='Kampala South Branch', status='Active'),
+            created_by=dr_user,
+        )
+        exception = ShipmentException.objects.create(
+            shipment=shipment,
+            exception_id='EXC-CLOSED-001',
+            exception_type='Missing Tape',
+            description='Closed after investigation.',
+            reported_by=dr_user,
+            severity='High',
+            status='Closed',
+        )
+        AuditLog.objects.create(
+            name='Exception Alert Forwarded',
+            action='Forwarded closed exception alert for review',
+            message=f'exception_id={exception.exception_id}|description=Closed exception',
+            user=dr_user,
+            severity='warning',
+        )
+
+        self.client.force_login(dr_user)
+        response = self.client.get(reverse('investigation-dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, 'Forwarded closed exception alert for review')
 
     def test_dr_team_can_close_exception_with_investigation_results(self):
         # Setup DR Team group and user

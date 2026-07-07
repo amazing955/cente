@@ -3,6 +3,7 @@ from django.contrib.auth import views as auth_views
 from rest_framework_simplejwt.views import TokenBlacklistView, TokenObtainPairView, TokenRefreshView
 
 from . import views
+from .forms import CustomPasswordResetForm
 #urlpatterns for the inventory app, including API endpoints, user authentication, and dashboard views
 #some features are not yet usin api but will be in the future, so we are keeping the api endpoints for now
 urlpatterns = [
@@ -27,6 +28,7 @@ urlpatterns = [
     path('signin/', views.signin, name='signin'),
     path('signout/', views.signout, name='signout'),
     path('password-reset/', auth_views.PasswordResetView.as_view(
+        form_class=CustomPasswordResetForm,
         template_name='password_reset.html',
         email_template_name='password_reset_email.html',
         subject_template_name='password_reset_subject.txt',

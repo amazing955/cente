@@ -727,6 +727,16 @@ footer{
                                 <span class="badge bg-primary">New</span>
                             {% endif %}
                         {% endif %}
+                        {% if alert.is_exception and alert.exception_id %}
+                            <div class="mt-2">
+                                <form method="post" action="{% url 'backup-dashboard' %}" class="d-inline">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="form_type" value="forward_exception_to_dr_team">
+                                    <input type="hidden" name="alert_id" value="{{ alert.id }}">
+                                    <button type="submit" class="btn btn-sm btn-outline-primary">Forward to DR</button>
+                                </form>
+                            </div>
+                        {% endif %}
                     </div>
                 {% endfor %}
             {% else %}

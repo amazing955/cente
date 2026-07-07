@@ -1,6 +1,6 @@
 from django import forms
 from django.contrib.auth import get_user_model
-from django.contrib.auth.forms import UserCreationForm
+from django.contrib.auth.forms import PasswordResetForm as DjangoPasswordResetForm, UserCreationForm
 from django.contrib.auth.models import Group, Permission
 from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
@@ -8,6 +8,53 @@ from django.db.models import Q
 from django.utils import timezone
 
 from .models import ApplicationSetting, BankBranch, CustomUser, CourierProfile, Reconciliation, ReconciliationResult, Shipment, ShipmentException, ShipmentReceipt, ShipmentTransportEvent, Tape, TapeRequest, DeliveryConfirmation
+
+
+class CustomPasswordResetForm(DjangoPasswordResetForm):
+    username = forms.CharField(
+        label='Username',
+        max_length=150,
+        widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter username', 'required': True}),
+    )
+
+    field_order = ['username', 'email']
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['email'].widget.attrs.update({'class': 'form-control', 'placeholder': 'Enter your email', 'required': True})
+        self.fields['email'].label = 'Email address'
+
+    def clean(self):
+        cleaned_data = super().clean()
+        username = (cleaned_data.get('username') or '').strip()
+        email = (cleaned_data.get('email') or '').strip().lower()
+
+        if username and email:
+            user_model = get_user_model()
+            try:
+                user = user_model._default_manager.get(username__iexact=username)
+            except user_model.DoesNotExist:
+                raise forms.ValidationError('No account was found for that username.')
+
+            if not getattr(user, 'is_active', True):
+                raise forms.ValidationError('This account is inactive.')
+
+            user_email = (getattr(user, 'email', '') or '').strip().lower()
+            if user_email != email:
+                raise forms.ValidationError('The email address does not match the account for that username.')
+
+        return cleaned_data
+
+    def get_users(self, email):
+        username = (self.cleaned_data.get('username') or '').strip()
+        if not username:
+            return []
+
+        user_model = get_user_model()
+        active_users = user_model._default_manager.filter(username__iexact=username, is_active=True)
+        if email:
+            active_users = active_users.filter(email__iexact=email)
+        return active_users
 
 
 class CustomUserCreationForm(UserCreationForm):

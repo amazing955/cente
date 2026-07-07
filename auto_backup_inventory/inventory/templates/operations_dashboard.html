@@ -120,11 +120,11 @@ body {
 </head>
 <body>
 <div class="sidebar">
-    <div class="mb-5 text-center">
-        <img src="{% static 'inventory/lo.jpg' %}" alt="Banking Logo" width="72" height="72" class="rounded-circle mb-3 border border-white border-2 shadow-sm">
+    <center><div class="logo">
+        <img src="{% static 'inventory/lo.jpg' %}" alt="Banking Logo" width="130" height="100" style="padding-bottom:20px; border-radius:10px; box-shadow:0 0 10px rgba(255,255,255,0.5);">
         <h3 class="mb-1">Ops Manager</h3>
         <p class="small text-white-50 mb-0">Backup Tape Governance</p>
-    </div>
+    </div></center>
     <nav class="nav flex-column gap-2">
         <a class="nav-link active" href="#dashboard" id="dashboardNavLink"><i class="bi bi-speedometer2"></i> Dashboard</a>
             <a class="nav-link partial-load" href="#shipment_approvals" data-url="{% url 'shipment-approvals' %}"><i class="bi bi-check2-square"></i> Shipment Recieval</a>
