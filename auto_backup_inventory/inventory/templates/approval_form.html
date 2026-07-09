@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Asset Movement Voucher</title>
+
+<style>
+    body{
+        font-family: "Times New Roman", serif;
+        background:#f5f5f5;
+        margin:0;
+        padding:30px;
+    }
+
+    .voucher{
+        width:800px;
+        margin:auto;
+        background:#fff;
+        padding:40px;
+        border:1px solid #000;
+    }
+
+    .logo{
+        text-align:center;
+        margin-bottom:20px;
+    }
+
+    .logo img{
+        width:80px;
+        display:block;
+        margin:auto;
+    }
+
+    h2,h3{
+        text-align:center;
+        margin:5px 0;
+        text-decoration:underline;
+    }
+
+    table{
+        width:100%;
+        border-collapse:collapse;
+        margin-top:25px;
+    }
+
+    td{
+        padding:10px 5px;
+        vertical-align:bottom;
+    }
+
+    .line{
+        display:inline-block;
+        border-bottom:1px solid #000;
+        width:100%;
+        height:20px;
+    }
+
+    .signature-table{
+        margin-top:40px;
+    }
+
+    .signature-table td{
+        width:50%;
+        padding:15px 10px;
+    }
+
+    .copies{
+        margin-top:40px;
+        text-align:center;
+        font-size:15px;
+    }
+
+    @media print{
+        body{
+            background:white;
+        }
+
+        .voucher{
+            border:none;
+            width:100%;
+        }
+    }
+</style>
+
+</head>
+<body>
+
+<div class="voucher">
+
+    <div class="logo">
+        <!-- Replace with your logo -->
+        <img src="{% static 'inventory/lo.png' %}" alt="Centenary Bank Logo">
+        <strong>Centenary Bank</strong>
+    </div>
+
+    <h2>CENTENARY RURAL DEVELOPMENT BANK LTD</h2>
+    <h3>ASSET MOVEMENT VOUCHER</h3>
+
+    <table>
+        <tr>
+            <td width="15%">Date</td>
+            <td width="25%"><span class="line"></span></td>
+
+            <td width="25%">Asset Current Location</td>
+            <td width="35%"><span class="line"></span></td>
+        </tr>
+
+        <tr>
+            <td>Desired Location</td>
+            <td colspan="3"><span class="line"></span></td>
+        </tr>
+
+        <tr>
+            <td>Asset Description</td>
+            <td colspan="3"><span class="line"></span></td>
+        </tr>
+
+        <tr>
+            <td>Asset Identification Number</td>
+            <td colspan="3"><span class="line"></span></td>
+        </tr>
+
+        <tr>
+            <td>Reason for Transfer</td>
+            <td colspan="3"><span class="line"></span></td>
+        </tr>
+    </table>
+
+    <table class="signature-table">
+        <tr>
+            <td>
+                Authorized By<br>
+                <span class="line"></span>
+            </td>
+
+            <td>
+                Transferred By<br>
+                <span class="line"></span>
+            </td>
+        </tr>
+
+        <tr>
+            <td>
+                Released By<br>
+                <span class="line"></span>
+            </td>
+
+            <td>
+                Received By<br>
+                <span class="line"></span>
+            </td>
+        </tr>
+    </table>
+
+    <div class="copies">
+        <p>
+            <strong>Copy 1:</strong> Releasing Unit &nbsp;&nbsp;&nbsp;
+            <strong>Copy 2:</strong> Receiver &nbsp;&nbsp;&nbsp;
+            <strong>Copy 3:</strong> Corporate Services Dept. &nbsp;&nbsp;&nbsp;
+            <strong>Copy 4:</strong> Chief Accountant
+        </p>
+    </div>
+
+</div>
+
+</body>
+</html>

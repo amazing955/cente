@@ -1,0 +1,840 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}{{ dashboard_title }}{% endblock %}
+
+{% block sidebar_class %}app-sidebar-dark supreme-sidebar{% endblock %}
+
+{% block sidebar %}
+<div class="sidebar-logo">
+  <img src="{% static 'inventory/lo.png' %}" alt="Supreme Approver Logo">
+  <h3>Supreme Approver</h3>
+  <small>Final Approval Control</small>
+</div>
+
+<nav class="nav flex-column sidebar-menu supreme-nav px-3 pb-3">
+  <div class="sidebar-section-label">Dashboard</div>
+  <a class="nav-link active d-flex align-items-center justify-content-between" href="#approval-overview">
+    <span><i class="bi bi-speedometer2 me-2"></i>Overview</span>
+  </a>
+  <a class="nav-link" href="#approval-metrics">
+    <i class="bi bi-grid-3x3-gap me-2"></i>Approval Metrics
+  </a>
+  <a class="nav-link d-flex align-items-center justify-content-between" href="#approval-queue">
+    <span><i class="bi bi-list-check me-2"></i>Approval Queue</span>
+    <span class="badge bg-danger rounded-pill">{{ total_pending }}</span>
+  </a>
+  <a class="nav-link" href="#approval-timeline">
+    <i class="bi bi-diagram-3 me-2"></i>Approval Timeline
+  </a>
+  <a class="nav-link d-flex align-items-center justify-content-between" href="#risk-analysis">
+    <span><i class="bi bi-shield-exclamation me-2"></i>Risk Analysis</span>
+    <span class="badge bg-warning text-dark rounded-pill">{{ high_risk_transactions|length }}</span>
+  </a>
+  <a class="nav-link" href="#high-risk-section">
+    <i class="bi bi-exclamation-octagon me-2"></i>High Risk Section
+  </a>
+  <a class="nav-link d-flex align-items-center justify-content-between" href="#notifications">
+    <span><i class="bi bi-bell me-2"></i>Notifications</span>
+    <span class="badge bg-info rounded-pill">{{ notifications|length }}</span>
+  </a>
+  <a class="nav-link" href="#recent-activity">
+    <i class="bi bi-clock-history me-2"></i>Recent Activity
+  </a>
+  <a class="nav-link" href="#quick-actions">
+    <i class="bi bi-lightning-charge me-2"></i>Quick Actions
+  </a>
+  <a class="nav-link" href="#system-status">
+    <i class="bi bi-activity me-2"></i>System Status
+  </a>
+
+  <div class="sidebar-section-label mt-3">Features</div>
+  <a class="nav-link" href="#feature-shipment-approvals" data-dashboard-panel="feature-shipment-approvals">
+    <i class="bi bi-clipboard-check me-2"></i>Shipment Approvals
+  </a>
+  <a class="nav-link d-flex align-items-center justify-content-between" href="#feature-tape-requests" data-dashboard-panel="feature-tape-requests">
+    <span><i class="bi bi-hdd-stack me-2"></i>Tape Requests</span>
+    <span class="badge bg-warning text-dark rounded-pill">{{ pending_tape_requests|length }}</span>
+  </a>
+  <a class="nav-link d-flex align-items-center justify-content-between" href="#feature-warehouse-releases" data-dashboard-panel="feature-warehouse-releases">
+    <span><i class="bi bi-building-up me-2"></i>Warehouse Releases</span>
+    <span class="badge bg-info rounded-pill">{{ pending_warehouse_release }}</span>
+  </a>
+  <a class="nav-link d-flex align-items-center justify-content-between" href="#feature-reconciliation" data-dashboard-panel="feature-reconciliation">
+    <span><i class="bi bi-arrow-repeat me-2"></i>Reconciliation</span>
+    <span class="badge bg-primary rounded-pill">{{ pending_reconciliations|length }}</span>
+  </a>
+  <a class="nav-link" href="#feature-reports" data-dashboard-panel="feature-reports">
+    <i class="bi bi-file-earmark-bar-graph me-2"></i>Reports
+  </a>
+  <a class="nav-link" href="#feature-audit-logs" data-dashboard-panel="feature-audit-logs">
+    <i class="bi bi-journal-text me-2"></i>Audit Logs
+  </a>
+
+  <div class="sidebar-section-label mt-3">Account</div>
+  <a class="nav-link" href="#approval-overview" data-dashboard-home>
+    <i class="bi bi-house-door me-2"></i>Dashboard Home
+  </a>
+  <a class="nav-link text-danger" href="{% url 'signout' %}">
+    <i class="bi bi-box-arrow-left me-2"></i>Logout
+  </a>
+</nav>
+{% endblock %}
+
+{% block content %}
+<style>
+  :root {
+    --bank-primary: #023586;
+    --bank-accent: #0e7c86;
+    --bank-gold: #f4b942;
+    --bank-danger: #d32f2f;
+    --bank-success: #2e7d32;
+    --bank-surface: #ffffff;
+    --bank-muted: #6b7280;
+  }
+  body { background: linear-gradient(135deg, #f4f7fb 0%, #eef3fb 100%); }
+  .bank-shell { background: linear-gradient(135deg, rgba(2,53,134,.06), rgba(14,124,134,.05)); border-radius: 1.25rem; padding: 1.1rem; }
+  .bank-panel { background: var(--bank-surface); border: 1px solid rgba(2,53,134,.08); border-radius: 1rem; box-shadow: 0 12px 30px rgba(2,53,134,.08); }
+  .bank-header { background: linear-gradient(135deg, var(--bank-primary) 0%, #001f54 100%); color: #fff; border-radius: 1.2rem; }
+  .bank-icon { width: 46px; height: 46px; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; font-size: 1.2rem; }
+  .kpi-card:hover, .queue-row:hover { transform: translateY(-2px); transition: .2s ease; }
+  .risk-badge { min-width: 82px; }
+  .timeline-dot { width: 12px; height: 12px; border-radius: 999px; display: inline-block; }
+  .table thead th { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--bank-muted); }
+  .skeleton { height: 14px; border-radius: 999px; background: linear-gradient(90deg, #e5e7eb, #f3f4f6, #e5e7eb); background-size: 200% 100%; animation: shine 1.2s infinite; }
+  .supreme-sidebar { position: sticky; top: 1rem; align-self: flex-start; max-height: calc(100vh - 2rem); overflow-y: auto; }
+  .supreme-sidebar .sidebar-logo { background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.03)); border-bottom: 1px solid rgba(255,255,255,.12); }
+  .supreme-sidebar .sidebar-section-label { color: rgba(255,255,255,.58); font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: .5rem 1rem .35rem; }
+  .supreme-nav .nav-link { display: flex; gap: .25rem; align-items: center; margin-bottom: .2rem; min-height: 44px; }
+  .supreme-nav .nav-link .badge { flex: 0 0 auto; }
+  .feature-panel-shell { background: linear-gradient(135deg, rgba(2,53,134,.06), rgba(14,124,134,.05)); border-radius: 1.25rem; padding: 1.1rem; }
+  .feature-toolbar { border-bottom: 1px solid rgba(2,53,134,.08); padding-bottom: 1rem; margin-bottom: 1rem; }
+  .dashboard-panel-space.d-none,
+  .feature-panel-shell.d-none { display: none !important; }
+  #approval-overview,
+  #approval-metrics,
+  #approval-queue,
+  #approval-timeline,
+  #risk-analysis,
+  #recent-activity,
+  #notifications,
+  #high-risk-section,
+  #quick-actions,
+  #system-status { scroll-margin-top: 1.25rem; }
+  @media (max-width: 1199.98px) {
+    .supreme-sidebar { position: static; max-height: none; }
+  }
+  @keyframes shine { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+</style>
+
+<div class="container-fluid py-3 py-lg-4">
+  <div class="bank-shell dashboard-panel-space" id="supremeDashboardHome">
+    <div class="row g-4">
+      <div class="col-12" id="approval-overview">
+        <div class="bank-header p-4 p-lg-5">
+          <div class="row align-items-center g-4">
+            <div class="col-lg-8">
+              <div class="d-flex align-items-start gap-3">
+                <div class="bank-icon bg-white text-primary">
+                  <i class="bi bi-shield-lock"></i>
+                </div>
+                <div>
+                  <div class="text-uppercase small fw-semibold opacity-75">Enterprise Banking Approval Console</div>
+                  <h2 class="mb-2 fw-bold">Welcome back, {{ current_user.get_full_name|default:current_user.username }}</h2>
+                  <p class="mb-3 opacity-75">Highest authority approvals for sensitive banking operations, warehouse releases, tape movements, and critical user changes.</p>
+                  <div class="d-flex flex-wrap gap-2">
+                    <span class="badge bg-white text-primary"><i class="bi bi-calendar3 me-1"></i>{{ current_datetime|date:'d M Y' }}</span>
+                    <span class="badge bg-white text-primary"><i class="bi bi-clock me-1"></i>{{ current_datetime|time:'H:i' }}</span>
+                    <span class="badge bg-white text-primary"><i class="bi bi-box-arrow-in-right me-1"></i>Last login {{ last_login|date:'d M Y H:i' }}</span>
+                    <span class="badge bg-danger"><i class="bi bi-exclamation-triangle me-1"></i>{{ total_pending }} pending approvals</span>
+                    <span class="badge bg-warning text-dark"><i class="bi bi-stopwatch me-1"></i>SLA {{ approval_sla }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-lg-4">
+              <div class="d-flex justify-content-lg-end align-items-center gap-3">
+                <div class="text-end">
+                  <div class="small opacity-75">Approval authority</div>
+                  <div class="fw-semibold">Supreme Approver</div>
+                  <div class="small opacity-75">Banking control center</div>
+                </div>
+                <div class="rounded-circle border border-white border-2 overflow-hidden" style="width:72px;height:72px;">
+                  <img src="{% static 'inventory/lo.png' %}" alt="Profile" class="w-100 h-100 object-fit-cover">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12" id="approval-metrics">
+        <div class="row g-3">
+          {% for card in kpi_cards %}
+          {% empty %}
+          {% with cards=1 %}{% endwith %}
+          {% endfor %}
+          <div class="col-12 col-sm-6 col-xl-4">
+            <div class="bank-panel p-3 h-100 kpi-card border-start border-4 border-primary">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="bank-icon bg-primary-subtle text-primary"><i class="bi bi-hourglass-split"></i></div>
+                <span class="badge bg-success-subtle text-success">+8%</span>
+              </div>
+              <div class="display-6 fw-bold text-primary">{{ total_pending }}</div>
+              <div class="fw-semibold">Pending Approvals</div>
+              <div class="small text-muted">Awaiting full review</div>
+            </div>
+          </div>
+          <div class="col-12 col-sm-6 col-xl-4">
+            <div class="bank-panel p-3 h-100 kpi-card border-start border-4 border-warning">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="bank-icon bg-warning-subtle text-warning"><i class="bi bi-eye"></i></div>
+                <span class="badge bg-warning-subtle text-warning">Live</span>
+              </div>
+              <div class="display-6 fw-bold text-warning">{{ pending_tape_requests|length }}</div>
+              <div class="fw-semibold">Awaiting Review</div>
+              <div class="small text-muted">Pending tape requests</div>
+            </div>
+          </div>
+          <div class="col-12 col-sm-6 col-xl-4">
+            <div class="bank-panel p-3 h-100 kpi-card border-start border-4 border-success">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="bank-icon bg-success-subtle text-success"><i class="bi bi-check2-circle"></i></div>
+                <span class="badge bg-success-subtle text-success">+12%</span>
+              </div>
+              <div class="display-6 fw-bold text-success">{{ approved_today }}</div>
+              <div class="fw-semibold">Approved Today</div>
+              <div class="small text-muted">Completed approvals</div>
+            </div>
+          </div>
+          <div class="col-12 col-sm-6 col-xl-4">
+            <div class="bank-panel p-3 h-100 kpi-card border-start border-4 border-danger">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="bank-icon bg-danger-subtle text-danger"><i class="bi bi-x-circle"></i></div>
+                <span class="badge bg-danger-subtle text-danger">-3%</span>
+              </div>
+              <div class="display-6 fw-bold text-danger">{{ rejected_today }}</div>
+              <div class="fw-semibold">Rejected Today</div>
+              <div class="small text-muted">Declined decisions</div>
+            </div>
+          </div>
+          <div class="col-12 col-sm-6 col-xl-4">
+            <div class="bank-panel p-3 h-100 kpi-card border-start border-4 border-dark">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="bank-icon bg-dark-subtle text-dark"><i class="bi bi-exclamation-octagon"></i></div>
+                <span class="badge bg-danger-subtle text-danger">High</span>
+              </div>
+              <div class="display-6 fw-bold text-dark">{{ high_risk_transactions|length }}</div>
+              <div class="fw-semibold">High Risk Transactions</div>
+              <div class="small text-muted">Critical review queue</div>
+            </div>
+          </div>
+          <div class="col-12 col-sm-6 col-xl-4">
+            <div class="bank-panel p-3 h-100 kpi-card border-start border-4 border-info">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="bank-icon bg-info-subtle text-info"><i class="bi bi-truck"></i></div>
+                <span class="badge bg-info-subtle text-info">Live</span>
+              </div>
+              <div class="display-6 fw-bold text-info">{{ pending_warehouse_release }}</div>
+              <div class="fw-semibold">Pending Warehouse Releases</div>
+              <div class="small text-muted">Ready for dispatch</div>
+            </div>
+          </div>
+          <div class="col-12 col-sm-6 col-xl-4">
+            <div class="bank-panel p-3 h-100 kpi-card border-start border-4 border-secondary">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="bank-icon bg-secondary-subtle text-secondary"><i class="bi bi-people"></i></div>
+                <span class="badge bg-secondary-subtle text-secondary">Pending</span>
+              </div>
+              <div class="display-6 fw-bold text-secondary">{{ pending_user_change_requests }}</div>
+              <div class="fw-semibold">Pending User Changes</div>
+              <div class="small text-muted">Access and role updates</div>
+            </div>
+          </div>
+          <div class="col-12 col-sm-6 col-xl-4">
+            <div class="bank-panel p-3 h-100 kpi-card border-start border-4 border-primary">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="bank-icon bg-primary-subtle text-primary"><i class="bi bi-file-earmark-bar-graph"></i></div>
+                <span class="badge bg-primary-subtle text-primary">Open</span>
+              </div>
+              <div class="display-6 fw-bold text-primary">{{ pending_reconciliations|length }}</div>
+              <div class="fw-semibold">Pending Reconciliation</div>
+              <div class="small text-muted">Open reconciliation cases</div>
+            </div>
+          </div>
+          <div class="col-12 col-sm-6 col-xl-4">
+            <div class="bank-panel p-3 h-100 kpi-card border-start border-4 border-success">
+              <div class="d-flex align-items-center justify-content-between mb-2">
+                <div class="bank-icon bg-success-subtle text-success"><i class="bi bi-building"></i></div>
+                <span class="badge bg-success-subtle text-success">Active</span>
+              </div>
+              <div class="display-6 fw-bold text-success">{{ pending_branch_updates }}</div>
+              <div class="fw-semibold">Pending Branch Updates</div>
+              <div class="small text-muted">Branch record changes</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12" id="approval-queue">
+        <div class="bank-panel p-4">
+          <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+            <div>
+              <h4 class="mb-1 fw-semibold">Approval Queue</h4>
+              <p class="text-muted mb-0">Centralized review workspace for all pending sensitive transactions.</p>
+            </div>
+            <div class="d-flex flex-wrap gap-2">
+              <button class="btn btn-outline-primary btn-sm"><i class="bi bi-funnel me-1"></i>Filters</button>
+              <button class="btn btn-outline-secondary btn-sm"><i class="bi bi-download me-1"></i>Export Excel</button>
+              <button class="btn btn-outline-secondary btn-sm"><i class="bi bi-file-earmark-pdf me-1"></i>Export PDF</button>
+              <button class="btn btn-primary btn-sm"><i class="bi bi-arrow-clockwise me-1"></i>Refresh Queue</button>
+            </div>
+          </div>
+
+          <div class="row g-2 mb-3">
+            <div class="col-md-2"><select class="form-select form-select-sm"><option>Transaction Type</option></select></div>
+            <div class="col-md-2"><select class="form-select form-select-sm"><option>Module</option></select></div>
+            <div class="col-md-2"><select class="form-select form-select-sm"><option>Branch</option></select></div>
+            <div class="col-md-2"><input class="form-control form-control-sm" placeholder="Requester"></div>
+            <div class="col-md-2"><input class="form-control form-control-sm" placeholder="Backup Admin"></div>
+            <div class="col-md-2"><input class="form-control form-control-sm" placeholder="Search"></div>
+          </div>
+          <div class="d-flex flex-wrap gap-2 mb-3">
+            <button class="btn btn-sm btn-outline-primary"><i class="bi bi-plus-circle me-1"></i>Add Filter</button>
+            <button class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-counterclockwise me-1"></i>Reset Filters</button>
+          </div>
+
+          <div class="table-responsive">
+            <table class="table align-middle">
+              <thead>
+                <tr>
+                  <th>Priority</th>
+                  <th>Risk</th>
+                  <th>Transaction ID</th>
+                  <th>Type</th>
+                  <th>Module</th>
+                  <th>Requester</th>
+                  <th>Branch</th>
+                  <th>Requested Date</th>
+                  <th>Backup Admin</th>
+                  <th>Status</th>
+                  <th>Age</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for item in approval_queue %}
+                <tr class="queue-row">
+                  <td><span class="badge {% if item.priority == 'Critical' %}bg-danger{% elif item.priority == 'High' %}bg-warning text-dark{% else %}bg-secondary{% endif %}">{{ item.priority }}</span></td>
+                  <td><span class="badge risk-badge {% if item.risk == 'Critical' %}bg-danger{% elif item.risk == 'High' %}bg-warning text-dark{% elif item.risk == 'Medium' %}bg-info text-dark{% else %}bg-success{% endif %}">{{ item.risk }}</span></td>
+                  <td><div class="fw-semibold">{{ item.reference_id }}</div><div class="small text-muted">{{ item.transaction_type }}</div></td>
+                  <td>{{ item.transaction_type }}</td>
+                  <td>{{ item.module }}</td>
+                  <td>{{ item.requester }}</td>
+                  <td>{{ item.branch }}</td>
+                  <td>{{ item.requested_date }}</td>
+                  <td>{{ item.backup_admin }}</td>
+                  <td><span class="badge bg-warning text-dark">{{ item.status }}</span></td>
+                  <td>{{ item.age }}d</td>
+                  <td>
+                    <div class="btn-group btn-group-sm">
+                      <a class="btn btn-outline-primary" href="{% url 'approval-review' approval_id=item.id %}" data-bs-toggle="tooltip" title="Review"><i class="bi bi-eye"></i></a>
+                      <a class="btn btn-outline-success" href="{% url 'approval-review' approval_id=item.id %}" data-bs-toggle="tooltip" title="Approve"><i class="bi bi-check2-circle"></i></a>
+                      <a class="btn btn-outline-danger" href="{% url 'approval-review' approval_id=item.id %}" data-bs-toggle="tooltip" title="Reject"><i class="bi bi-x-circle"></i></a>
+                    </div>
+                  </td>
+                </tr>
+                {% empty %}
+                <tr><td colspan="12" class="text-muted py-4">No pending transactions match the current review criteria.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-xl-8">
+        <div class="row g-4">
+          <div class="col-12" id="approval-timeline">
+            <div class="bank-panel p-4">
+              <h5 class="fw-semibold mb-3">Approval Timeline</h5>
+              <div class="d-flex flex-column gap-3">
+                <div class="d-flex align-items-center gap-3">
+                  <span class="timeline-dot bg-primary"></span><div><div class="fw-semibold">Requester</div><div class="small text-muted">Submitted request and evidence package.</div></div>
+                </div>
+                <div class="d-flex align-items-center gap-3"><span class="timeline-dot bg-warning"></span><div><div class="fw-semibold">Backup Administrator</div><div class="small text-muted">Reviewed policy alignment and prepared transfer package.</div></div></div>
+                <div class="d-flex align-items-center gap-3"><span class="timeline-dot bg-danger"></span><div><div class="fw-semibold">Supreme Approver</div><div class="small text-muted">Final release decision with mandatory comments and digital confirmation.</div></div></div>
+                <div class="d-flex align-items-center gap-3"><span class="timeline-dot bg-success"></span><div><div class="fw-semibold">Completed</div><div class="small text-muted">Operational release, warehouse dispatch, or final rejection.</div></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-12" id="risk-analysis">
+            <div class="bank-panel p-4">
+              <h5 class="fw-semibold mb-3">Risk Analysis</h5>
+              <div class="row g-3">
+                <div class="col-md-6">
+                  <div class="border rounded p-3 h-100">
+                    <div class="fw-semibold">Risk Level</div>
+                    <div class="badge bg-danger mt-2">Critical</div>
+                  </div>
+                </div>
+                <div class="col-md-6">
+                  <div class="border rounded p-3 h-100">
+                    <div class="fw-semibold">Business Impact</div>
+                    <div class="small text-muted mt-2">Potential service disruption and branch operations delay.</div>
+                  </div>
+                </div>
+                <div class="col-md-6">
+                  <div class="border rounded p-3 h-100">
+                    <div class="fw-semibold">Security Impact</div>
+                    <div class="small text-muted mt-2">Sensitive tape movement and access change.</div>
+                  </div>
+                </div>
+                <div class="col-md-6">
+                  <div class="border rounded p-3 h-100">
+                    <div class="fw-semibold">Compliance Impact</div>
+                    <div class="small text-muted mt-2">Requires dual approval and audit retention review.</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="col-12" id="recent-activity">
+            <div class="bank-panel p-4">
+              <h5 class="fw-semibold mb-3">Recent Activity</h5>
+              <div class="d-flex flex-column gap-3">
+                {% for item in recent_activity %}
+                <div class="d-flex justify-content-between align-items-start border-bottom pb-2">
+                  <div>
+                    <div class="fw-semibold">{{ item.action }}</div>
+                    <div class="small text-muted">{{ item.user }} &bull; {{ item.branch }} &bull; {{ item.module }}</div>
+                  </div>
+                  <div class="small text-muted">{{ item.timestamp|timesince }} ago</div>
+                </div>
+                {% empty %}
+                <div class="text-muted">No recent activity available.</div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-xl-4">
+        <div class="row g-4">
+          <div class="col-12" id="notifications">
+            <div class="bank-panel p-4">
+              <h5 class="fw-semibold mb-3">Notifications</h5>
+              <div class="d-flex flex-column gap-2">
+                {% for notification in notifications %}
+                <a href="#" class="text-decoration-none text-dark border rounded p-3 hover-shadow">
+                  <div class="d-flex justify-content-between align-items-start gap-2">
+                    <div>
+                      <div class="fw-semibold">{{ notification.title }}</div>
+                      <div class="small text-muted">{{ notification.message }}</div>
+                    </div>
+                    <span class="badge bg-{{ notification.type|default:'info' }}">{{ notification.type }}</span>
+                  </div>
+                </a>
+                {% empty %}
+                <div class="text-muted">No notifications.</div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+
+          <div class="col-12" id="high-risk-section">
+            <div class="bank-panel p-4 border-danger border-2">
+              <h5 class="fw-semibold mb-3 text-danger">High Risk Section</h5>
+              <div class="d-flex flex-column gap-2">
+                {% for item in high_risk_types %}
+                <div class="border border-danger rounded p-2">
+                  <div class="fw-semibold">{{ item.name }}</div>
+                  <span class="badge bg-danger-subtle text-danger">{{ item.badge }}</span>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+
+          <div class="col-12" id="quick-actions">
+            <div class="bank-panel p-4">
+              <h5 class="fw-semibold mb-3">Quick Actions</h5>
+              <div class="d-grid gap-2">
+                <a class="btn btn-outline-primary" href="#feature-shipment-approvals" data-dashboard-panel="feature-shipment-approvals"><i class="bi bi-list-check me-2"></i>View Approval Queue</a>
+                <a class="btn btn-outline-secondary" href="#feature-shipment-approvals" data-dashboard-panel="feature-shipment-approvals"><i class="bi bi-truck me-2"></i>Pending Shipments</a>
+                <a class="btn btn-outline-secondary" href="#feature-tape-requests" data-dashboard-panel="feature-tape-requests"><i class="bi bi-archive me-2"></i>Pending Tape Requests</a>
+                <a class="btn btn-outline-secondary" href="#feature-warehouse-releases" data-dashboard-panel="feature-warehouse-releases"><i class="bi bi-building-up me-2"></i>Pending Warehouse</a>
+                <a class="btn btn-outline-secondary" href="#feature-audit-logs" data-dashboard-panel="feature-audit-logs"><i class="bi bi-journal-text me-2"></i>Audit Logs</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12" id="system-status">
+        <div class="bank-panel p-4">
+          <div class="row g-3 align-items-center">
+            <div class="col-md-3"><div class="small text-muted">System Version</div><div class="fw-semibold">{{ system_version }}</div></div>
+            <div class="col-md-3"><div class="small text-muted">Current Database</div><div class="fw-semibold">{{ database_name }}</div></div>
+            <div class="col-md-2"><div class="small text-muted">Server Status</div><div class="fw-semibold text-success">{{ server_status }}</div></div>
+            <div class="col-md-2"><div class="small text-muted">Redis Status</div><div class="fw-semibold text-success">{{ redis_status }}</div></div>
+            <div class="col-md-2"><div class="small text-muted">WebSocket Status</div><div class="fw-semibold text-success">{{ websocket_status }}</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section class="feature-panel-shell d-none" id="feature-shipment-approvals" aria-label="Shipment approvals panel">
+    <div class="bank-panel p-4">
+      <div class="feature-toolbar d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <h4 class="mb-1 fw-semibold">Shipment Approvals</h4>
+          <p class="text-muted mb-0">Review pending shipment approvals inside the Supreme Approver dashboard.</p>
+        </div>
+        <button class="btn btn-outline-secondary btn-sm" type="button" data-dashboard-home><i class="bi bi-arrow-left me-1"></i>Back to Dashboard</button>
+      </div>
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Shipment</th>
+              <th>Type</th>
+              <th>Requester</th>
+              <th>Branch</th>
+              <th>Risk</th>
+              <th>Status</th>
+              <th>Decision</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in approval_queue %}
+            <tr>
+              <td class="fw-semibold">{{ item.id }}</td>
+              <td>{{ item.transaction_type }}</td>
+              <td>{{ item.requester }}</td>
+              <td>{{ item.branch }}</td>
+              <td><span class="badge risk-badge {% if item.risk == 'Critical' %}bg-danger{% elif item.risk == 'High' %}bg-warning text-dark{% elif item.risk == 'Medium' %}bg-info text-dark{% else %}bg-success{% endif %}">{{ item.risk }}</span></td>
+              <td><span class="badge bg-warning text-dark">{{ item.status }}</span></td>
+              <td>
+                <div class="btn-group btn-group-sm">
+                  <a class="btn btn-outline-primary" href="{% url 'approval-review' approval_id=item.id %}"><i class="bi bi-eye"></i></a>
+                  <a class="btn btn-outline-success" href="{% url 'approval-review' approval_id=item.id %}"><i class="bi bi-check2-circle"></i></a>
+                  <a class="btn btn-outline-danger" href="{% url 'approval-review' approval_id=item.id %}"><i class="bi bi-x-circle"></i></a>
+                </div>
+              </td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="7" class="text-muted py-4">No shipment approvals are currently pending.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-panel-shell d-none" id="feature-tape-requests" aria-label="Tape requests panel">
+    <div class="bank-panel p-4">
+      <div class="feature-toolbar d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <h4 class="mb-1 fw-semibold">Tape Requests</h4>
+          <p class="text-muted mb-0">Pending tape movement requests awaiting final review.</p>
+        </div>
+        <button class="btn btn-outline-secondary btn-sm" type="button" data-dashboard-home><i class="bi bi-arrow-left me-1"></i>Back to Dashboard</button>
+      </div>
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Tape</th>
+              <th>Requester</th>
+              <th>Quantity</th>
+              <th>Destination</th>
+              <th>Reason</th>
+              <th>Requested</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for request_item in pending_tape_requests %}
+            <tr>
+              <td class="fw-semibold">{{ request_item.tape.volser }}</td>
+              <td>{{ request_item.requested_by.get_full_name|default:request_item.requested_by.username }}</td>
+              <td>{{ request_item.quantity }}</td>
+              <td>{{ request_item.destination_location|default:'-' }}</td>
+              <td>{{ request_item.reason|default:'-' }}</td>
+              <td>{{ request_item.request_date|date:'d M Y H:i' }}</td>
+              <td><span class="badge bg-warning text-dark">{{ request_item.status }}</span></td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="7" class="text-muted py-4">No pending tape requests.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-panel-shell d-none" id="feature-warehouse-releases" aria-label="Warehouse releases panel">
+    <div class="bank-panel p-4">
+      <div class="feature-toolbar d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <h4 class="mb-1 fw-semibold">Warehouse Releases</h4>
+          <p class="text-muted mb-0">Approved shipments queued for warehouse release and dispatch monitoring.</p>
+        </div>
+        <button class="btn btn-outline-secondary btn-sm" type="button" data-dashboard-home><i class="bi bi-arrow-left me-1"></i>Back to Dashboard</button>
+      </div>
+      <div class="row g-3">
+        <div class="col-md-4">
+          <div class="border rounded p-3 h-100">
+            <div class="small text-muted">Pending warehouse releases</div>
+            <div class="display-6 fw-bold text-info">{{ pending_warehouse_release }}</div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="border rounded p-3 h-100">
+            <div class="small text-muted">Approved today</div>
+            <div class="display-6 fw-bold text-success">{{ approved_today }}</div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="border rounded p-3 h-100">
+            <div class="small text-muted">SLA target</div>
+            <div class="display-6 fw-bold text-primary">{{ approval_sla }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="table-responsive mt-4">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Shipment</th>
+              <th>Destination</th>
+              <th>Branch</th>
+              <th>Backup Admin</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in approval_queue %}
+            {% if item.status == 'Approved' %}
+            <tr>
+              <td class="fw-semibold">{{ item.id }}</td>
+              <td>{{ item.shipment.destination_location|default:'-' }}</td>
+              <td>{{ item.branch }}</td>
+              <td>{{ item.backup_admin }}</td>
+              <td><span class="badge bg-success">{{ item.status }}</span></td>
+            </tr>
+            {% endif %}
+            {% empty %}
+            <tr><td colspan="5" class="text-muted py-4">No approved shipments are queued for warehouse release.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-panel-shell d-none" id="feature-reconciliation" aria-label="Reconciliation panel">
+    <div class="bank-panel p-4">
+      <div class="feature-toolbar d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <h4 class="mb-1 fw-semibold">Reconciliation</h4>
+          <p class="text-muted mb-0">Open reconciliation cases requiring oversight.</p>
+        </div>
+        <button class="btn btn-outline-secondary btn-sm" type="button" data-dashboard-home><i class="bi bi-arrow-left me-1"></i>Back to Dashboard</button>
+      </div>
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Reference</th>
+              <th>Location</th>
+              <th>Date</th>
+              <th>Performed By</th>
+              <th>Progress</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for reconciliation in pending_reconciliations %}
+            <tr>
+              <td class="fw-semibold">{{ reconciliation.reconciliation_id }}</td>
+              <td>{{ reconciliation.location }}</td>
+              <td>{{ reconciliation.reconciliation_date|date:'d M Y' }}</td>
+              <td>{{ reconciliation.performed_by.get_full_name|default:reconciliation.performed_by.username|default:'-' }}</td>
+              <td>{{ reconciliation.progress_percent }}%</td>
+              <td><span class="badge bg-primary">{{ reconciliation.status }}</span></td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="6" class="text-muted py-4">No open reconciliation cases.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-panel-shell d-none" id="feature-reports" aria-label="Reports panel">
+    <div class="bank-panel p-4">
+      <div class="feature-toolbar d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <h4 class="mb-1 fw-semibold">Reports</h4>
+          <p class="text-muted mb-0">Dashboard report summaries for approval, risk, reconciliation, and audit activity.</p>
+        </div>
+        <button class="btn btn-outline-secondary btn-sm" type="button" data-dashboard-home><i class="bi bi-arrow-left me-1"></i>Back to Dashboard</button>
+      </div>
+      <div class="row g-3">
+        <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="small text-muted">Pending approvals</div><div class="display-6 fw-bold text-primary">{{ total_pending }}</div></div></div>
+        <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="small text-muted">Approved today</div><div class="display-6 fw-bold text-success">{{ approved_today }}</div></div></div>
+        <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="small text-muted">Rejected today</div><div class="display-6 fw-bold text-danger">{{ rejected_today }}</div></div></div>
+        <div class="col-md-3"><div class="border rounded p-3 h-100"><div class="small text-muted">High risk</div><div class="display-6 fw-bold text-dark">{{ high_risk_transactions|length }}</div></div></div>
+      </div>
+      <div class="mt-4">
+        <h6 class="fw-semibold">Available report views</h6>
+        <div class="row g-3">
+          <div class="col-md-4"><div class="border rounded p-3 h-100"><i class="bi bi-clipboard-data text-primary me-2"></i>Approval summary</div></div>
+          <div class="col-md-4"><div class="border rounded p-3 h-100"><i class="bi bi-shield-exclamation text-danger me-2"></i>Risk exceptions</div></div>
+          <div class="col-md-4"><div class="border rounded p-3 h-100"><i class="bi bi-arrow-repeat text-info me-2"></i>Reconciliation status</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="feature-panel-shell d-none" id="feature-audit-logs" aria-label="Audit logs panel">
+    <div class="bank-panel p-4">
+      <div class="feature-toolbar d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <h4 class="mb-1 fw-semibold">Audit Logs</h4>
+          <p class="text-muted mb-0">Recent system and approval activity visible inside the dashboard.</p>
+        </div>
+        <button class="btn btn-outline-secondary btn-sm" type="button" data-dashboard-home><i class="bi bi-arrow-left me-1"></i>Back to Dashboard</button>
+      </div>
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>User</th>
+              <th>Action</th>
+              <th>Module</th>
+              <th>Severity</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for log in recent_audit %}
+            <tr>
+              <td>{{ log.timestamp|date:'d M Y H:i' }}</td>
+              <td>{{ log.user.get_full_name|default:log.user.username|default:'System' }}</td>
+              <td>{{ log.action|default:log.name|default:log.message }}</td>
+              <td>{{ log.module }}</td>
+              <td><span class="badge bg-{{ log.severity|default:'info' }}">{{ log.severity }}</span></td>
+            </tr>
+            {% empty %}
+            <tr><td colspan="5" class="text-muted py-4">No audit activity available.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="modal fade" id="approvalModal" tabindex="-1" aria-labelledby="approvalModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="approvalModalLabel">Approval Decision</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Approval Comment</label>
+          <textarea class="form-control" rows="4" placeholder="Provide an approval rationale"></textarea>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Reason</label>
+          <input class="form-control" placeholder="State the business or compliance reason"></div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" id="digitalConfirmation">
+          <label class="form-check-label" for="digitalConfirmation">Digital confirmation</label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-outline-danger">Reject</button>
+        <button type="button" class="btn btn-primary">Approve</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    const tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    tooltipTriggerList.map(function (tooltipTriggerEl) {
+      return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+
+    const dashboardHome = document.getElementById('supremeDashboardHome');
+    const featurePanels = Array.from(document.querySelectorAll('.feature-panel-shell'));
+
+    function setActiveLink(targetHref) {
+      document.querySelectorAll('.supreme-nav .nav-link').forEach(function (item) {
+        item.classList.toggle('active', item.getAttribute('href') === targetHref);
+      });
+    }
+
+    function showDashboardHome(targetHash) {
+      featurePanels.forEach(function (panel) {
+        panel.classList.add('d-none');
+      });
+      dashboardHome?.classList.remove('d-none');
+      setActiveLink(targetHash || '#approval-overview');
+      const target = targetHash ? document.querySelector(targetHash) : document.getElementById('approval-overview');
+      target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    function showFeaturePanel(panelId) {
+      const panel = document.getElementById(panelId);
+      if (!panel) {
+        return;
+      }
+      dashboardHome?.classList.add('d-none');
+      featurePanels.forEach(function (item) {
+        item.classList.toggle('d-none', item.id !== panelId);
+      });
+      setActiveLink('#' + panelId);
+      panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+
+    document.querySelectorAll('[data-dashboard-panel]').forEach(function (link) {
+      link.addEventListener('click', function (event) {
+        event.preventDefault();
+        showFeaturePanel(link.dataset.dashboardPanel);
+      });
+    });
+
+    document.querySelectorAll('[data-dashboard-home]').forEach(function (link) {
+      link.addEventListener('click', function (event) {
+        event.preventDefault();
+        showDashboardHome('#approval-overview');
+      });
+    });
+
+    document.querySelectorAll('.supreme-nav .nav-link[href^="#"]:not([data-dashboard-panel]):not([data-dashboard-home])').forEach(function (link) {
+      link.addEventListener('click', function () {
+        showDashboardHome(link.getAttribute('href'));
+      });
+    });
+
+    if (window.location.hash && document.querySelector('[data-dashboard-panel="' + window.location.hash.slice(1) + '"]')) {
+      showFeaturePanel(window.location.hash.slice(1));
+    }
+  });
+</script>
+{% endblock %}

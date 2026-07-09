@@ -488,6 +488,117 @@ class ReconciliationResult(models.Model):
         return f"{self.reconciliation.reconciliation_id} - {identifier} ({self.issue_type})"
 
 
+class PendingApproval(models.Model):
+    STATUS_CHOICES = [
+        ('Pending', 'Pending'),
+        ('Awaiting Supreme Approval', 'Awaiting Supreme Approval'),
+        ('Approved', 'Approved'),
+        ('Rejected', 'Rejected'),
+        ('Clarification Requested', 'Clarification Requested'),
+    ]
+    PRIORITY_CHOICES = [
+        ('Low', 'Low'),
+        ('Normal', 'Normal'),
+        ('High', 'High'),
+        ('Critical', 'Critical'),
+    ]
+    RISK_CHOICES = [
+        ('Low', 'Low'),
+        ('Medium', 'Medium'),
+        ('High', 'High'),
+        ('Critical', 'Critical'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    transaction_type = models.CharField(max_length=100)
+    module = models.CharField(max_length=120)
+    summary = models.CharField(max_length=255, blank=True)
+    requester = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='pendingapproval_requests',
+    )
+    backup_administrator = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='pendingapproval_backups',
+    )
+    branch = models.ForeignKey(
+        'BankBranch',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='pendingapprovals',
+    )
+    priority = models.CharField(max_length=20, choices=PRIORITY_CHOICES, default='Normal')
+    risk_level = models.CharField(max_length=20, choices=RISK_CHOICES, default='Medium')
+    status = models.CharField(max_length=40, choices=STATUS_CHOICES, default='Pending')
+    request_date = models.DateTimeField(default=timezone.now)
+    approval_deadline = models.DateTimeField(null=True, blank=True)
+    request_payload = models.JSONField(default=dict, blank=True)
+    requested_changes = models.JSONField(default=list, blank=True)
+    related_object_id = models.CharField(max_length=255, blank=True)
+    related_model = models.CharField(max_length=100, blank=True)
+    approved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='approved_pending_requests',
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='reviewed_pending_requests',
+    )
+    approved_at = models.DateTimeField(null=True, blank=True)
+    review_comment = models.TextField(blank=True)
+    rejection_reason = models.TextField(blank=True)
+    audit_history = models.JSONField(default=list, blank=True)
+    attachment_links = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-request_date', '-created_at']
+
+    def __str__(self):
+        return f"{self.transaction_type} {self.id}"
+
+    def get_requester_name(self):
+        if not self.requester:
+            return 'System'
+        return self.requester.get_full_name() or self.requester.username
+
+    def get_backup_name(self):
+        if not self.backup_administrator:
+            return 'Pending'
+        return self.backup_administrator.get_full_name() or self.backup_administrator.username
+
+    def get_branch_name(self):
+        return self.branch.branch_name if self.branch else 'N/A'
+
+    def get_related_object(self):
+        if self.related_model == 'shipment':
+            return Shipment.objects.filter(pk=self.related_object_id).first()
+        return None
+
+    def get_display_reference(self):
+        related_object = self.get_related_object()
+        if related_object is not None:
+            for attr in ['shipment_id', 'id']:
+                value = getattr(related_object, attr, None)
+                if value:
+                    return str(value)
+        return str(self.id)
+
+
 class Shipment(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     SHIPMENT_TYPE_CHOICES = [
@@ -566,6 +677,30 @@ class Shipment(models.Model):
         blank=True,
         on_delete=models.SET_NULL,
         related_name='approved_shipments'
+    )
+    approved_by_backup = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='backup_approved_shipments'
+    )
+    approved_by_supreme = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='supreme_approved_shipments'
+    )
+    approval_stage = models.CharField(
+        max_length=30,
+        choices=[
+            ('draft', 'Draft'),
+            ('awaiting_supreme', 'Awaiting Supreme Approval'),
+            ('approved', 'Approved'),
+            ('rejected', 'Rejected'),
+        ],
+        default='draft',
     )
     approval_date = models.DateTimeField(null=True, blank=True)
     approval_remarks = models.TextField(blank=True)
@@ -1154,6 +1289,15 @@ DASHBOARD_FEATURE_CATALOG = [
         'url_name': 'feature-module',
         'scope': 'operations',
         'description': 'Approve shipment requests',
+        'url_params': {},
+    },
+    {
+        'key': 'warehouse_operations_dashboard',
+        'name': 'Warehouse Operations Dashboard',
+        'icon': 'bi bi-box-seam',
+        'url_name': 'feature-module',
+        'scope': 'operations',
+        'description': 'Warehouse shipment and dispatch overview',
         'url_params': {},
     },
     {

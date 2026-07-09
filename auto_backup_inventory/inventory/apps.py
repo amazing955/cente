@@ -16,6 +16,7 @@ class InventoryConfig(AppConfig):
             'Security Officer',
             'DR Team',
             'System Administrator',
+            'Supreme Approver',
         ]
 
         try:

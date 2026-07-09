@@ -1,0 +1,94 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}{{ dashboard_title }}{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="card shadow-sm">
+    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+      <div>
+        <h4 class="mb-1">Approval Review</h4>
+        <div class="small opacity-75">Review-only page for staged approvals. No requester forms are used here.</div>
+      </div>
+      <a href="{% url 'supreme-approver-dashboard' %}" class="btn btn-light btn-sm">Back to Dashboard</a>
+    </div>
+    <div class="card-body">
+      <div class="row g-4">
+        <div class="col-lg-7">
+          <h5 class="fw-semibold mb-3">General Information</h5>
+          <dl class="row">
+            <dt class="col-sm-4">Transaction ID</dt><dd class="col-sm-8">{{ approval.id }}</dd>
+            <dt class="col-sm-4">Transaction Type</dt><dd class="col-sm-8">{{ approval.transaction_type }}</dd>
+            <dt class="col-sm-4">Module</dt><dd class="col-sm-8">{{ approval.module }}</dd>
+            <dt class="col-sm-4">Priority</dt><dd class="col-sm-8">{{ approval.priority }}</dd>
+            <dt class="col-sm-4">Risk Level</dt><dd class="col-sm-8">{{ approval.risk_level }}</dd>
+            <dt class="col-sm-4">Current Status</dt><dd class="col-sm-8">{{ approval.status }}</dd>
+            <dt class="col-sm-4">Request Date</dt><dd class="col-sm-8">{{ approval.request_date|date:'d M Y H:i' }}</dd>
+            <dt class="col-sm-4">Approval Deadline</dt><dd class="col-sm-8">{{ approval.approval_deadline|default:'Not set' }}</dd>
+          </dl>
+
+          <h5 class="fw-semibold mt-4 mb-3">Transaction Summary</h5>
+          <div class="alert alert-info mb-0">{{ approval.summary|default:'No summary provided.' }}</div>
+
+          <h5 class="fw-semibold mt-4 mb-3">Changed Fields</h5>
+          {% if approval.requested_changes %}
+          <ul class="mb-0">
+            {% for change in approval.requested_changes %}
+            <li><strong>{{ change.field }}</strong>: {{ change.from_value }} → {{ change.to_value }}</li>
+            {% endfor %}
+          </ul>
+          {% else %}
+          <p class="text-muted mb-0">No field-level changes were provided for this request.</p>
+          {% endif %}
+        </div>
+        <div class="col-lg-5">
+          <h5 class="fw-semibold mb-3">Requester Information</h5>
+          <dl class="row">
+            <dt class="col-sm-4">Requested By</dt><dd class="col-sm-8">{{ requester_name }}</dd>
+            <dt class="col-sm-4">Role</dt><dd class="col-sm-8">{{ approval.requester.role|default:'-' }}</dd>
+            <dt class="col-sm-4">Department</dt><dd class="col-sm-8">Operations</dd>
+            <dt class="col-sm-4">Branch</dt><dd class="col-sm-8">{{ branch_name }}</dd>
+            <dt class="col-sm-4">Email</dt><dd class="col-sm-8">{{ approval.requester.email|default:'-' }}</dd>
+            <dt class="col-sm-4">Employee No.</dt><dd class="col-sm-8">{{ approval.requester.username|default:'-' }}</dd>
+          </dl>
+
+          <h5 class="fw-semibold mt-4 mb-3">Backup Administrator Information</h5>
+          <dl class="row">
+            <dt class="col-sm-4">Approved By</dt><dd class="col-sm-8">{{ backup_name }}</dd>
+            <dt class="col-sm-4">Approval Date</dt><dd class="col-sm-8">{{ approval.approved_at|date:'d M Y H:i'|default:'Pending' }}</dd>
+            <dt class="col-sm-4">Approval Comment</dt><dd class="col-sm-8">{{ approval.review_comment|default:'-' }}</dd>
+          </dl>
+
+          <h5 class="fw-semibold mt-4 mb-3">Related Objects</h5>
+          <ul class="mb-0">
+            {% if related_object %}
+            <li>Related record: {{ related_object }}</li>
+            {% else %}
+            <li>No related object available.</li>
+            {% endif %}
+            <li>Branch: {{ branch_name }}</li>
+            {% if approval.attachment_links %}
+            <li>Attachments available</li>
+            {% endif %}
+          </ul>
+        </div>
+      </div>
+
+      <hr class="my-4">
+
+      <form method="post" class="row g-3">
+        {% csrf_token %}
+        <div class="col-12">
+          <label class="form-label">Approval Comment</label>
+          <textarea class="form-control" name="comment" rows="4" placeholder="Record the decision rationale"></textarea>
+        </div>
+        <div class="col-12 d-flex flex-wrap gap-2">
+          <button type="submit" name="decision" value="reject" class="btn btn-outline-danger">Reject</button>
+          <button type="submit" name="decision" value="approve" class="btn btn-success">Approve</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -53,6 +53,9 @@ urlpatterns = [
     path('operations-dashboard/nav/<str:signed_token>/', views.operations_dashboard_navigation, name='operations-dashboard-navigation'),
     path('backup-dashboard/', views.backup_dashboard, name='backup-dashboard'),
     path('operations-dashboard/', views.operations_dashboard, name='operations-dashboard'),
+    path('warehouse-operations-dashboard/', views.warehouse_operations_dashboard, name='warehouse-operations-dashboard'),
+    path('supreme-approver-dashboard/', views.supreme_approver_dashboard, name='supreme-approver-dashboard'),
+    path('approvals/<uuid:approval_id>/review/', views.approval_review, name='approval-review'),
     path('operations-dashboard/start-shipment-request/', views.start_shipment_request, name='start-shipment-request'),
     # Additional operations dashboard views
     path('operations-dashboard/exception/<uuid:pk>/', views.exception_detail, name='exception-detail'),

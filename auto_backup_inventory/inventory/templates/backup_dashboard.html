@@ -24,33 +24,89 @@ body{
     position:fixed;
     top:0;
     left:0;
-    width:250px;
+    width:280px;
     height:100vh;
-    background: #023586;
+    background:#023586;
     color:white;
-    padding-top:20px;
+    padding:1.25rem 1rem;
+    z-index:1030;
+    overflow-y:auto;
 }
 
-.sidebar h4{
-    text-align:center;
-    margin-bottom:30px;
+.sidebar-brand{
+    display:flex;
+    align-items:center;
+    gap:.75rem;
+    padding:.25rem .5rem 1rem;
+    border-bottom:1px solid rgba(255,255,255,.18);
+    margin-bottom:1rem;
 }
 
-.sidebar a{
-    display:block;
-    color:white;
+.sidebar-brand img{
+    width:56px;
+    height:56px;
+    object-fit:cover;
+    border-radius:.6rem;
+    background:#ffffff;
+}
+
+.sidebar-brand h4{
+    font-size:1.05rem;
+    line-height:1.25;
+    margin:0;
+}
+
+.sidebar-section-title{
+    color:rgba(255,255,255,.58);
+    font-size:.72rem;
+    font-weight:700;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    padding:1rem .75rem .35rem;
+}
+
+.sidebar .nav-link{
+    display:flex;
+    align-items:center;
+    gap:.65rem;
+    color:rgba(255,255,255,.88);
     text-decoration:none;
-    padding:12px 20px;
-    transition:0.3s;
+    padding:.68rem .75rem;
+    border-radius:.65rem;
+    margin-bottom:.2rem;
+    transition:background-color .2s ease,color .2s ease;
 }
 
-.sidebar a:hover{
-    background:#0d6efd;
-    padding-left:30px;
+.sidebar .nav-link i{
+    width:1.25rem;
+    text-align:center;
+    font-size:1.02rem;
+}
+
+.sidebar .nav-link:hover,
+.sidebar .nav-link.active{
+    background:rgba(255,255,255,.14);
+    color:#ffffff;
+}
+
+.sidebar .nav-link.active{
+    box-shadow:inset 3px 0 0 #ffffff;
+}
+
+.sidebar .nav-link.text-danger{
+    color:#ffced2 !important;
+}
+
+.sidebar .nav-link.text-danger:hover{
+    color:#ffffff !important;
+}
+
+.sidebar-overlay{
+    display:none;
 }
 
 .main-content{
-    margin-left:250px;
+    margin-left:280px;
 }
 
 .feature-page-shell{
@@ -62,6 +118,10 @@ body{
 .navbar{
     background:white;
     box-shadow:0 2px 10px rgba(0,0,0,.1);
+}
+
+.sidebar-open-button{
+    display:none;
 }
 
 /* Cards */
@@ -177,6 +237,31 @@ footer{
     }
 }
 
+@media (max-width: 991.98px) {
+    .sidebar{
+        transform:translateX(-100%);
+        transition:transform .2s ease;
+    }
+    body.sidebar-open .sidebar{
+        transform:translateX(0);
+    }
+    .sidebar-overlay{
+        position:fixed;
+        inset:0;
+        background:rgba(15,23,42,.42);
+        z-index:1020;
+    }
+    body.sidebar-open .sidebar-overlay{
+        display:block;
+    }
+    .main-content{
+        margin-left:0;
+    }
+    .sidebar-open-button{
+        display:inline-flex;
+    }
+}
+
 </style>
 
 </head>
@@ -188,22 +273,68 @@ footer{
 
 <div class="sidebar">
 
-    <h4><div class="logo"> 
-            <img src="{% static 'inventory/lo.jpg' %}" alt="logo" width="150" height="100" style="padding-bottom:20px; border-radius:10px; box-shadow:0 0 10px rgba(255,255,255,0.5);">
-        </div> Tape Inventory</h4>
+    <div class="sidebar-brand">
+        <img src="{% static 'inventory/lo.png' %}" alt="Banking Logo">
+        <div>
+            <h4>Tape Inventory</h4>
+            <small class="text-white-50">Backup Administration</small>
+        </div>
+    </div>
 
-    <a href="{% url 'backup-dashboard' %}"><i class="bi bi-speedometer2"></i> Dashboard</a>
-    <a href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.add_tape %}"><i class="bi bi-plus-circle"></i> Add Tape</a>
-    <a href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.tape_inventory %}"><i class="bi bi-hdd-stack"></i> Tape Inventory</a>
-    <a href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.shipments %}"><i class="bi bi-truck"></i> Shipments</a>
-    <a href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.settings %}"><i class="bi bi-gear"></i> Settings</a>
-    <a href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.reconciliation %}"><i class="bi bi-arrow-repeat"></i> Reconciliation</a>
-    <a href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.reports %}"><i class="bi bi-file-earmark-bar-graph"></i> Reports</a>
-    <a href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.reconciliation_reports %}"><i class="bi bi-bar-chart-line-fill"></i> Reconciliation Reports</a>
-    <a href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.audit_logs %}"><i class="bi bi-shield-check"></i> Audit Logs</a>
-    <a href="{% url 'signout' %}" class="btn btn-danger"><i class="bi bi-box-arrow-left"></i> Logout</a>
+    <nav class="nav flex-column" aria-label="Backup dashboard navigation">
+        <div class="sidebar-section-title">Dashboard</div>
+        <a class="nav-link {% if active_dashboard_section == 'dashboard' %}active{% endif %}" href="{% url 'backup-dashboard' %}">
+            <i class="bi bi-speedometer2"></i> Overview
+        </a>
+        <a class="nav-link {% if active_dashboard_section == 'alerts' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.alerts %}">
+            <i class="bi bi-bell"></i> Notifications
+            {% if alert_count > 0 %}<span class="badge bg-danger ms-auto">{{ alert_count }}</span>{% endif %}
+        </a>
+
+        <div class="sidebar-section-title">Inventory</div>
+        <a class="nav-link {% if active_dashboard_section == 'add_tape' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.add_tape %}">
+            <i class="bi bi-plus-circle"></i> Add Tape
+        </a>
+        <a class="nav-link {% if active_dashboard_section == 'tape_inventory' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.tape_inventory %}">
+            <i class="bi bi-hdd-stack"></i> Tape Inventory
+        </a>
+
+        <div class="sidebar-section-title">Operations</div>
+        <a class="nav-link {% if active_dashboard_section == 'shipments' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.shipments %}">
+            <i class="bi bi-truck"></i> Shipments
+        </a>
+        <a class="nav-link {% if active_dashboard_section == 'reconciliation' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.reconciliation %}">
+            <i class="bi bi-arrow-repeat"></i> Reconciliation
+        </a>
+
+        <div class="sidebar-section-title">Reports & Audit</div>
+        <a class="nav-link {% if active_dashboard_section == 'reports' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.reports %}">
+            <i class="bi bi-file-earmark-bar-graph"></i> Reports
+        </a>
+        <a class="nav-link {% if active_dashboard_section == 'reconciliation_reports' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.reconciliation_reports %}">
+            <i class="bi bi-bar-chart-line-fill"></i> Reconciliation Reports
+        </a>
+        <a class="nav-link {% if active_dashboard_section == 'audit_logs' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.audit_logs %}">
+            <i class="bi bi-shield-check"></i> Audit Logs
+        </a>
+
+        <div class="sidebar-section-title">Account</div>
+        <a class="nav-link {% if active_dashboard_section == 'admin' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.admin %}">
+            <i class="bi bi-person-badge"></i> Administrator
+        </a>
+        <a class="nav-link {% if active_dashboard_section == 'profile' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.profile %}">
+            <i class="bi bi-person-circle"></i> My Profile
+        </a>
+        <a class="nav-link {% if active_dashboard_section == 'settings' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.settings %}">
+            <i class="bi bi-gear"></i> Settings
+        </a>
+        <a class="nav-link text-danger" href="{% url 'signout' %}">
+            <i class="bi bi-box-arrow-left"></i> Logout
+        </a>
+    </nav>
 
 </div>
+<button type="button" class="sidebar-overlay border-0" data-sidebar-close aria-label="Close navigation"></button>
 {% endif %}
 
 <!-- MAIN CONTENT -->
@@ -213,6 +344,12 @@ footer{
 <!-- NAVBAR -->
 
 <nav class="navbar navbar-expand-lg px-4">
+
+    {% if not hide_dashboard_sidebar %}
+    <button class="btn btn-outline-secondary btn-sm me-3 sidebar-open-button" type="button" data-sidebar-open aria-label="Open navigation">
+        <i class="bi bi-list"></i>
+    </button>
+    {% endif %}
 
     <div>
         <h5 class="mb-0">

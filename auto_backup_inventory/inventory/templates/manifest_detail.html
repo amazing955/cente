@@ -29,7 +29,13 @@
             <div class="card-body">
                 <h5 class="mb-3">Custody Details</h5>
                 <p><strong>Source:</strong> {{ shipment.source_location|default:'N/A' }}</p>
-                <p><strong>Releasing Custodian:</strong> {{ shipment.approved_by.get_full_name|default:shipment.approved_by.username|default:'N/A' }}</p>
+                <p><strong>Releasing Custodian:</strong>
+                    {% if shipment.approved_by %}
+                        {{ shipment.approved_by.get_full_name|default:shipment.approved_by.username|default:'N/A' }}
+                    {% else %}
+                        N/A
+                    {% endif %}
+                </p>
                 <p><strong>Receiving Custodian:</strong>
                     {% if shipment.status == 'Completed' or shipment.status == 'Delivered' or shipment.status == 'Return Accepted' %}
                         {{ shipment.received_by|default:shipment.receiving_custodian|default:'N/A' }}

@@ -42,6 +42,14 @@
                             {% endif %}
                         </div>
                         <div class="mb-3">
+                            <label for="id_tapes" class="form-label">Select tapes</label>
+                            {{ form.tapes }}
+                            <div class="form-text">Choose one or more tapes to include in the shipment request.</div>
+                            {% if form.tapes.errors %}
+                                <div class="text-danger small mt-1">{{ form.tapes.errors|join:", " }}</div>
+                            {% endif %}
+                        </div>
+                        <div class="mb-3">
                             <label for="id_request_details" class="form-label">Request details</label>
                             {{ form.request_details }}
                             {% if form.request_details.errors %}

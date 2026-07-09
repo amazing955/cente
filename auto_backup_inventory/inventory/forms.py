@@ -391,10 +391,20 @@ class ShipmentRequestSubmissionForm(forms.Form):
         required=False,
         widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Auto-filled from your account name (edit if needed)'})
     )
+    tapes = forms.ModelMultipleChoiceField(
+        queryset=Tape.objects.none(),
+        label='Select tapes',
+        required=False,
+        widget=forms.SelectMultiple(attrs={'class': 'form-select', 'size': '8'})
+    )
     request_details = forms.CharField(
         label='Request Details',
         widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 4, 'placeholder': 'Describe the shipment request'})
     )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['tapes'].queryset = Tape.objects.filter(status='Active').order_by('volser')
 
 
 class AuditorShipmentRequestForm(ShipmentRequestSubmissionForm):

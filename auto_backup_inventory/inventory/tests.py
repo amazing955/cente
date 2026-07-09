@@ -27,6 +27,7 @@ from .models import (
     DashboardFeaturePermission,
     DeliveryConfirmation,
     ExceptionCloseRequest,
+    PendingApproval,
     Reconciliation,
     Shipment,
     ShipmentApprovalHistory,
@@ -98,6 +99,236 @@ class PasswordResetFlowTests(TestCase):
 
         self.assertRedirects(response, reverse('password_reset_done'))
         self.assertEqual(len(mail.outbox), 1)
+
+
+class LoginAttemptLimitTests(TestCase):
+    def test_invalid_login_attempts_are_blocked_after_three_failures(self):
+        get_user_model().objects.create_user(
+            username='valid-user',
+            email='valid-user@example.com',
+            password='StrongPass123!',
+        )
+
+        for _ in range(3):
+            response = self.client.post(reverse('signin'), {'username': 'valid-user', 'password': 'wrong-pass'})
+            self.assertEqual(response.status_code, 200)
+            self.assertContains(response, 'Invalid username or password')
+
+        response = self.client.post(reverse('signin'), {'username': 'valid-user', 'password': 'wrong-pass'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Too many invalid login attempts')
+
+
+class DualApprovalWorkflowTests(TestCase):
+    def test_warehouse_role_redirects_to_warehouse_dashboard_after_signin(self):
+        group = Group.objects.create(name='Warehouse Ops')
+        user = get_user_model().objects.create_user(
+            username='warehouse-login-user',
+            email='warehouse-login-user@example.com',
+            password='StrongPass123!',
+        )
+        user.groups.add(group)
+
+        response = self.client.post(reverse('signin'), {
+            'username': 'warehouse-login-user',
+            'password': 'StrongPass123!',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Verification Code')
+        otp_code = self.client.session['pending_2fa_otp']
+
+        response = self.client.post(reverse('signin'), {'otp_code': otp_code})
+
+        self.assertRedirects(response, reverse('warehouse-operations-dashboard'))
+
+    def test_backup_admin_approval_requires_supreme_approver_for_final_release(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        supreme_group = Group.objects.create(name='Supreme Approver')
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-stage-user',
+            email='backup-stage-user@example.com',
+            password='StrongPass123!',
+        )
+        supreme_approver = get_user_model().objects.create_user(
+            username='supreme-stage-user',
+            email='supreme-stage-user@example.com',
+            password='StrongPass123!',
+        )
+        backup_admin.groups.add(backup_group)
+        supreme_approver.groups.add(supreme_group)
+
+        tape = Tape.objects.create(
+            volser='TAPE-DUAL-001',
+            barcode='BAR-DUAL-001',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+        )
+        courier_profile = CourierProfile.objects.create(
+            courier_id='CR-DUAL-01',
+            full_name='Courier One',
+            vehicle_number='V-1001',
+        )
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='HQ',
+            destination_location='DR',
+            priority_level='High',
+            created_by=backup_admin,
+            status='Pending',
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.post(reverse('shipment-approvals'), {
+            'form_type': 'backup_admin_decision',
+            'shipment_id': shipment.pk,
+            'tape_id': tape.pk,
+            'courier_id': courier_profile.pk,
+            'decision': 'approve',
+            'comments': 'First-stage approval',
+        })
+
+        shipment.refresh_from_db()
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(shipment.approval_stage, 'awaiting_supreme')
+        self.assertEqual(shipment.status, 'Pending')
+        self.assertEqual(shipment.approved_by_backup, backup_admin)
+        self.assertIsNone(shipment.approved_by_supreme)
+
+        self.client.force_login(supreme_approver)
+        response = self.client.post(reverse('shipment-approvals'), {
+            'form_type': 'backup_admin_decision',
+            'shipment_id': shipment.pk,
+            'decision': 'approve',
+            'comments': 'Final-stage approval',
+        })
+
+        shipment.refresh_from_db()
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(shipment.approval_stage, 'approved')
+        self.assertEqual(shipment.status, 'Approved')
+        self.assertEqual(shipment.approved_by_supreme, supreme_approver)
+
+    def test_warehouse_operations_dashboard_renders_for_warehouse_roles(self):
+        group = Group.objects.create(name='Warehouse Ops')
+        user = get_user_model().objects.create_user(
+            username='warehouse-role-user',
+            email='warehouse-role-user@example.com',
+            password='StrongPass123!',
+        )
+        user.groups.add(group)
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('warehouse-operations-dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Warehouse Operations Dashboard')
+
+
+class SupremeApproverDashboardTests(TestCase):
+    def test_supreme_approver_can_access_dashboard_and_view_pending_shipments(self):
+        supreme_group = Group.objects.create(name='Supreme Approver')
+        backup_group = Group.objects.create(name='Backup Administrator')
+        supreme_user = get_user_model().objects.create_user(
+            username='supreme-test-user',
+            email='supreme-test-user@example.com',
+            password='StrongPass123!',
+        )
+        supreme_user.groups.add(supreme_group)
+        backup_user = get_user_model().objects.create_user(
+            username='backup-test-user',
+            email='backup-test-user@example.com',
+            password='StrongPass123!',
+        )
+        backup_user.groups.add(backup_group)
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Pending',
+            approval_stage='awaiting_supreme',
+            approved_by_backup=backup_user,
+            created_by=backup_user,
+            last_updated_by=backup_user,
+            approval_remarks='Pending supreme approval.',
+        )
+
+        self.client.force_login(supreme_user)
+        response = self.client.get(reverse('supreme-approver-dashboard'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Pending Approvals')
+        self.assertContains(response, shipment.shipment_id)
+
+    def test_supreme_approver_review_page_is_read_only_and_approves_pending_request(self):
+        supreme_group = Group.objects.create(name='Supreme Approver')
+        backup_group = Group.objects.create(name='Backup Administrator')
+        supreme_user = get_user_model().objects.create_user(
+            username='supreme-review-user',
+            email='supreme-review-user@example.com',
+            password='StrongPass123!',
+        )
+        supreme_user.groups.add(supreme_group)
+        backup_user = get_user_model().objects.create_user(
+            username='backup-review-user',
+            email='backup-review-user@example.com',
+            password='StrongPass123!',
+        )
+        backup_user.groups.add(backup_group)
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            status='Approved',
+            approval_stage='awaiting_supreme',
+            approved_by_backup=backup_user,
+            created_by=backup_user,
+            last_updated_by=backup_user,
+            approval_remarks='Ready for supreme review.',
+        )
+        approval_request = PendingApproval.objects.create(
+            transaction_type='Shipment',
+            module='Shipment Workflow',
+            summary='Release Shipment for secure transfer.',
+            requester=backup_user,
+            backup_administrator=backup_user,
+            branch=backup_user.assigned_branch,
+            status='Awaiting Supreme Approval',
+            risk_level='High',
+            related_object_id=shipment.pk,
+            related_model='shipment',
+            request_payload={'shipment_id': shipment.shipment_id},
+        )
+
+        self.client.force_login(supreme_user)
+        response = self.client.get(reverse('approval-review', kwargs={'approval_id': approval_request.pk}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Approval Review')
+        self.assertNotContains(response, 'Create')
+        self.assertNotContains(response, 'Edit')
+
+        approval_response = self.client.post(
+            reverse('approval-review', kwargs={'approval_id': approval_request.pk}),
+            {'decision': 'approve', 'comment': 'Approved by supreme approver.'},
+        )
+
+        approval_request.refresh_from_db()
+        shipment.refresh_from_db()
+        self.assertEqual(approval_request.status, 'Approved')
+        self.assertEqual(shipment.approval_stage, 'approved')
+        self.assertEqual(shipment.status, 'Approved')
+        self.assertEqual(approval_response.status_code, 302)
+
+    def test_non_supreme_user_receives_forbidden(self):
+        user = get_user_model().objects.create_user(
+            username='regular-user',
+            email='regular-user@example.com',
+            password='StrongPass123!',
+        )
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('supreme-approver-dashboard'))
+
+        self.assertEqual(response.status_code, 302)
+        self.assertRedirects(response, f"{reverse('signin')}?next=/supreme-approver-dashboard/")
 
 
 class BackupDashboardSignedNavigationTests(TestCase):
@@ -1917,6 +2148,7 @@ class ShipmentWorkflowTests(TestCase):
             full_name='Courier Guy',
             phone_number='555-1000',
             email='courier-flow@example.com',
+            vehicle_number='VEH-100',
         )
 
         tape = Tape.objects.create(
@@ -2596,6 +2828,32 @@ class BackupDashboardShipmentApprovalTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, shipment.shipment_id)
         self.assertContains(response, 'Mombasa Branch')
+
+    def test_manifest_detail_renders_when_approval_user_is_missing(self):
+        courier_group = Group.objects.create(name='Courier')
+        courier_user = get_user_model().objects.create_user(
+            username='manifest-no-approval',
+            email='manifest-no-approval@example.com',
+            password='pass1234',
+            first_name='Manifest',
+            last_name='Courier',
+        )
+        courier_user.groups.add(courier_group)
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            destination_location='Mombasa Branch',
+            status='Approved',
+            releasing_custodian='Ops User',
+        )
+
+        self.client.force_login(courier_user)
+        response = self.client.get(reverse('manifest-detail', args=[shipment.pk]))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Manifest Details')
+        self.assertContains(response, 'N/A')
 
     def test_pickup_confirmation_works_for_courier_group_user_without_profile(self):
         courier_group = Group.objects.create(name='Courier')

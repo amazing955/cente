@@ -999,6 +999,9 @@ def feature_module(request, feature_key):
     if feature_key == 'shipment_approvals':
         return render_feature_view(shipment_approvals)
 
+    if feature_key == 'warehouse_operations_dashboard':
+        return render_feature_view(warehouse_operations_dashboard)
+
     if feature_key == 'add_tape':
         return render_feature_view(add_tape)
 
@@ -1011,6 +1014,9 @@ def feature_module(request, feature_key):
         'operations_dashboard', 'shipment_approvals', 'exception_management'
     }:
         return render_feature_view(operations_dashboard)
+
+    if is_warehouse_staff(request.user) and feature_key == 'warehouse_operations_dashboard':
+        return render_feature_view(warehouse_operations_dashboard)
 
     if is_it_compliance_auditor(request.user) and feature_key in {
         'audit_logs', 'reports', 'exception_management', 'operations_dashboard'
@@ -2010,6 +2016,9 @@ def has_dashboard_feature_access(user, feature_key):
     if is_backup_administrator(user):
         return True
 
+    if feature_key == 'warehouse_operations_dashboard' and is_warehouse_staff(user):
+        return True
+
     if DashboardFeatureExemption.objects.filter(user=user, feature_key=feature_key, is_active=True).exists():
         return False
 
@@ -2038,6 +2047,29 @@ def is_operations_manager(user):
     if (getattr(user, 'role', '') or '').strip().lower() == 'operations_manager':
         return True
     return user.groups.filter(name='Operations Manager').exists()
+
+
+def is_supreme_approver(user):
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    role_name = (getattr(user, 'role', '') or '').strip().lower()
+    if role_name in {'supreme approver', 'supreme_approver', 'supremeapprover'}:
+        return True
+    return user.groups.filter(name__icontains='supreme').exists()
+
+
+def is_warehouse_staff(user):
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser:
+        return True
+    role_name = (getattr(user, 'role', '') or '').strip().lower()
+    if role_name in {'warehouse', 'warehouse ops', 'warehouse_ops', 'warehouse_operator', 'warehouse operator'}:
+        return True
+    group_names = [group.name.lower() for group in user.groups.all()]
+    return any('warehouse' in name for name in group_names)
 
 
 def is_dr_team(user):
@@ -2809,6 +2841,8 @@ def signin(request):
     if pending_user_id:
         pending_user = get_user_model().objects.filter(pk=pending_user_id).first()
 
+    invalid_attempts = request.session.get('invalid_login_attempts', 0)
+
     if request.method == "POST":
         otp_code = (request.POST.get("otp_code") or "").strip()
         if otp_code:
@@ -2841,6 +2875,14 @@ def signin(request):
                         severity='success',
                     )
                     return redirect("backup-dashboard")
+                if is_supreme_approver(pending_user):
+                    AuditLog.objects.create(
+                        name='Supreme Approver Login',
+                        action=f'User {pending_user.username} signed in as Supreme Approver',
+                        user=pending_user,
+                        severity='success',
+                    )
+                    return redirect("supreme-approver-dashboard")
                 if is_operations_manager(pending_user):
                     AuditLog.objects.create(
                         name='Operations Manager Login',
@@ -2849,6 +2891,14 @@ def signin(request):
                         severity='success',
                     )
                     return redirect("operations-dashboard")
+                if is_warehouse_staff(pending_user):
+                    AuditLog.objects.create(
+                        name='Warehouse Ops Login',
+                        action=f'User {pending_user.username} signed in as Warehouse Operations',
+                        user=pending_user,
+                        severity='success',
+                    )
+                    return redirect("warehouse-operations-dashboard")
                 if is_courier(pending_user):
                     AuditLog.objects.create(
                         name='Courier Login',
@@ -2880,6 +2930,10 @@ def signin(request):
         username = request.POST.get("username")
         password = request.POST.get("password")
 
+        if invalid_attempts >= 3:
+            messages.error(request, "Too many invalid login attempts. Please try again later.")
+            return render(request, "signin.html", {'pending_2fa': bool(pending_user_id), 'pending_user': pending_user})
+
         user = authenticate(
             request,
             username=username,
@@ -2887,12 +2941,15 @@ def signin(request):
         )
 
         if user:
+            request.session['invalid_login_attempts'] = 0
             otp_code = ''.join(random.choices(string.digits, k=6))
             request.session['pending_2fa_user_id'] = str(user.pk)
             request.session['pending_2fa_otp'] = otp_code
             print(f"2FA OTP for {user.username}: {otp_code}")
             return render(request, "signin.html", {'pending_2fa': True, 'pending_user': user})
 
+        invalid_attempts += 1
+        request.session['invalid_login_attempts'] = invalid_attempts
         AuditLog.objects.create(
             name='Login Failed',
             action=f'Failed login attempt for username {username}',
@@ -4839,6 +4896,7 @@ def start_shipment_request(request):
         branch_name = assigned_branch.branch_name if assigned_branch else ''
         requester_name = (form.cleaned_data['requester_name'] or '').strip()
         request_details = form.cleaned_data['request_details'].strip()
+        selected_tapes = list(form.cleaned_data.get('tapes') or [])
         shipment = Shipment.objects.create(
             shipment_date=timezone.localdate(),
             shipment_type='Off-Site Transfer',
@@ -4852,6 +4910,10 @@ def start_shipment_request(request):
             created_by=request.user,
             last_updated_by=request.user,
         )
+        if selected_tapes:
+            shipment.tapes.add(*selected_tapes)
+            shipment.number_of_tapes = shipment.tapes.count()
+            shipment.save(update_fields=['number_of_tapes'])
         user_email = request.user.email or 'N/A'
         AuditLog.objects.create(
             name='Shipment Created',
@@ -4956,6 +5018,7 @@ def operations_dashboard(request):
             branch_name = assigned_branch.branch_name if assigned_branch else ''
             requester_name = (shipment_request_form.cleaned_data['requester_name'] or '').strip()
             request_details = shipment_request_form.cleaned_data['request_details'].strip()
+            selected_tapes = list(shipment_request_form.cleaned_data.get('tapes') or [])
             shipment = Shipment.objects.create(
                 shipment_date=timezone.localtime(),
                 shipment_type='Off-Site Transfer',
@@ -4969,6 +5032,10 @@ def operations_dashboard(request):
                 created_by=request.user,
                 last_updated_by=request.user,
             )
+            if selected_tapes:
+                shipment.tapes.add(*selected_tapes)
+                shipment.number_of_tapes = shipment.tapes.count()
+                shipment.save(update_fields=['number_of_tapes'])
             user_email = request.user.email or 'N/A'
             AuditLog.objects.create(
                 name='Shipment Created',
@@ -5458,7 +5525,264 @@ def operations_dashboard(request):
     return render(request, 'operations_dashboard.html', context)
 
 
-@user_passes_test(lambda u: u.is_superuser or is_operations_manager(u), login_url='signin')
+@user_passes_test(lambda u: u.is_superuser or is_warehouse_staff(u), login_url='signin')
+@login_required(login_url='signin')
+def warehouse_operations_dashboard(request):
+    shipments = Shipment.objects.select_related('created_by', 'approved_by_backup', 'approved_by_supreme').order_by('-shipment_date')
+    tapes = Tape.objects.order_by('volser')
+    pending_shipments = shipments.filter(status='Pending').order_by('-shipment_date')[:6]
+    in_transit_shipments = shipments.filter(status__in=['Dispatched', 'In Transit', 'Picked Up']).order_by('-shipment_date')[:8]
+    warehouse_ready = shipments.filter(status='Approved').order_by('-shipment_date')[:8]
+    open_reconciliations = Reconciliation.objects.filter(status='Open').order_by('-reconciliation_date')[:5]
+    recent_exceptions = ShipmentException.objects.select_related('shipment', 'tape', 'reported_by').order_by('-reported_date')[:5]
+    context = {
+        'dashboard_tabs': OPERATIONS_FEATURE_TABS,
+        'shipments': shipments[:12],
+        'pending_shipments': pending_shipments,
+        'in_transit_shipments': in_transit_shipments,
+        'warehouse_ready': warehouse_ready,
+        'total_tapes': tapes.count(),
+        'active_tapes': tapes.filter(status='Active').count(),
+        'in_transit_tapes': tapes.filter(status='In Transit').count(),
+        'damaged_tapes': tapes.filter(status='Damaged').count(),
+        'open_reconciliations': open_reconciliations,
+        'recent_exceptions': recent_exceptions,
+        'warehouse_summary': {
+            'pending_shipments': pending_shipments.count(),
+            'ready_for_dispatch': warehouse_ready.count(),
+            'in_transit': in_transit_shipments.count(),
+        },
+        'warehouse_tools': [
+            {
+                'title': 'Shipment approvals',
+                'description': 'Review incoming shipment requests and approve handoffs.',
+                'url': reverse('shipment-approvals'),
+                'badge': pending_shipments.count(),
+            },
+            {
+                'title': 'Dispatch queue',
+                'description': 'Track shipments already approved and ready to leave the warehouse.',
+                'url': reverse('warehouse-operations-dashboard'),
+                'badge': warehouse_ready.count(),
+            },
+            {
+                'title': 'Inventory control',
+                'description': 'Inspect tape inventory, status, and location readiness.',
+                'url': reverse('operations-dashboard'),
+                'badge': tapes.count(),
+            },
+            {
+                'title': 'Exception handling',
+                'description': 'Investigate incidents, damage reports, and custody issues.',
+                'url': reverse('operations-dashboard'),
+                'badge': recent_exceptions.count(),
+            },
+            {
+                'title': 'Reconciliation',
+                'description': 'Process open reconciliation work and scan requests.',
+                'url': reverse('operations-dashboard') + '?show_reconciliation=1&show_unscanned_tapes=1',
+                'badge': open_reconciliations.count(),
+            },
+            {
+                'title': 'Manifest review',
+                'description': 'Verify shipment manifests and tape lists before dispatch.',
+                'url': reverse('shipment-approvals'),
+                'badge': len(shipments[:5]),
+            },
+        ],
+    }
+    return render(request, 'warehouse_operations_dashboard.html', context)
+
+
+def _sync_pending_approval_queue_from_shipments():
+    pending_shipments = Shipment.objects.filter(
+        approval_stage='awaiting_supreme',
+        status__in=['Pending', 'More Info Requested'],
+    ).select_related('created_by', 'approved_by_backup', 'requesting_branch')
+
+    for shipment in pending_shipments:
+        if PendingApproval.objects.filter(related_model='shipment', related_object_id=str(shipment.pk)).exists():
+            continue
+
+        branch = shipment.requesting_branch or getattr(getattr(shipment, 'created_by', None), 'assigned_branch', None)
+        backup_admin = shipment.approved_by_backup or getattr(shipment, 'created_by', None)
+        requester = getattr(shipment, 'created_by', None)
+        risk_level = 'High' if shipment.priority_level in {'High', 'Critical'} else 'Medium'
+        PendingApproval.objects.create(
+            transaction_type='Shipment',
+            module='Shipment Workflow',
+            summary=f"Shipment {shipment.shipment_id} requires supreme approval.",
+            requester=requester,
+            backup_administrator=backup_admin,
+            branch=branch,
+            priority=shipment.priority_level or 'Normal',
+            risk_level=risk_level,
+            status='Awaiting Supreme Approval',
+            request_date=shipment.created_at or timezone.now(),
+            request_payload={'shipment_id': shipment.shipment_id},
+            related_object_id=str(shipment.pk),
+            related_model='shipment',
+            audit_history=[{
+                'action': 'Imported',
+                'user': 'System',
+                'timestamp': timezone.localtime().isoformat(),
+                'comment': 'Legacy shipment surfaced in approval queue',
+            }],
+        )
+
+
+@user_passes_test(lambda u: u.is_superuser or is_supreme_approver(u), login_url='signin')
+@login_required(login_url='signin')
+def supreme_approver_dashboard(request):
+    _sync_pending_approval_queue_from_shipments()
+    approval_queue = PendingApproval.objects.select_related('requester', 'backup_administrator', 'branch').filter(status__in=['Pending', 'Awaiting Supreme Approval', 'Clarification Requested']).order_by('-request_date')
+    pending_shipments = approval_queue.filter(status__in=['Pending', 'Awaiting Supreme Approval', 'Clarification Requested'])
+    pending_tape_requests = TapeRequest.objects.filter(status='Pending').select_related('tape', 'requested_by', 'shipment').order_by('-request_date')[:8]
+    pending_reconciliations = Reconciliation.objects.filter(status='Open').select_related('performed_by', 'reviewed_by').order_by('-reconciliation_date')[:8]
+    recent_audit = AuditLog.objects.select_related('user').order_by('-timestamp')[:8]
+    pending_user_changes = []
+    high_risk_transactions = [item for item in approval_queue[:6] if item.risk_level in {'High', 'Critical'}]
+
+    pending_count = pending_shipments.count()
+    approved_today = PendingApproval.objects.filter(approved_at__date=timezone.localdate(), status='Approved').count()
+    rejected_today = PendingApproval.objects.filter(approved_at__date=timezone.localdate(), status='Rejected').count()
+    pending_warehouse_release = Shipment.objects.filter(status='Approved').count()
+    pending_branch_updates = BankBranch.objects.filter(status='Active').count()
+    pending_bulk_imports = BranchImportLog.objects.filter(import_status='warning').count()
+    pending_barcode_changes = 0
+    pending_user_change_requests = len(pending_user_changes)
+
+    queue_payload = []
+    for approval in approval_queue[:30]:
+        queue_payload.append({
+            'id': approval.id,
+            'reference_id': approval.get_display_reference(),
+            'priority': approval.priority,
+            'risk': approval.risk_level,
+            'transaction_type': approval.transaction_type,
+            'module': approval.module,
+            'requester': approval.get_requester_name(),
+            'branch': approval.get_branch_name(),
+            'department': 'Operations',
+            'requested_date': approval.request_date,
+            'backup_admin': approval.get_backup_name(),
+            'backup_approval_time': approval.approved_at or approval.request_date,
+            'status': approval.status,
+            'age': (timezone.localdate() - approval.request_date.date()).days,
+            'approval': approval,
+        })
+
+    context = {
+        'dashboard_tabs': OPERATIONS_FEATURE_TABS,
+        'shipments': pending_shipments[:10],
+        'approval_queue': queue_payload,
+        'pending_count': pending_count,
+        'total_pending': pending_count,
+        'approved_today': approved_today,
+        'rejected_today': rejected_today,
+        'high_risk_transactions': high_risk_transactions,
+        'pending_tape_requests': pending_tape_requests,
+        'pending_reconciliations': pending_reconciliations,
+        'recent_audit': recent_audit,
+        'pending_user_changes': pending_user_changes,
+        'pending_warehouse_release': pending_warehouse_release,
+        'pending_bulk_imports': pending_bulk_imports,
+        'pending_barcode_changes': pending_barcode_changes,
+        'pending_user_change_requests': pending_user_change_requests,
+        'pending_branch_updates': pending_branch_updates,
+        'current_user': request.user,
+        'current_datetime': timezone.localtime(),
+        'last_login': request.user.last_login or timezone.localtime() - timedelta(days=1),
+        'approval_sla': '24 Hours',
+        'notifications': [
+            {'title': 'Urgent approval review', 'message': f'{pending_count} approvals need immediate attention.', 'type': 'warning'},
+            {'title': 'Warehouse release pending', 'message': 'Approved shipments await release.', 'type': 'info'},
+            {'title': 'System alert', 'message': 'Branch import warnings require review.', 'type': 'danger'},
+        ],
+        'recent_activity': [
+            {'user': 'A. Okello', 'timestamp': timezone.localtime() - timedelta(minutes=12), 'branch': 'Kampala Main', 'module': 'Approval Queue', 'action': 'Reviewed Pending Approval'},
+            {'user': 'J. Nankya', 'timestamp': timezone.localtime() - timedelta(minutes=41), 'branch': 'Jinja', 'module': 'Approval Queue', 'action': 'Rejected Pending Approval'},
+            {'user': 'R. Kato', 'timestamp': timezone.localtime() - timedelta(hours=2), 'branch': 'Mbarara', 'module': 'Approval Queue', 'action': 'Approved Pending Approval'},
+        ],
+        'high_risk_types': [
+            {'name': 'Tape Destruction', 'badge': 'Critical'},
+            {'name': 'Bulk Upload', 'badge': 'High'},
+            {'name': 'Permission Changes', 'badge': 'High'},
+            {'name': 'Role Changes', 'badge': 'Critical'},
+        ],
+        'dashboard_title': 'Enterprise Banking Approval Center',
+        'system_version': 'v2.4.1',
+        'database_name': 'backup_inventory',
+        'server_status': 'Operational',
+        'redis_status': 'Healthy',
+        'websocket_status': 'Connected',
+    }
+    return render(request, 'supreme_approver_dashboard.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_supreme_approver(u), login_url='signin')
+@login_required(login_url='signin')
+def approval_review(request, approval_id):
+    approval = get_object_or_404(PendingApproval.objects.select_related('requester', 'backup_administrator', 'branch'), pk=approval_id)
+    related_object = approval.get_related_object()
+
+    if request.method == 'POST':
+        decision = (request.POST.get('decision') or 'approve').strip().lower()
+        comment = (request.POST.get('comment') or '').strip()
+        if decision == 'approve':
+            approval.status = 'Approved'
+            approval.approved_by = request.user
+            approval.reviewed_by = request.user
+            approval.approved_at = timezone.localtime()
+            approval.review_comment = comment or 'Approved by supreme approver.'
+            approval.rejection_reason = ''
+            approval.audit_history = list(approval.audit_history or []) + [{
+                'action': 'Approved',
+                'user': request.user.get_full_name() or request.user.username,
+                'timestamp': timezone.localtime().isoformat(),
+                'comment': approval.review_comment,
+            }]
+            approval.save(update_fields=['status', 'approved_by', 'reviewed_by', 'approved_at', 'review_comment', 'rejection_reason', 'audit_history', 'updated_at'])
+            if related_object and hasattr(related_object, 'approval_stage'):
+                related_object.status = 'Approved'
+                related_object.approval_stage = 'approved'
+                related_object.approved_by_supreme = request.user
+                related_object.approved_by = request.user
+                related_object.approval_date = timezone.localtime()
+                related_object.approval_remarks = approval.review_comment
+                related_object.last_updated_by = request.user
+                related_object.save(update_fields=['status', 'approval_stage', 'approved_by_supreme', 'approved_by', 'approval_date', 'approval_remarks', 'last_updated_by', 'last_updated_at'])
+            messages.success(request, 'Approval request approved and the staged change was executed.')
+        else:
+            approval.status = 'Rejected'
+            approval.reviewed_by = request.user
+            approval.approved_at = timezone.localtime()
+            approval.review_comment = comment or 'Rejected by supreme approver.'
+            approval.rejection_reason = comment or 'Rejected by supreme approver.'
+            approval.audit_history = list(approval.audit_history or []) + [{
+                'action': 'Rejected',
+                'user': request.user.get_full_name() or request.user.username,
+                'timestamp': timezone.localtime().isoformat(),
+                'comment': approval.review_comment,
+            }]
+            approval.save(update_fields=['status', 'reviewed_by', 'approved_at', 'review_comment', 'rejection_reason', 'audit_history', 'updated_at'])
+            messages.warning(request, 'Approval request rejected and discarded.')
+        return redirect(reverse('supreme-approver-dashboard'))
+
+    context = {
+        'approval': approval,
+        'related_object': related_object,
+        'requester_name': approval.get_requester_name(),
+        'backup_name': approval.get_backup_name(),
+        'branch_name': approval.get_branch_name(),
+        'current_user': request.user,
+        'dashboard_title': 'Approval Review',
+        'is_read_only': True,
+    }
+    return render(request, 'approval_review.html', context)
+
+
+@user_passes_test(lambda u: u.is_superuser or is_operations_manager(u) or is_supreme_approver(u) or is_warehouse_staff(u), login_url='signin')
 @login_required(login_url='signin')
 def exception_detail(request, pk):
     exception = get_object_or_404(
@@ -5474,7 +5798,7 @@ def exception_detail(request, pk):
     return render(request, 'exception_detail.html', context)
 
 
-@user_passes_test(lambda u: u.is_superuser or is_operations_manager(u) or is_backup_administrator(u), login_url='signin')
+@user_passes_test(lambda u: u.is_superuser or is_operations_manager(u) or is_backup_administrator(u) or is_supreme_approver(u) or is_warehouse_staff(u), login_url='signin')
 @login_required(login_url='signin')
 def shipment_approvals(request):
     if request.method == 'POST' and request.POST.get('form_type') == 'backup_admin_decision':
@@ -5484,36 +5808,60 @@ def shipment_approvals(request):
         courier_id = request.POST.get('courier_id')
         decision = (request.POST.get('decision') or 'approve').strip().lower()
         comments = (request.POST.get('comments') or '').strip()
+        current_user_is_supreme = is_supreme_approver(request.user)
+        current_user_is_backup = is_backup_administrator(request.user) and not current_user_is_supreme
 
         if decision == 'approve':
-            if not tape_id or not courier_id:
-                messages.error(request, 'Select both an available tape and courier before approving the shipment.')
+            if current_user_is_backup:
+                if not tape_id or not courier_id:
+                    messages.error(request, 'Select both an available tape and courier before approving the shipment.')
+                    return redirect(reverse('shipment-approvals'))
+
+                tape = get_object_or_404(Tape, pk=tape_id)
+                courier_profile = get_object_or_404(CourierProfile, pk=courier_id)
+                shipment.tapes.add(tape)
+                shipment.number_of_tapes = shipment.tapes.count()
+                shipment.courier_name = courier_profile.full_name
+                shipment.courier_contact = courier_profile.phone_number
+                shipment.tracking_number = f"TRK-{shipment.shipment_id[:8].upper()}"
+                shipment.status = 'Pending'
+                shipment.approved_by_backup = request.user
+                shipment.approved_by = request.user
+                shipment.approval_stage = 'awaiting_supreme'
+                shipment.approval_date = timezone.localtime()
+                shipment.approval_remarks = comments or 'Approved by backup administrator. Pending supreme approver.'
+                shipment.last_updated_by = request.user
+                shipment.save(update_fields=['status', 'approved_by', 'approved_by_backup', 'approval_stage', 'approval_date', 'approval_remarks', 'last_updated_by', 'last_updated_at', 'courier_name', 'courier_contact', 'tracking_number', 'number_of_tapes'])
+                ShipmentApprovalHistory.objects.create(shipment=shipment, action='Approved', comments=comments, user=request.user)
+                AuditLog.objects.create(name='Shipment Awaiting Supreme Approval', action=f'Shipment {shipment.shipment_id} passed first-stage approval and is waiting for supreme approval.', user=request.user, severity='warning')
+                messages.success(request, 'Shipment passed first-stage backup approval and is awaiting supreme approval.')
                 return redirect(reverse('shipment-approvals'))
 
-            tape = get_object_or_404(Tape, pk=tape_id)
-            courier_profile = get_object_or_404(CourierProfile, pk=courier_id)
-            shipment.tapes.add(tape)
-            shipment.number_of_tapes = shipment.tapes.count()
-            shipment.courier_name = courier_profile.full_name
-            shipment.courier_contact = courier_profile.phone_number
-            shipment.tracking_number = f"TRK-{shipment.shipment_id[:8].upper()}"
-            shipment.status = 'Approved'
-            shipment.approved_by = request.user
-            shipment.approval_date = timezone.localtime()
-            shipment.approval_remarks = comments or 'Approved by backup administrator.'
-            shipment.last_updated_by = request.user
-            shipment.save(update_fields=['status', 'approved_by', 'approval_date', 'approval_remarks', 'last_updated_by', 'last_updated_at', 'courier_name', 'courier_contact', 'tracking_number', 'number_of_tapes'])
-            ShipmentApprovalHistory.objects.create(shipment=shipment, action='Approved', comments=comments, user=request.user)
-            AuditLog.objects.create(name='Shipment Assigned', action=f'Shipment {shipment.shipment_id} assigned to courier {courier_profile.full_name}', user=request.user, severity='success')
-            messages.success(request, 'Shipment approved and assigned to the courier.')
-            return redirect(reverse('shipment-approvals'))
+            if current_user_is_supreme:
+                shipment.status = 'Approved'
+                shipment.approval_stage = 'approved'
+                shipment.approved_by_supreme = request.user
+                shipment.approved_by = request.user
+                shipment.approval_date = timezone.localtime()
+                shipment.approval_remarks = comments or 'Approved by supreme approver.'
+                shipment.last_updated_by = request.user
+                shipment.save(update_fields=['status', 'approved_by', 'approved_by_supreme', 'approval_stage', 'approval_date', 'approval_remarks', 'last_updated_by', 'last_updated_at'])
+                ShipmentApprovalHistory.objects.create(shipment=shipment, action='Approved', comments=comments, user=request.user)
+                AuditLog.objects.create(name='Shipment Approved', action=f'Shipment {shipment.shipment_id} was approved by the supreme approver.', user=request.user, severity='success')
+                messages.success(request, 'Shipment approved and released for operations.')
+                return redirect(reverse('shipment-approvals'))
 
         shipment.status = 'Rejected' if decision == 'reject' else 'More Info Requested'
+        shipment.approval_stage = 'rejected' if decision == 'reject' else 'draft'
         shipment.approved_by = request.user
+        if current_user_is_backup:
+            shipment.approved_by_backup = request.user
+        if current_user_is_supreme:
+            shipment.approved_by_supreme = request.user
         shipment.approval_date = timezone.localtime()
         shipment.approval_remarks = comments or 'Shipment request was not approved.'
         shipment.last_updated_by = request.user
-        shipment.save(update_fields=['status', 'approved_by', 'approval_date', 'approval_remarks', 'last_updated_by', 'last_updated_at'])
+        shipment.save(update_fields=['status', 'approval_stage', 'approved_by', 'approved_by_backup', 'approved_by_supreme', 'approval_date', 'approval_remarks', 'last_updated_by', 'last_updated_at'])
         ShipmentApprovalHistory.objects.create(shipment=shipment, action='Rejected' if decision == 'reject' else 'Requested More Information', comments=comments, user=request.user)
         AuditLog.objects.create(name='Shipment Decision Recorded', action=f'Shipment {shipment.shipment_id} was {shipment.status.lower()}', user=request.user, severity='warning')
         messages.warning(request, 'Shipment decision recorded.')
@@ -5904,15 +6252,32 @@ def shipment_detail(request, shipment_pk):
                 messages.warning(request, 'Shipment cannot be approved until all compliance checks pass.')
             else:
                 if decision == 'approve':
-                    shipment.status = 'Approved'
+                    if is_backup_administrator(request.user) and not is_supreme_approver(request.user):
+                        shipment.status = 'Pending'
+                        shipment.approval_stage = 'awaiting_supreme'
+                        shipment.approved_by_backup = request.user
+                        shipment.approved_by = request.user
+                        shipment.approval_remarks = comments or 'Approved by backup administrator. Pending supreme approver.'
+                    elif is_supreme_approver(request.user):
+                        shipment.status = 'Approved'
+                        shipment.approval_stage = 'approved'
+                        shipment.approved_by_supreme = request.user
+                        shipment.approved_by = request.user
+                        shipment.approval_remarks = comments or 'Approved by supreme approver.'
+                    else:
+                        shipment.status = 'Approved'
+                        shipment.approval_stage = 'approved'
+                        shipment.approved_by = request.user
                 elif decision == 'reject':
                     shipment.status = 'Rejected'
+                    shipment.approval_stage = 'rejected'
+                    shipment.approved_by = request.user
                 else:
                     shipment.status = 'More Info Requested'
+                    shipment.approval_stage = 'draft'
+                    shipment.approved_by = request.user
 
-                shipment.approved_by = request.user
                 shipment.approval_date = timezone.localtime()
-                shipment.approval_remarks = comments
                 shipment.last_updated_by = request.user
                 shipment.save()
 
