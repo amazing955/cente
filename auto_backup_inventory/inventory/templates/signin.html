@@ -98,16 +98,27 @@
 
         {% if messages %}
             {% for message in messages %}
-                <div class="text-danger mb-3">
+                <div class="{% if 'ACCOUNT TEMPORARILY LOCKED' in message or 'temporarily locked' in message|lower %}alert alert-warning{% else %}text-danger{% endif %} mb-3">
                     {{ message }}
                 </div>
             {% endfor %}
         {% endif %}
 
+        {% if account_locked %}
+            <div class="alert alert-warning" role="alert">
+                <h5 class="fw-bold"><i class="bi bi-shield-lock me-2"></i>ACCOUNT TEMPORARILY LOCKED</h5>
+                <p class="mb-2">For security reasons your account has been temporarily locked due to multiple unsuccessful login attempts.</p>
+                <p class="mb-2">Please wait 15 minutes before trying again or contact your System Administrator.</p>
+                <div class="fw-bold">Remaining Lock Time:</div>
+                <div id="lock-timer" class="fs-5 fw-bold" data-seconds="{{ lock_remaining_seconds|default:900 }}">{{ lock_remaining_seconds|default:900 }}</div>
+                <a href="mailto:administrator@example.com" class="btn btn-outline-secondary btn-sm mt-3">Contact Administrator</a>
+            </div>
+        {% endif %}
+
         <form method="POST">
             {% csrf_token %}
 
-            {% if pending_2fa %}
+            {% if pending_2fa and not account_locked %}
                 <div class="mb-3">
                     <label class="form-label">Verification Code</label>
                     <div class="d-flex justify-content-between gap-2">
@@ -124,7 +135,12 @@
                     </div>
                     <input type="hidden" name="otp_code" id="otp_code_hidden">
                 </div>
-            {% else %}
+                <div class="mb-3">
+                    <button type="submit" name="action" value="resend_otp" class="btn btn-outline-secondary btn-sm w-100" id="resend-otp-btn">
+                        <i class="bi bi-arrow-repeat me-2"></i>Resend Code
+                    </button>
+                </div>
+            {% elif not account_locked %}
                 <div class="mb-3">
                     <label class="form-label">Username</label>
                     <input
@@ -156,9 +172,11 @@
                 </label>
             </div>
 
+            {% if not account_locked %}
             <button type="submit" class="btn btn-primary btn-login">
                 {% if pending_2fa %}Verify Code{% else %}Sign In{% endif %}
             </button>
+            {% endif %}
 
         </form>
 
@@ -181,9 +199,40 @@
         const otpBoxes = Array.from(document.querySelectorAll('.otp-box'));
         const hiddenOtp = document.getElementById('otp_code_hidden');
         const form = document.querySelector('form');
+        const resendButton = document.getElementById('resend-otp-btn');
+        const lockTimer = document.getElementById('lock-timer');
+
+        if (lockTimer) {
+            let remaining = parseInt(lockTimer.dataset.seconds || '0', 10);
+            const countdown = setInterval(function () {
+                remaining = Math.max(0, remaining - 1);
+                const minutes = Math.floor(remaining / 60);
+                const seconds = remaining % 60;
+                lockTimer.textContent = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+                if (remaining <= 0) {
+                    clearInterval(countdown);
+                    window.location.reload();
+                }
+            }, 1000);
+        }
 
         if (!otpBoxes.length || !hiddenOtp || !form) {
             return;
+        }
+
+        if (resendButton) {
+            let secondsRemaining = 60;
+            resendButton.disabled = true;
+            const resendCountdown = setInterval(function () {
+                secondsRemaining -= 1;
+                if (secondsRemaining <= 0) {
+                    resendButton.disabled = false;
+                    resendButton.innerHTML = '<i class="bi bi-arrow-repeat me-2"></i>Resend Code';
+                    clearInterval(resendCountdown);
+                    return;
+                }
+                resendButton.innerHTML = `<i class="bi bi-arrow-repeat me-2"></i>Resend available in ${secondsRemaining}`;
+            }, 1000);
         }
 
         function syncOtp() {

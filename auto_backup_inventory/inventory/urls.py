@@ -51,6 +51,7 @@ urlpatterns = [
     path('dashboard/', views.dashboard, name='dashboard'),
     path('backup-dashboard/nav/<str:signed_token>/', views.backup_dashboard_navigation, name='backup-dashboard-navigation'),
     path('operations-dashboard/nav/<str:signed_token>/', views.operations_dashboard_navigation, name='operations-dashboard-navigation'),
+    path('switch-dashboard/<str:dashboard_key>/', views.switch_dashboard, name='switch-dashboard'),
     path('backup-dashboard/', views.backup_dashboard, name='backup-dashboard'),
     path('operations-dashboard/', views.operations_dashboard, name='operations-dashboard'),
     path('warehouse-operations-dashboard/', views.warehouse_operations_dashboard, name='warehouse-operations-dashboard'),

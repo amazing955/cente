@@ -12,6 +12,26 @@
   <small>Final Approval Control</small>
 </div>
 
+{% if user_dashboard_roles %}
+<div class="sidebar-section-label">My Dashboards</div>
+<div class="px-3 pb-2">
+  <div class="dropdown">
+    <button class="btn btn-light dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+      <i class="bi bi-grid-1x2 me-2"></i>{{ current_dashboard_label|default:'Dashboard' }}
+    </button>
+    <ul class="dropdown-menu shadow-sm w-100">
+      {% for dashboard in user_dashboard_roles %}
+        <li>
+          <a class="dropdown-item{% if dashboard.dashboard_key == current_dashboard_key %} active{% endif %}" href="{% url 'switch-dashboard' dashboard_key=dashboard.dashboard_key %}">
+            {{ dashboard.label }}{% if dashboard.is_primary %} <span class="badge bg-success ms-2">Primary</span>{% endif %}
+          </a>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+{% endif %}
+
 <nav class="nav flex-column sidebar-menu supreme-nav px-3 pb-3">
   <div class="sidebar-section-label">Dashboard</div>
   <a class="nav-link active d-flex align-items-center justify-content-between" href="#approval-overview">
@@ -140,7 +160,10 @@
                 </div>
                 <div>
                   <div class="text-uppercase small fw-semibold opacity-75">Enterprise Banking Approval Console</div>
-                  <h2 class="mb-2 fw-bold">Welcome back, {{ current_user.get_full_name|default:current_user.username }}</h2>
+                  {% if current_dashboard_label %}
+                  <div class="small opacity-75 mb-1">Current Dashboard: {{ current_dashboard_label }}</div>
+                  {% endif %}
+                  <h2 class="mb-2 fw-bold">Welcome back, {% if current_user %}{{ current_user.get_full_name|default:current_user.username }}{% else %}Supreme Approver{% endif %}</h2>
                   <p class="mb-3 opacity-75">Highest authority approvals for sensitive banking operations, warehouse releases, tape movements, and critical user changes.</p>
                   <div class="d-flex flex-wrap gap-2">
                     <span class="badge bg-white text-primary"><i class="bi bi-calendar3 me-1"></i>{{ current_datetime|date:'d M Y' }}</span>
@@ -728,8 +751,8 @@
             {% for log in recent_audit %}
             <tr>
               <td>{{ log.timestamp|date:'d M Y H:i' }}</td>
-              <td>{{ log.user.get_full_name|default:log.user.username|default:'System' }}</td>
-              <td>{{ log.action|default:log.name|default:log.message }}</td>
+              <td>{% if log.user %}{{ log.user.get_full_name|default:log.user.username }}{% else %}System{% endif %}</td>
+              <td>{% if log.action %}{{ log.action }}{% elif log.name %}{{ log.name }}{% elif log.message %}{{ log.message }}{% else %}-{% endif %}</td>
               <td>{{ log.module }}</td>
               <td><span class="badge bg-{{ log.severity|default:'info' }}">{{ log.severity }}</span></td>
             </tr>

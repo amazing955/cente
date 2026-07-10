@@ -177,6 +177,20 @@ def operations_dashboard_navigation(request, signed_token):
     return operations_dashboard(request)
 
 
+@login_required(login_url='signin')
+def switch_dashboard(request, dashboard_key):
+    dashboard_roles = _get_user_dashboard_roles(request.user)
+    allowed_dashboard_keys = {role['dashboard_key'] for role in dashboard_roles}
+    if dashboard_key not in allowed_dashboard_keys and dashboard_key != 'admin':
+        raise PermissionDenied
+
+    previous_dashboard_key = request.session.get('active_dashboard_key') or _get_dashboard_destination_key(request.user, request=request)
+    request.session['active_dashboard_key'] = dashboard_key
+    request.session['active_dashboard_label'] = ROLE_DASHBOARD_LABELS.get(dashboard_key, dashboard_key.replace('_', ' ').title())
+    _record_dashboard_switch(request, previous_dashboard_key, dashboard_key)
+    return redirect(_get_dashboard_url(dashboard_key))
+
+
 def _parse_exception_metadata(alert):
     exception_id = None
     description = None
@@ -928,6 +942,31 @@ from .forms import *
 from .models import *
 
 
+ROLE_DASHBOARD_ROUTE_MAP = {
+    'admin': 'dashboard',
+    'backup': 'backup-dashboard',
+    'operations': 'operations-dashboard',
+    'warehouse': 'warehouse-operations-dashboard',
+    'auditor': 'auditor-dashboard',
+    'supreme': 'supreme-approver-dashboard',
+    'courier': 'courier-dashboard',
+    'dr': 'investigation-dashboard',
+    'security': 'dashboard',
+}
+
+ROLE_DASHBOARD_LABELS = {
+    'admin': 'System Administrator',
+    'backup': 'Backup Administrator',
+    'operations': 'Operations Manager',
+    'warehouse': 'Warehouse Operations',
+    'auditor': 'Compliance Auditor',
+    'supreme': 'Supreme Approver',
+    'courier': 'Courier',
+    'dr': 'DR Team',
+    'security': 'Information Security Officer',
+}
+
+
 def is_valid_uuid(value):
     if not value:
         return False
@@ -942,6 +981,132 @@ def get_object_by_uuid_pk(model, pk_value):
     if not is_valid_uuid(pk_value):
         return None
     return model.objects.filter(pk=pk_value).first()
+
+
+def _get_legacy_dashboard_key_for_user(user):
+    if not user or not getattr(user, 'is_authenticated', False):
+        return None
+
+    if user.is_superuser:
+        return 'admin'
+
+    role_name = (getattr(user, 'role', '') or '').strip().lower()
+    if role_name == 'operations_manager':
+        return 'operations'
+    if role_name == 'auditor':
+        return 'auditor'
+
+    group_names = [group.name.lower() for group in user.groups.all()]
+    for group_name in group_names:
+        if 'supreme' in group_name:
+            return 'supreme'
+        if 'backup' in group_name:
+            return 'backup'
+        if 'operations' in group_name:
+            return 'operations'
+        if 'warehouse' in group_name:
+            return 'warehouse'
+        if 'auditor' in group_name:
+            return 'auditor'
+        if 'courier' in group_name:
+            return 'courier'
+        if 'dr' in group_name:
+            return 'dr'
+        if 'security' in group_name:
+            return 'security'
+
+    return 'backup'
+
+
+def _get_user_dashboard_roles(user):
+    if not user or not getattr(user, 'is_authenticated', False):
+        return []
+
+    approved_assignments = UserRoleAssignment.objects.select_related('role', 'role__group').filter(
+        user=user,
+        status__in=['Backup Approved', 'Supreme Approved', 'Active'],
+        role__is_active=True,
+    ).order_by('-is_primary_dashboard', 'role__sort_order', 'role__name')
+
+    role_entries = []
+    seen_dashboard_keys = set()
+    for assignment in approved_assignments:
+        role = assignment.role
+        if not role or role.dashboard_key in seen_dashboard_keys:
+            continue
+        seen_dashboard_keys.add(role.dashboard_key)
+        role_entries.append({
+            'id': str(role.id),
+            'label': role.name,
+            'dashboard_key': role.dashboard_key,
+            'url_name': ROLE_DASHBOARD_ROUTE_MAP.get(role.dashboard_key, 'dashboard'),
+            'url': reverse(ROLE_DASHBOARD_ROUTE_MAP.get(role.dashboard_key, 'dashboard')),
+            'is_primary': assignment.is_primary_dashboard,
+            'status': assignment.status,
+        })
+
+    if role_entries:
+        return role_entries
+
+    legacy_dashboard_key = _get_legacy_dashboard_key_for_user(user)
+    if not legacy_dashboard_key:
+        return []
+
+    return [{
+        'id': legacy_dashboard_key,
+        'label': ROLE_DASHBOARD_LABELS.get(legacy_dashboard_key, legacy_dashboard_key.replace('_', ' ').title()),
+        'dashboard_key': legacy_dashboard_key,
+        'url_name': ROLE_DASHBOARD_ROUTE_MAP.get(legacy_dashboard_key, 'dashboard'),
+        'url': reverse(ROLE_DASHBOARD_ROUTE_MAP.get(legacy_dashboard_key, 'dashboard')),
+        'is_primary': True,
+        'status': 'Active',
+    }]
+
+
+def _get_dashboard_destination_key(user, request=None):
+    dashboard_roles = _get_user_dashboard_roles(user)
+    if not dashboard_roles:
+        return None
+
+    if request is not None:
+        session_dashboard_key = request.session.get('active_dashboard_key')
+        if session_dashboard_key and any(role['dashboard_key'] == session_dashboard_key for role in dashboard_roles):
+            return session_dashboard_key
+
+    primary_role = next((role for role in dashboard_roles if role.get('is_primary')), None)
+    if primary_role:
+        return primary_role['dashboard_key']
+    return dashboard_roles[0]['dashboard_key']
+
+
+def _get_dashboard_url(dashboard_key):
+    route_name = ROLE_DASHBOARD_ROUTE_MAP.get(dashboard_key, 'dashboard')
+    return reverse(route_name)
+
+
+def _record_dashboard_switch(request, previous_dashboard_key, new_dashboard_key):
+    if not request.user.is_authenticated or previous_dashboard_key == new_dashboard_key:
+        return
+
+    browser = (request.META.get('HTTP_USER_AGENT') or '')[:255]
+    ip_address = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', 'unknown'))
+    AuditLog.objects.create(
+        name='Dashboard Switched',
+        action=f'{request.user.username} switched dashboard from {previous_dashboard_key} to {new_dashboard_key}',
+        user=request.user,
+        message=f'previous_dashboard={previous_dashboard_key}|new_dashboard={new_dashboard_key}|ip={ip_address}|browser={browser}',
+        severity='info',
+    )
+
+
+def _redirect_user_to_dashboard(request, user):
+    dashboard_key = _get_dashboard_destination_key(user, request=request)
+    if not dashboard_key:
+        return None
+
+    request.session['active_dashboard_key'] = dashboard_key
+    request.session['active_dashboard_label'] = ROLE_DASHBOARD_LABELS.get(dashboard_key, dashboard_key.replace('_', ' ').title())
+    return redirect(_get_dashboard_url(dashboard_key))
 
 
 def _resolve_courier_selection(courier_selection):
@@ -2835,86 +3000,214 @@ def reconciliation_review_view(request):
     return render(request, 'auditor_dashboard.html', context)
 
 
+def _get_client_ip(request):
+    forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR', '')
+    if forwarded_for:
+        return forwarded_for.split(',')[0].strip()
+    return request.META.get('REMOTE_ADDR', 'Unknown')
+
+
+def _get_client_browser_and_os(request):
+    user_agent = request.META.get('HTTP_USER_AGENT', '') or ''
+    browser = 'Unknown'
+    operating_system = 'Unknown'
+    lower_agent = user_agent.lower()
+
+    if 'edg/' in lower_agent:
+        browser = 'Edge'
+    elif 'chrome' in lower_agent:
+        browser = 'Chrome'
+    elif 'firefox' in lower_agent:
+        browser = 'Firefox'
+    elif 'safari' in lower_agent:
+        browser = 'Safari'
+    elif 'opr/' in lower_agent or 'opera' in lower_agent:
+        browser = 'Opera'
+
+    if 'windows' in lower_agent:
+        operating_system = 'Windows'
+    elif 'macintosh' in lower_agent or 'mac os' in lower_agent:
+        operating_system = 'macOS'
+    elif 'linux' in lower_agent:
+        operating_system = 'Linux'
+    elif 'android' in lower_agent:
+        operating_system = 'Android'
+    elif 'iphone' in lower_agent or 'ipad' in lower_agent:
+        operating_system = 'iOS'
+
+    return browser, operating_system
+
+
+def _create_auth_audit_log(request, username, action, severity='warning', message=''):
+    browser, operating_system = _get_client_browser_and_os(request)
+    ip_address = _get_client_ip(request)
+    AuditLog.objects.create(
+        name=action,
+        action=action,
+        user=None,
+        message=(message or f'Username={username or "unknown"}; IP={ip_address}; Browser={browser}; OS={operating_system}'),
+        severity=severity,
+    )
+
+
+def _reset_account_lock(user):
+    if not user:
+        return False
+    if user.account_locked_until and timezone.now() >= user.account_locked_until:
+        user.failed_login_attempts = 0
+        user.account_locked_until = None
+        user.save(update_fields=['failed_login_attempts', 'account_locked_until'])
+        return True
+    return False
+
+
+def _is_account_locked(user):
+    if not user:
+        return False
+    if user.account_locked_until and timezone.now() < user.account_locked_until:
+        return True
+    if user.account_locked_until and timezone.now() >= user.account_locked_until:
+        _reset_account_lock(user)
+    return False
+
+
+def _build_login_context(request, pending_user=None, pending_2fa=False, account_locked=False, lock_remaining_seconds=None, resend_cooldown_remaining=None):
+    return {
+        'pending_2fa': pending_2fa,
+        'pending_user': pending_user,
+        'account_locked': account_locked,
+        'lock_remaining_seconds': lock_remaining_seconds,
+        'resend_cooldown_remaining': resend_cooldown_remaining,
+    }
+
+
+def _issue_otp(request, user):
+    otp_code = ''.join(random.choices(string.digits, k=6))
+    user.otp_code = otp_code
+    user.otp_expires_at = timezone.now() + timedelta(minutes=5)
+    user.save(update_fields=['otp_code', 'otp_expires_at'])
+
+    request.session['pending_2fa_user_id'] = str(user.pk)
+    request.session['pending_2fa_otp'] = otp_code
+    request.session['pending_2fa_otp_expires_at'] = user.otp_expires_at.isoformat()
+    print(f"2FA OTP generated for {user.username}: {otp_code}")
+    return otp_code
+
+
+def _send_otp_email(user, otp_code):
+    subject = 'Your verification code'
+    body = (
+        f'Hello {user.get_full_name() or user.username},\n\n'
+        f'Your new verification code is: {otp_code}\n\n'
+        'Please use this code to complete your sign-in.\n'
+    )
+    send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=True)
+
+
 def signin(request):
     pending_user_id = request.session.get('pending_2fa_user_id')
     pending_user = None
     if pending_user_id:
         pending_user = get_user_model().objects.filter(pk=pending_user_id).first()
 
+    if pending_user:
+        _reset_account_lock(pending_user)
+
     invalid_attempts = request.session.get('invalid_login_attempts', 0)
+    account_locked = bool(pending_user and _is_account_locked(pending_user))
+    lock_remaining_seconds = None
+    if account_locked and pending_user and pending_user.account_locked_until:
+        lock_remaining_seconds = max(0, int((pending_user.account_locked_until - timezone.now()).total_seconds()))
 
     if request.method == "POST":
+        action = (request.POST.get("action") or "").strip()
+        if action == 'resend_otp' and pending_user:
+            if _is_account_locked(pending_user):
+                messages.error(request, 'Your account is temporarily locked. Please try again later.')
+                return render(request, 'signin.html', _build_login_context(request, pending_user=pending_user, pending_2fa=True, account_locked=True, lock_remaining_seconds=lock_remaining_seconds))
+
+            now = timezone.now()
+            if not pending_user.otp_resend_window_started_at or now - pending_user.otp_resend_window_started_at > timedelta(minutes=15):
+                pending_user.otp_resend_count = 0
+                pending_user.otp_resend_window_started_at = now
+            if pending_user.otp_resend_count >= 5:
+                messages.error(request, 'You have exceeded the maximum OTP resend attempts. Please try again later.')
+                return render(request, 'signin.html', _build_login_context(request, pending_user=pending_user, pending_2fa=True, resend_cooldown_remaining=0))
+
+            otp_code = _issue_otp(request, pending_user)
+            pending_user.otp_resend_count += 1
+            pending_user.save(update_fields=['otp_resend_count', 'otp_resend_window_started_at', 'otp_code', 'otp_expires_at'])
+            print(f"2FA OTP resent for {pending_user.username}: {otp_code}")
+            _send_otp_email(pending_user, otp_code)
+            AuditLog.objects.create(
+                name='OTP Resent',
+                action='OTP Resent',
+                user=pending_user,
+                message=f'OTP resent for {pending_user.username}',
+                severity='info',
+            )
+            messages.success(request, 'A new verification code has been sent.')
+            return render(request, 'signin.html', _build_login_context(request, pending_user=pending_user, pending_2fa=True, resend_cooldown_remaining=60))
+
         otp_code = (request.POST.get("otp_code") or "").strip()
         if otp_code:
+            if pending_user and _is_account_locked(pending_user):
+                messages.error(request, 'Your account is temporarily locked. Please try again later.')
+                return render(request, 'signin.html', _build_login_context(request, pending_user=pending_user, pending_2fa=True, account_locked=True, lock_remaining_seconds=lock_remaining_seconds))
+
             expected_otp = request.session.get('pending_2fa_otp')
-            if pending_user and expected_otp and otp_code == expected_otp:
+            if pending_user and expected_otp and otp_code == expected_otp and pending_user.otp_code == expected_otp:
                 request.session.pop('pending_2fa_user_id', None)
                 request.session.pop('pending_2fa_otp', None)
+                request.session.pop('pending_2fa_otp_expires_at', None)
+                pending_user.otp_code = ''
+                pending_user.otp_expires_at = None
+                pending_user.failed_login_attempts = 0
+                pending_user.account_locked_until = None
+                pending_user.otp_resend_count = 0
+                pending_user.otp_resend_window_started_at = None
+                pending_user.save(update_fields=['otp_code', 'otp_expires_at', 'failed_login_attempts', 'account_locked_until', 'otp_resend_count', 'otp_resend_window_started_at'])
                 login(request, pending_user)
-                if pending_user.is_superuser:
+                request.session['invalid_login_attempts'] = 0
+                dashboard_key = _get_dashboard_destination_key(pending_user, request=request)
+                if pending_user.is_superuser or dashboard_key == 'admin':
                     AuditLog.objects.create(
                         name='Admin Login',
                         action=f'User {pending_user.username} signed in as superuser',
                         user=pending_user,
                         severity='success',
                     )
-                    return redirect("/admin/")
-                if is_it_compliance_auditor(pending_user):
+                    return redirect('/admin/')
+
+                dashboard_log_labels = {
+                    'backup': 'Backup Administrator',
+                    'operations': 'Operations Manager',
+                    'warehouse': 'Warehouse Operations',
+                    'auditor': 'Compliance Auditor',
+                    'supreme': 'Supreme Approver',
+                    'courier': 'Courier',
+                    'dr': 'DR Team',
+                    'security': 'Information Security Officer',
+                }
+                dashboard_login_names = {
+                    'backup': 'Backup Administrator Login',
+                    'operations': 'Operations Manager Login',
+                    'warehouse': 'Warehouse Ops Login',
+                    'auditor': 'Compliance Auditor Login',
+                    'supreme': 'Supreme Approver Login',
+                    'courier': 'Courier Login',
+                    'dr': 'DR Team Login',
+                    'security': 'Security Officer Login',
+                }
+                if dashboard_key in dashboard_log_labels:
                     AuditLog.objects.create(
-                        name='Compliance Auditor Login',
-                        action=f'User {pending_user.username} signed in as IT Compliance Auditor',
+                        name=dashboard_login_names.get(dashboard_key, 'Dashboard Login'),
+                        action=f'User {pending_user.username} signed in as {dashboard_log_labels[dashboard_key]}',
                         user=pending_user,
                         severity='success',
                     )
-                    return redirect("auditor-dashboard")
-                if is_backup_administrator(pending_user):
-                    AuditLog.objects.create(
-                        name='Backup Administrator Login',
-                        action=f'User {pending_user.username} signed in as Backup Administrator',
-                        user=pending_user,
-                        severity='success',
-                    )
-                    return redirect("backup-dashboard")
-                if is_supreme_approver(pending_user):
-                    AuditLog.objects.create(
-                        name='Supreme Approver Login',
-                        action=f'User {pending_user.username} signed in as Supreme Approver',
-                        user=pending_user,
-                        severity='success',
-                    )
-                    return redirect("supreme-approver-dashboard")
-                if is_operations_manager(pending_user):
-                    AuditLog.objects.create(
-                        name='Operations Manager Login',
-                        action=f'User {pending_user.username} signed in as Operations Manager',
-                        user=pending_user,
-                        severity='success',
-                    )
-                    return redirect("operations-dashboard")
-                if is_warehouse_staff(pending_user):
-                    AuditLog.objects.create(
-                        name='Warehouse Ops Login',
-                        action=f'User {pending_user.username} signed in as Warehouse Operations',
-                        user=pending_user,
-                        severity='success',
-                    )
-                    return redirect("warehouse-operations-dashboard")
-                if is_courier(pending_user):
-                    AuditLog.objects.create(
-                        name='Courier Login',
-                        action=f'User {pending_user.username} signed in as Courier',
-                        user=pending_user,
-                        severity='success',
-                    )
-                    return redirect("courier-dashboard")
-                if is_dr_team(pending_user):
-                    AuditLog.objects.create(
-                        name='DR Team Login',
-                        action=f'User {pending_user.username} signed in as DR Team',
-                        user=pending_user,
-                        severity='success',
-                    )
-                    return redirect("investigation-dashboard")
+                    return _redirect_user_to_dashboard(request, pending_user)
+
                 AuditLog.objects.create(
                     name='Unauthorized Dashboard Login',
                     action=f'User {pending_user.username} attempted dashboard login without appropriate role',
@@ -2922,43 +3215,60 @@ def signin(request):
                     severity='warning',
                 )
                 logout(request)
-                messages.error(request, "You do not have access to the dashboard.")
-                return render(request, "signin.html", {'pending_2fa': False})
-            messages.error(request, "Invalid verification code")
-            return render(request, "signin.html", {'pending_2fa': True, 'pending_user': pending_user})
+                messages.error(request, 'You do not have access to the dashboard.')
+                return render(request, 'signin.html', _build_login_context(request, pending_2fa=False))
+            messages.error(request, 'Invalid verification code')
+            return render(request, 'signin.html', _build_login_context(request, pending_user=pending_user, pending_2fa=True))
 
-        username = request.POST.get("username")
-        password = request.POST.get("password")
+        username = request.POST.get('username')
+        password = request.POST.get('password')
 
-        if invalid_attempts >= 3:
-            messages.error(request, "Too many invalid login attempts. Please try again later.")
-            return render(request, "signin.html", {'pending_2fa': bool(pending_user_id), 'pending_user': pending_user})
+        if pending_user and _is_account_locked(pending_user):
+            messages.error(request, 'Your account is temporarily locked. Please try again later.')
+            return render(request, 'signin.html', _build_login_context(request, pending_user=pending_user, pending_2fa=True, account_locked=True, lock_remaining_seconds=lock_remaining_seconds))
 
-        user = authenticate(
-            request,
-            username=username,
-            password=password
-        )
+        if pending_user and not username and not password:
+            return render(request, 'signin.html', _build_login_context(request, pending_user=pending_user, pending_2fa=True))
+
+        user = authenticate(request, username=username, password=password)
 
         if user:
             request.session['invalid_login_attempts'] = 0
-            otp_code = ''.join(random.choices(string.digits, k=6))
-            request.session['pending_2fa_user_id'] = str(user.pk)
-            request.session['pending_2fa_otp'] = otp_code
-            print(f"2FA OTP for {user.username}: {otp_code}")
-            return render(request, "signin.html", {'pending_2fa': True, 'pending_user': user})
+            _reset_account_lock(user)
+            otp_code = _issue_otp(request, user)
+            _send_otp_email(user, otp_code)
+            return render(request, 'signin.html', _build_login_context(request, pending_user=user, pending_2fa=True))
 
-        invalid_attempts += 1
-        request.session['invalid_login_attempts'] = invalid_attempts
-        AuditLog.objects.create(
-            name='Login Failed',
-            action=f'Failed login attempt for username {username}',
-            user=None,
-            severity='warning',
-        )
-        messages.error(request, "Invalid username or password")
+        if username:
+            user_model = get_user_model()
+            attempted_user = user_model.objects.filter(username=username).first()
+            if attempted_user:
+                attempted_user.failed_login_attempts += 1
+                if attempted_user.failed_login_attempts >= 3:
+                    attempted_user.account_locked_until = timezone.now() + timedelta(minutes=15)
+                    attempted_user.save(update_fields=['failed_login_attempts', 'account_locked_until'])
+                    _create_auth_audit_log(request, username, 'Account Locked', severity='warning', message=f'Account locked for {username}')
+                    if attempted_user.email:
+                        send_mail(
+                            'Account Temporarily Locked',
+                            f'Hello {attempted_user.get_full_name() or attempted_user.username},\n\nYour account has been temporarily locked after multiple unsuccessful sign-in attempts. Please wait 15 minutes before trying again or contact your system administrator.\n',
+                            settings.DEFAULT_FROM_EMAIL,
+                            [attempted_user.email],
+                            fail_silently=True,
+                        )
+                    messages.error(request, 'ACCOUNT TEMPORARILY LOCKED')
+                    return render(request, 'signin.html', _build_login_context(request, pending_user=attempted_user, pending_2fa=True, account_locked=True, lock_remaining_seconds=900))
+                else:
+                    attempted_user.save(update_fields=['failed_login_attempts'])
+                    _create_auth_audit_log(request, username, 'Login Failed', severity='warning', message=f'Failed login attempt for {username}')
+                    remaining_attempts = max(0, 3 - attempted_user.failed_login_attempts)
+                    messages.error(request, f'Invalid username or password. Remaining attempts: {remaining_attempts}')
+                    return render(request, 'signin.html', _build_login_context(request, pending_user=attempted_user, pending_2fa=False))
 
-    return render(request, "signin.html", {'pending_2fa': bool(pending_user_id), 'pending_user': pending_user})
+        _create_auth_audit_log(request, username, 'Login Failed', severity='warning', message='Failed login attempt for unknown user')
+        messages.error(request, 'Invalid username or password.')
+
+    return render(request, 'signin.html', _build_login_context(request, pending_user=pending_user, pending_2fa=bool(pending_user_id), account_locked=account_locked, lock_remaining_seconds=lock_remaining_seconds))
 
 
 def signout(request):

@@ -2,6 +2,7 @@ import json
 import uuid
 from datetime import date
 from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -13,7 +14,9 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.http import HttpResponseForbidden
 from django.test import RequestFactory, TestCase, override_settings
+from django.template.loader import render_to_string
 from django.urls import path, reverse
+from django.utils import timezone
 from openpyxl import Workbook
 
 from .admin import CustomUserAdminForm
@@ -28,6 +31,7 @@ from .models import (
     DeliveryConfirmation,
     ExceptionCloseRequest,
     PendingApproval,
+    Role,
     Reconciliation,
     Shipment,
     ShipmentApprovalHistory,
@@ -37,6 +41,7 @@ from .models import (
     Tape,
     TapeRequest,
     SchemaChangeLog,
+    UserRoleAssignment,
     get_dashboard_feature_catalog,
 )
 from .serializer import TapeSerializer
@@ -101,23 +106,161 @@ class PasswordResetFlowTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
 
 
+class SupremeApproverDashboardTemplateTests(TestCase):
+    def test_dashboard_template_renders_when_current_user_or_audit_user_is_missing(self):
+        request = RequestFactory().get('/supreme-approver-dashboard/')
+        context = {
+            'dashboard_tabs': [],
+            'shipments': [],
+            'approval_queue': [],
+            'pending_count': 0,
+            'total_pending': 0,
+            'approved_today': 0,
+            'rejected_today': 0,
+            'high_risk_transactions': [],
+            'pending_tape_requests': [],
+            'pending_reconciliations': [],
+            'recent_audit': [
+                SimpleNamespace(user=None, timestamp=timezone.now(), action='Login', module='Auth', severity='info'),
+            ],
+            'pending_user_changes': [],
+            'pending_warehouse_release': 0,
+            'pending_bulk_imports': 0,
+            'pending_barcode_changes': 0,
+            'pending_user_change_requests': 0,
+            'pending_branch_updates': 0,
+            'current_user': None,
+            'current_datetime': timezone.now(),
+            'last_login': timezone.now(),
+            'approval_sla': '24 Hours',
+            'notifications': [],
+            'recent_activity': [],
+            'high_risk_types': [],
+            'dashboard_title': 'Enterprise Banking Approval Center',
+            'system_version': 'v2.4.1',
+            'database_name': 'backup_inventory',
+            'server_status': 'Operational',
+            'redis_status': 'Healthy',
+            'websocket_status': 'Connected',
+        }
+
+        rendered = render_to_string('supreme_approver_dashboard.html', context, request=request)
+
+        self.assertIn('Welcome back', rendered)
+        self.assertIn('System', rendered)
+
+
 class LoginAttemptLimitTests(TestCase):
-    def test_invalid_login_attempts_are_blocked_after_three_failures(self):
-        get_user_model().objects.create_user(
+    def test_invalid_login_attempts_lock_account_after_three_failures(self):
+        user = get_user_model().objects.create_user(
             username='valid-user',
             email='valid-user@example.com',
             password='StrongPass123!',
         )
 
-        for _ in range(3):
+        for index in range(3):
             response = self.client.post(reverse('signin'), {'username': 'valid-user', 'password': 'wrong-pass'})
             self.assertEqual(response.status_code, 200)
-            self.assertContains(response, 'Invalid username or password')
+            if index < 2:
+                self.assertContains(response, 'Remaining attempts')
+            else:
+                self.assertContains(response, 'ACCOUNT TEMPORARILY LOCKED')
 
-        response = self.client.post(reverse('signin'), {'username': 'valid-user', 'password': 'wrong-pass'})
+        user.refresh_from_db()
+        self.assertGreaterEqual(user.failed_login_attempts, 3)
+        self.assertIsNotNone(user.account_locked_until)
+
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_initial_login_logs_otp_to_terminal(self):
+        user = get_user_model().objects.create_user(
+            username='terminal-otp-user',
+            email='terminal-otp-user@example.com',
+            password='StrongPass123!',
+        )
+
+        with patch('builtins.print') as mock_print:
+            response = self.client.post(reverse('signin'), {'username': 'terminal-otp-user', 'password': 'StrongPass123!'})
 
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, 'Too many invalid login attempts')
+        self.assertTrue(
+            any('2FA OTP' in str(call.args[0]) and user.username in str(call.args[0]) for call in mock_print.call_args_list)
+        )
+
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_otp_resend_sends_new_code_and_restricts_repeated_requests(self):
+        user = get_user_model().objects.create_user(
+            username='otp-resend-user',
+            email='otp-resend-user@example.com',
+            password='StrongPass123!',
+        )
+
+        response = self.client.post(reverse('signin'), {'username': 'otp-resend-user', 'password': 'StrongPass123!'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Verification Code')
+
+        first_otp = self.client.session['pending_2fa_otp']
+
+        response = self.client.post(reverse('signin'), {'action': 'resend_otp'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'A new verification code has been sent')
+        self.assertNotEqual(self.client.session['pending_2fa_otp'], first_otp)
+        self.assertEqual(len(mail.outbox), 2)
+
+        for _ in range(4):
+            response = self.client.post(reverse('signin'), {'action': 'resend_otp'})
+            self.assertEqual(response.status_code, 200)
+            self.assertContains(response, 'A new verification code has been sent')
+
+        response = self.client.post(reverse('signin'), {'action': 'resend_otp'})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'You have exceeded the maximum OTP resend attempts')
+
+
+class MultiRoleDashboardTests(TestCase):
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_multiple_approved_roles_default_to_primary_dashboard_and_allow_switching(self):
+        backup_group, _ = Group.objects.get_or_create(name='Backup Administrator')
+        supreme_group, _ = Group.objects.get_or_create(name='Supreme Approver')
+        backup_role, _ = Role.objects.get_or_create(name='Backup Administrator', defaults={'dashboard_key': 'backup', 'group': backup_group, 'sort_order': 1})
+        if backup_role.group_id != backup_group.id:
+            backup_role.group = backup_group
+            backup_role.save(update_fields=['group', 'updated_at'])
+        supreme_role, _ = Role.objects.get_or_create(name='Supreme Approver', defaults={'dashboard_key': 'supreme', 'group': supreme_group, 'sort_order': 2})
+        if supreme_role.group_id != supreme_group.id:
+            supreme_role.group = supreme_group
+            supreme_role.save(update_fields=['group', 'updated_at'])
+        user = get_user_model().objects.create_user(
+            username='multi-role-user',
+            email='multi-role-user@example.com',
+            password='StrongPass123!',
+        )
+
+        backup_assignment = UserRoleAssignment.objects.create(user=user, role=backup_role, is_primary_dashboard=True)
+        backup_assignment.mark_backup_approved(user, 'Approved for backup role testing.')
+        backup_assignment.mark_supreme_approved(user, 'Approved for backup role testing.')
+        backup_assignment.activate(approver=user, make_primary=True)
+
+        supreme_assignment = UserRoleAssignment.objects.create(user=user, role=supreme_role)
+        supreme_assignment.mark_backup_approved(user, 'Approved for supreme role testing.')
+        supreme_assignment.mark_supreme_approved(user, 'Approved for supreme role testing.')
+        supreme_assignment.activate(approver=user)
+
+        response = self.client.post(reverse('signin'), {
+            'username': 'multi-role-user',
+            'password': 'StrongPass123!',
+        })
+        self.assertEqual(response.status_code, 200)
+        otp_code = self.client.session['pending_2fa_otp']
+
+        response = self.client.post(reverse('signin'), {'otp_code': otp_code})
+
+        self.assertRedirects(response, reverse('backup-dashboard'))
+        self.assertEqual(self.client.session.get('active_dashboard_key'), 'backup')
+
+        switch_response = self.client.get(reverse('switch-dashboard', kwargs={'dashboard_key': 'supreme'}))
+        self.assertRedirects(switch_response, reverse('supreme-approver-dashboard'))
+        self.assertEqual(self.client.session.get('active_dashboard_key'), 'supreme')
+        self.assertTrue(AuditLog.objects.filter(name='Dashboard Switched', user=user).exists())
 
 
 class DualApprovalWorkflowTests(TestCase):

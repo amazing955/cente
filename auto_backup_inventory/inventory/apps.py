@@ -11,9 +11,12 @@ class InventoryConfig(AppConfig):
         group_names = [
             'Backup Administrator',
             'Operations Manager',
+            'Warehouse Operations',
+            'Compliance Auditor',
             'Courier',
             'Auditor',
             'Security Officer',
+            'Information Security Officer',
             'DR Team',
             'System Administrator',
             'Supreme Approver',

@@ -281,6 +281,25 @@ footer{
         </div>
     </div>
 
+    {% if user_dashboard_roles %}
+    <div class="sidebar-section-title">My Dashboards</div>
+    <div class="dropdown px-2 mb-2">
+        <button class="btn btn-light dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="bi bi-grid-1x2 me-2"></i>{{ current_dashboard_label|default:'Dashboard' }}
+        </button>
+        <ul class="dropdown-menu shadow-sm w-100">
+            {% for dashboard in user_dashboard_roles %}
+                <li>
+                    <a class="dropdown-item{% if dashboard.dashboard_key == current_dashboard_key %} active{% endif %}" href="{% url 'switch-dashboard' dashboard_key=dashboard.dashboard_key %}">
+                        <i class="bi bi-arrow-repeat me-2"></i>{{ dashboard.label }}
+                        {% if dashboard.is_primary %}<span class="badge bg-success ms-2">Primary</span>{% endif %}
+                    </a>
+                </li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
     <nav class="nav flex-column" aria-label="Backup dashboard navigation">
         <div class="sidebar-section-title">Dashboard</div>
         <a class="nav-link {% if active_dashboard_section == 'dashboard' %}active{% endif %}" href="{% url 'backup-dashboard' %}">
@@ -364,6 +383,23 @@ footer{
     </div>
 
     <div class="ms-auto d-flex align-items-center flex-wrap gap-2">
+        {% if user_dashboard_roles %}
+        <div class="dropdown">
+            <button class="btn btn-outline-secondary btn-sm mt-2 dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                <i class="bi bi-columns-gap me-1"></i>{{ current_dashboard_label|default:'Current Dashboard' }}
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                {% for dashboard in user_dashboard_roles %}
+                    <li>
+                        <a class="dropdown-item{% if dashboard.dashboard_key == current_dashboard_key %} active{% endif %}" href="{% url 'switch-dashboard' dashboard_key=dashboard.dashboard_key %}">
+                            {{ dashboard.label }}
+                            {% if dashboard.is_primary %}<span class="badge bg-success ms-2">Primary</span>{% endif %}
+                        </a>
+                    </li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
         {% if dashboard_features %}
             <div class="dropdown">
                 <button class="btn btn-outline-primary btn-sm mt-2 dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
