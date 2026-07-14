@@ -1,0 +1,110 @@
+{% load static %}
+<style>
+    .voucher-container{ margin-bottom:18px; }
+    .voucher{
+        width:800px;
+        margin:auto;
+        background:#fff;
+        padding:20px 24px;
+        border:1px solid #000;
+        box-sizing: border-box;
+    }
+    .logo{ text-align:center; margin-bottom:12px; }
+    .logo img{ width:100px; max-width:120px; display:block; margin:auto; }
+    h2,h3{ text-align:center; margin:4px 0; text-decoration:underline; }
+    table{ width:100%; border-collapse:collapse; margin-top:12px; }
+    td{ padding:8px 6px; vertical-align:bottom; }
+    .line{ display:inline-block; border-bottom:1px solid #000; width:100%; height:16px; }
+    .signature-table{ margin-top:20px; }
+    .signature-table td{ width:50%; padding:10px 8px; }
+    .copies{ margin-top:20px; text-align:center; font-size:13px; }
+    @page { size: A4 landscape; margin: 10mm; }
+    @media print{
+        .no-print{ display:none !important; }
+        a[href]:after{ content: '' !important; }
+        .voucher{ border:none; width: calc(297mm - 20mm); padding:8mm; margin:0; }
+        .voucher, .signature-table, table { page-break-inside: avoid; break-inside: avoid; }
+        body * { visibility: hidden; }
+        .voucher, .voucher * { visibility: visible; }
+        .voucher { position: absolute; left: 0; top: 0; }
+    }
+</style>
+
+<div class="voucher-container">
+<div class="voucher">
+
+    <div class="logo">
+        <img src="{% static 'inventory/lo.png' %}" alt="Centenary Bank Logo">
+        <strong>Centenary Bank</strong>
+    </div>
+
+    <h2>CENTENARY RURAL DEVELOPMENT BANK LTD</h2>
+    <h3>ASSET MOVEMENT VOUCHER</h3>
+
+    <table>
+        <tr>
+            <td width="15%">Date</td>
+            <td width="25%"><span class="line">{{ shipment.release_datetime|date:'M d, Y H:i'|default:shipment.shipment_date|date:'M d, Y H:i' }}</span></td>
+
+            <td width="25%">Asset Current Location</td>
+            <td width="35%"><span class="line">{{ shipment.source_location|default:'-' }}</span></td>
+        </tr>
+
+        <tr>
+            <td>Desired Location</td>
+            <td colspan="3"><span class="line">{{ shipment.destination_location|default:'-' }}</span></td>
+        </tr>
+
+        <tr>
+            <td>Asset Description</td>
+            <td colspan="3"><span class="line">{{ asset_description }}</span></td>
+        </tr>
+
+        <tr>
+            <td>Asset Identification Number</td>
+            <td colspan="3"><span class="line">{{ shipment.shipment_id }}</span></td>
+        </tr>
+
+        <tr>
+            <td>Reason for Transfer</td>
+            <td colspan="3"><span class="line">{{ shipment.approval_remarks|default:'-' }}</span></td>
+        </tr>
+    </table>
+
+    <table class="signature-table">
+        <tr>
+            <td>
+                Authorized By<br>
+                <span class="line">{{ shipment.approved_by_backup.get_full_name|default:shipment.approved_by_backup.username|default:'-' }}</span>
+            </td>
+
+            <td>
+                Transferred By<br>
+                <span class="line">{{ shipment.created_by.get_full_name|default:shipment.created_by.username|default:'-' }}</span>
+            </td>
+        </tr>
+
+        <tr>
+            <td>
+                Released By<br>
+                <span class="line">{{ request.user.get_full_name|default:request.user.username }}</span>
+            </td>
+
+            <td>
+                Received By<br>
+                <span class="line">{{ shipment.courier_name|default:'-' }}</span>
+            </td>
+        </tr>
+    </table>
+
+    <div class="copies">
+        <p>
+            <strong>Copy 1:</strong> Releasing Unit &nbsp;&nbsp;&nbsp;
+            <strong>Copy 2:</strong> Receiver &nbsp;&nbsp;&nbsp;
+            <strong>Copy 3:</strong> Corporate Services Dept. &nbsp;&nbsp;&nbsp;
+            <strong>Copy 4:</strong> Chief Accountant
+        </p>
+    </div>
+
+</div>
+</div>

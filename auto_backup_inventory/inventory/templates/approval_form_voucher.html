@@ -1,11 +1,6 @@
 {% load static %}
 <!DOCTYPE html>
 <html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>.</title>
-
 <style>
     /* General screen styles */
     body{
@@ -21,10 +16,9 @@
         width:800px;
         margin:auto;
         background:#fff;
-        padding:20px 24px;
+        padding:24px;
         border:1px solid #000;
         box-sizing: border-box;
-        page-break-inside: avoid;
     }
 
     .logo{
@@ -35,6 +29,7 @@
     .logo img{
         width:100px;
         max-width:120px;
+        height:auto;
         display:block;
         margin:auto;
     }
@@ -55,12 +50,6 @@
         padding:8px 6px;
         vertical-align:bottom;
     }
-
-    /* compact tape manifest for printing */
-    .tape-wrapper{ margin-top:8px; }
-    .tape-table{ width:100%; border-collapse:collapse; margin-top:6px; font-size:10pt; }
-    .tape-table th, .tape-table td{ border:1px solid #000; padding:4px 6px; }
-    .tape-table thead th{ background:#f3f3f3; }
 
     .line{
         display:inline-block;
@@ -84,8 +73,9 @@
         font-size:13px;
     }
 
-    /* Print rules */
+    /* Print specific rules: A4 landscape, single page */
     @page { size: A4 landscape; margin: 10mm; }
+
     @media print{
         body{ background:white; margin:0; padding:0; }
         .no-print{ display: none !important; }
@@ -102,16 +92,18 @@
         .voucher, .signature-table, .tape-table, table { page-break-inside: avoid; break-inside: avoid; }
         tr, thead { page-break-inside: avoid; break-inside: avoid; }
 
-        /* Print only voucher */
+        /* Print only the voucher content */
         body * { visibility: hidden; }
         .voucher, .voucher * { visibility: visible; }
         .voucher { position: absolute; left: 0; top: 0; }
     }
 </style>
+        
+</style>
 
 </head>
 <body>
-<button class="no-print btn btn-secondary" onclick="window.print()">Print this approval form</button>
+
 <div class="voucher">
 
     <div class="logo">
@@ -126,7 +118,7 @@
     <table>
         <tr>
             <td width="15%">Date</td>
-            <td width="25%"><span class="line">{% if shipment.release_datetime %}{{ shipment.release_datetime|date:"M d, Y H:i" }}{% elif shipment.shipment_date %}{{ shipment.shipment_date|date:"M d, Y H:i" }}{% else %}-{% endif %}</span></td>
+            <td width="25%"><span class="line">{{ shipment.release_datetime|date:'M d, Y H:i'|default:shipment.shipment_date|date:'M d, Y H:i' }}</span></td>
 
             <td width="25%">Asset Current Location</td>
             <td width="35%"><span class="line">{{ shipment.source_location|default:'-' }}</span></td>
@@ -139,13 +131,7 @@
 
         <tr>
             <td>Asset Description</td>
-            <td colspan="3"><span class="line">{{ shipment.description|default:shipment.approval_remarks|default:'-' }}</span></td>
-        </tr>
-
-        <tr>
-            <td colspan="4" style="padding:6px 5px;">
-                
-            </td>
+            <td colspan="3"><span class="line">{{ asset_description }}</span></td>
         </tr>
 
         <tr>

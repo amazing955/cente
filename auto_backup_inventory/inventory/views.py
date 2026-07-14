@@ -648,9 +648,35 @@ def approval_form_preview(request, shipment_pk):
     if not allowed:
         raise PermissionDenied
 
-    return render(request, 'approval_form_preview.html', {
+    # support alternative printable voucher format via query `?format=voucher`
+    # generate asset description from package/tapes when not explicitly provided
+    try:
+        tapes = list(shipment.tapes.all())
+    except Exception:
+        tapes = []
+
+    # prefer an explicit description if present (some Shipment models may not have a `description` field)
+    desc = getattr(shipment, 'description', None) or getattr(shipment, 'approval_remarks', None)
+    if desc:
+        asset_description = desc
+    elif tapes:
+        count = len(tapes)
+        src = (getattr(shipment, 'source_location', '') or 'Unknown').title()
+        dst = (getattr(shipment, 'destination_location', '') or 'Unknown').title()
+        # concise phrasing: "<N> tapes from BranchName to Destination Name"
+        asset_description = f"{count} tape{'s' if count != 1 else ''} from {src} to {dst}"
+    else:
+        asset_description = 'No tapes assigned.'
+
+    context = {
         'shipment': shipment,
-    })
+        'asset_description': asset_description,
+    }
+
+    if request.GET.get('format') == 'voucher':
+        return render(request, 'approval_form_voucher.html', context)
+
+    return render(request, 'approval_form_preview.html', context)
 
 
 def _authenticate_api_user(request):
@@ -7673,6 +7699,44 @@ def assigned_shipments(request):
     return render(request, 'assigned_shipments.html', context)
 
 
+@user_passes_test(lambda u: u.is_superuser or is_backup_administrator(u), login_url='signin')
+@login_required(login_url='signin')
+def awaiting_release(request):
+    """List shipments that are approved and awaiting release to courier.
+    Visible to Backup Administrators and superusers.
+    """
+    shipments_qs = Shipment.objects.filter(approval_stage='approved').order_by('-approval_date')
+    paginator = Paginator(shipments_qs, 20)
+    page_number = request.GET.get('page', 1)
+    shipment_page = paginator.get_page(page_number)
+
+    alert_count = AuditLog.objects.filter(severity__in=['warning', 'error'], is_read=False).count()
+    dashboard_nav_urls = {
+        'add_tape': build_signed_dashboard_navigation_token('add_tape', {'show_add_tape': '1'}),
+        'tape_inventory': build_signed_dashboard_navigation_token('tape_inventory', {'show_tape_inventory': '1'}),
+        'shipments': build_signed_dashboard_navigation_token('shipments', {'show_shipments': '1'}),
+        'settings': build_signed_dashboard_navigation_token('settings', {'show_settings': '1'}),
+        'reconciliation': build_signed_dashboard_navigation_token('reconciliation', {'show_reconciliation': '1'}),
+        'reports': build_signed_dashboard_navigation_token('reports', {'show_reports': 'reports'}),
+        'reconciliation_reports': build_signed_dashboard_navigation_token('reconciliation_reports', {'show_reconciliation_reports': 'reconciliation-reports'}),
+        'audit_logs': build_signed_dashboard_navigation_token('audit_logs', {'show_audit': '1'}),
+        'alerts': build_signed_dashboard_navigation_token('alerts', {'show_alerts': '1'}),
+        'admin': build_signed_dashboard_navigation_token('admin', {'show_admin': '1'}),
+        'profile': build_signed_dashboard_navigation_token('profile', {'show_profile': '1'}),
+    }
+
+    context = {
+        'dashboard_tabs': OPERATIONS_FEATURE_TABS,
+        'shipments': shipment_page,
+        'active_dashboard_section': 'awaiting_release',
+        'dashboard_nav_urls': dashboard_nav_urls,
+        'alert_count': alert_count,
+    }
+    # Whether current user may release shipments
+    context['can_release'] = request.user.is_superuser or is_backup_administrator(request.user)
+    return render(request, 'awaiting_release.html', context)
+
+
 @user_passes_test(lambda u: u.is_superuser or is_courier(u), login_url='signin')
 @login_required(login_url='signin')
 def manifest_detail(request, shipment_pk):
@@ -7694,6 +7758,10 @@ def manifest_detail(request, shipment_pk):
 @login_required(login_url='signin')
 def pickup_confirmation(request, shipment_pk):
     shipment = get_object_or_404(Shipment.objects.prefetch_related('tapes'), pk=shipment_pk)
+    if shipment.status not in ['Dispatched', 'Picked Up', 'In Transit']:
+        messages.error(request, 'This shipment has not been released for courier pickup yet.')
+        return redirect('courier-dashboard')
+
     courier = ensure_courier_profile(request.user)
     form = ShipmentReceiptForm(
         request.POST or None,
@@ -7775,6 +7843,10 @@ def pickup_confirmation(request, shipment_pk):
 @login_required(login_url='signin')
 def delivery_confirmation(request, shipment_pk):
     shipment = get_object_or_404(Shipment.objects.prefetch_related('tapes'), pk=shipment_pk)
+    if shipment.status not in ['Picked Up', 'In Transit']:
+        messages.error(request, 'This shipment is not currently in courier custody for delivery confirmation.')
+        return redirect('courier-dashboard')
+
     courier = ensure_courier_profile(request.user)
     form = DeliveryConfirmationForm(request.POST or None)
 

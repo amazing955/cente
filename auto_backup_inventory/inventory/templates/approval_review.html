@@ -3,75 +3,117 @@
 
 {% block title %}{{ dashboard_title }}{% endblock %}
 
+{% block sidebar_class %}app-sidebar-dark supreme-sidebar{% endblock %}
+
+{% block sidebar %}
+<div class="sidebar-logo">
+  <img src="{% static 'inventory/lo.png' %}" alt="Supreme Approver Logo">
+  <h3>Supreme Approver</h3>
+  <small>Final Approval Control</small>
+</div>
+<nav class="nav flex-column sidebar-menu supreme-nav px-3 pb-3">
+  <div class="sidebar-section-label">Approval</div>
+  <a class="nav-link active" href="{% url 'supreme-approver-dashboard' %}"><i class="bi bi-speedometer2 me-2"></i>Dashboard</a>
+  <a class="nav-link" href="#general-information"><i class="bi bi-info-circle me-2"></i>General Info</a>
+  <a class="nav-link" href="#transaction-summary"><i class="bi bi-card-text me-2"></i>Summary</a>
+  <a class="nav-link" href="#requester-information"><i class="bi bi-person-circle me-2"></i>Requester</a>
+  <a class="nav-link" href="#backup-administrator-information"><i class="bi bi-shield-lock me-2"></i>Backup Admin</a>
+  <a class="nav-link" href="#related-objects"><i class="bi bi-link-45deg me-2"></i>Related Objects</a>
+  <a class="nav-link text-danger" href="{% url 'signout' %}"><i class="bi bi-box-arrow-left me-2"></i>Logout</a>
+</nav>
+{% endblock %}
+
 {% block content %}
-<div class="container py-4">
-  <div class="card shadow-sm">
-    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-      <div>
-        <h4 class="mb-1">Approval Review</h4>
-        <div class="small opacity-75">Review-only page for staged approvals. No requester forms are used here.</div>
+<style>
+  .bank-shell { background: linear-gradient(135deg, rgba(2,53,134,.06), rgba(14,124,134,.05)); border-radius: 1.25rem; padding: 1.1rem; }
+  .bank-panel { background: #ffffff; border: 1px solid rgba(2,53,134,.08); border-radius: 1rem; box-shadow: 0 12px 30px rgba(2,53,134,.08); }
+  .bank-header { background: linear-gradient(135deg, #023586 0%, #001f54 100%); color: #fff; border-radius: 1.2rem; }
+  .bank-icon { width: 46px; height: 46px; display: inline-flex; align-items: center; justify-content: center; border-radius: 12px; font-size: 1.2rem; }
+  .sidebar-section-label { color: rgba(255,255,255,.58); font-size: .72rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: .5rem 1rem .35rem; }
+</style>
+
+<div class="container-fluid py-3 py-lg-4">
+  <div class="bank-shell dashboard-panel-space">
+    <div class="bank-panel p-4">
+      <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+          <h4 class="mb-1">Approval Review</h4>
+          <div class="small text-muted">Review-only page for staged approvals. No requester forms are used here.</div>
+        </div>
+        <a href="{% url 'supreme-approver-dashboard' %}" class="btn btn-outline-primary btn-sm">Back to Dashboard</a>
       </div>
-      <a href="{% url 'supreme-approver-dashboard' %}" class="btn btn-light btn-sm">Back to Dashboard</a>
-    </div>
-    <div class="card-body">
+
       <div class="row g-4">
         <div class="col-lg-7">
-          <h5 class="fw-semibold mb-3">General Information</h5>
-          <dl class="row">
-            <dt class="col-sm-4">Transaction ID</dt><dd class="col-sm-8">{{ approval.id }}</dd>
-            <dt class="col-sm-4">Transaction Type</dt><dd class="col-sm-8">{{ approval.transaction_type }}</dd>
-            <dt class="col-sm-4">Module</dt><dd class="col-sm-8">{{ approval.module }}</dd>
-            <dt class="col-sm-4">Priority</dt><dd class="col-sm-8">{{ approval.priority }}</dd>
-            <dt class="col-sm-4">Risk Level</dt><dd class="col-sm-8">{{ approval.risk_level }}</dd>
-            <dt class="col-sm-4">Current Status</dt><dd class="col-sm-8">{{ approval.status }}</dd>
-            <dt class="col-sm-4">Request Date</dt><dd class="col-sm-8">{{ approval.request_date|date:'d M Y H:i' }}</dd>
-            <dt class="col-sm-4">Approval Deadline</dt><dd class="col-sm-8">{{ approval.approval_deadline|default:'Not set' }}</dd>
-          </dl>
+          <section id="general-information">
+            <h5 class="fw-semibold mb-3">General Information</h5>
+            <dl class="row">
+              <dt class="col-sm-4">Transaction ID</dt><dd class="col-sm-8">{{ approval.id }}</dd>
+              <dt class="col-sm-4">Transaction Type</dt><dd class="col-sm-8">{{ approval.transaction_type }}</dd>
+              <dt class="col-sm-4">Module</dt><dd class="col-sm-8">{{ approval.module }}</dd>
+              <dt class="col-sm-4">Priority</dt><dd class="col-sm-8">{{ approval.priority }}</dd>
+              <dt class="col-sm-4">Risk Level</dt><dd class="col-sm-8">{{ approval.risk_level }}</dd>
+              <dt class="col-sm-4">Current Status</dt><dd class="col-sm-8">{{ approval.status }}</dd>
+              <dt class="col-sm-4">Request Date</dt><dd class="col-sm-8">{{ approval.request_date|date:'d M Y H:i' }}</dd>
+              <dt class="col-sm-4">Approval Deadline</dt><dd class="col-sm-8">{{ approval.approval_deadline|default:'Not set' }}</dd>
+            </dl>
+          </section>
 
-          <h5 class="fw-semibold mt-4 mb-3">Transaction Summary</h5>
-          <div class="alert alert-info mb-0">{{ approval.summary|default:'No summary provided.' }}</div>
+          <section id="transaction-summary">
+            <h5 class="fw-semibold mt-4 mb-3">Transaction Summary</h5>
+            <div class="alert alert-info mb-0">{{ approval.summary|default:'No summary provided.' }}</div>
+          </section>
 
-          <h5 class="fw-semibold mt-4 mb-3">Changed Fields</h5>
-          {% if approval.requested_changes %}
-          <ul class="mb-0">
-            {% for change in approval.requested_changes %}
-            <li><strong>{{ change.field }}</strong>: {{ change.from_value }} → {{ change.to_value }}</li>
-            {% endfor %}
-          </ul>
-          {% else %}
-          <p class="text-muted mb-0">No field-level changes were provided for this request.</p>
-          {% endif %}
-        </div>
-        <div class="col-lg-5">
-          <h5 class="fw-semibold mb-3">Requester Information</h5>
-          <dl class="row">
-            <dt class="col-sm-4">Requested By</dt><dd class="col-sm-8">{{ requester_name }}</dd>
-            <dt class="col-sm-4">Role</dt><dd class="col-sm-8">{{ approval.requester.role|default:'-' }}</dd>
-            <dt class="col-sm-4">Department</dt><dd class="col-sm-8">Operations</dd>
-            <dt class="col-sm-4">Branch</dt><dd class="col-sm-8">{{ branch_name }}</dd>
-            <dt class="col-sm-4">Email</dt><dd class="col-sm-8">{{ approval.requester.email|default:'-' }}</dd>
-            <dt class="col-sm-4">Employee No.</dt><dd class="col-sm-8">{{ approval.requester.username|default:'-' }}</dd>
-          </dl>
-
-          <h5 class="fw-semibold mt-4 mb-3">Backup Administrator Information</h5>
-          <dl class="row">
-            <dt class="col-sm-4">Approved By</dt><dd class="col-sm-8">{{ backup_name }}</dd>
-            <dt class="col-sm-4">Approval Date</dt><dd class="col-sm-8">{{ approval.approved_at|date:'d M Y H:i'|default:'Pending' }}</dd>
-            <dt class="col-sm-4">Approval Comment</dt><dd class="col-sm-8">{{ approval.review_comment|default:'-' }}</dd>
-          </dl>
-
-          <h5 class="fw-semibold mt-4 mb-3">Related Objects</h5>
-          <ul class="mb-0">
-            {% if related_object %}
-            <li>Related record: {{ related_object }}</li>
+          <section id="changed-fields">
+            <h5 class="fw-semibold mt-4 mb-3">Changed Fields</h5>
+            {% if approval.requested_changes %}
+            <ul class="mb-0">
+              {% for change in approval.requested_changes %}
+              <li><strong>{{ change.field }}</strong>: {{ change.from_value }} → {{ change.to_value }}</li>
+              {% endfor %}
+            </ul>
             {% else %}
-            <li>No related object available.</li>
+            <p class="text-muted mb-0">No field-level changes were provided for this request.</p>
             {% endif %}
-            <li>Branch: {{ branch_name }}</li>
-            {% if approval.attachment_links %}
-            <li>Attachments available</li>
-            {% endif %}
-          </ul>
+          </section>
+        </div>
+
+        <div class="col-lg-5">
+          <section id="requester-information">
+            <h5 class="fw-semibold mb-3">Requester Information</h5>
+            <dl class="row">
+              <dt class="col-sm-4">Requested By</dt><dd class="col-sm-8">{{ requester_name }}</dd>
+              <dt class="col-sm-4">Role</dt><dd class="col-sm-8">{{ approval.requester.role|default:'user' }}</dd>
+              <dt class="col-sm-4">Department</dt><dd class="col-sm-8">Operations</dd>
+              <dt class="col-sm-4">Branch</dt><dd class="col-sm-8">{{ branch_name }}</dd>
+              <dt class="col-sm-4">Email</dt><dd class="col-sm-8">{{ approval.requester.email|default:'-' }}</dd>
+              <dt class="col-sm-4">Employee No.</dt><dd class="col-sm-8">{{ approval.requester.username|default:'-' }}</dd>
+            </dl>
+          </section>
+
+          <section id="backup-administrator-information">
+            <h5 class="fw-semibold mt-4 mb-3">Backup Administrator Information</h5>
+            <dl class="row">
+              <dt class="col-sm-4">Approved By</dt><dd class="col-sm-8">{{ backup_name }}</dd>
+              <dt class="col-sm-4">Approval Date</dt><dd class="col-sm-8">{{ approval.approved_at|date:'d M Y H:i'|default:'Pending' }}</dd>
+              <dt class="col-sm-4">Approval Comment</dt><dd class="col-sm-8">{{ approval.review_comment|default:'-' }}</dd>
+            </dl>
+          </section>
+
+          <section id="related-objects">
+            <h5 class="fw-semibold mt-4 mb-3">Related Objects</h5>
+            <ul class="mb-0">
+              {% if related_object %}
+              <li>Related record: {{ related_object }}</li>
+              {% else %}
+              <li>No related object available.</li>
+              {% endif %}
+              <li>Branch: {{ branch_name }}</li>
+              {% if approval.attachment_links %}
+              <li>Attachments available</li>
+              {% endif %}
+            </ul>
+          </section>
         </div>
       </div>
 

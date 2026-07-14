@@ -151,7 +151,7 @@
                                         {% if shipment.status == 'Approved' or shipment.status == 'Dispatched' %}
                                             <a href="{% url 'pickup-confirmation' shipment.pk %}" class="btn btn-sm btn-outline-success">Pickup</a>
                                         {% endif %}
-                                        {% if shipment.status == 'In Transit' %}
+                                        {% if shipment.status == 'Picked Up' or shipment.status == 'In Transit' %}
                                             <a href="{% url 'delivery-confirmation' shipment.pk %}" class="btn btn-sm btn-outline-info">Deliver</a>
                                         {% endif %}
                                     </div>
