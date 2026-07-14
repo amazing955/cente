@@ -10,6 +10,7 @@ import re
 import string
 from urllib.parse import urlencode
 from django.core import signing
+from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.mail import EmailMessage, send_mail
 from django.core.paginator import Paginator
@@ -35,10 +36,226 @@ from django.utils import timezone
 from .authentication import AuditedJWTAuthentication
 from .permissions import InvestigationPermission
 from .serializer import AuditLogSerializer, ShipmentSerializer, TapeSerializer
+from .utils import create_pending_approval
 
 logger = logging.getLogger(__name__)
 DASHBOARD_NAVIGATION_SALT = 'inventory-dashboard-navigation'
 DASHBOARD_NAVIGATION_MAX_AGE = 1800
+
+
+def _get_backup_administrator():
+    UserModel = get_user_model()
+    return UserModel.objects.filter(is_active=True, groups__name='Backup Administrator').first()
+
+
+def _build_pending_tape_approval(request, transaction_type, summary, payload_fields, object_id='', priority='Medium', risk_level='Medium'):
+    backup_admin = _get_backup_administrator()
+    request_payload = {k: (str(v) if not isinstance(v, (dict, list)) else v) for k, v in payload_fields.items()}
+    action_type = 'update' if object_id else 'create'
+    requested_change = {
+        'action': action_type,
+        'model': 'Tape',
+        'fields': request_payload,
+    }
+    if object_id:
+        requested_change['object_id'] = str(object_id)
+    return create_pending_approval(
+        transaction_type=transaction_type,
+        module='Inventory',
+        summary=summary,
+        requester=request.user,
+        backup_administrator=backup_admin,
+        priority=priority,
+        risk_level=risk_level,
+        status='Pending',
+        request_payload=request_payload,
+        requested_changes=[requested_change],
+        related_model='tape',
+        related_object_id=str(object_id) if object_id else '',
+        audit_history=[{
+            'action': 'Requested',
+            'user': request.user.get_full_name() or request.user.username,
+            'timestamp': timezone.localtime().isoformat(),
+        }],
+    )
+
+
+def _build_pending_inventory_import_approval(request, workbook, file_name='inventory.xlsx'):
+    requested_changes = _parse_inventory_excel_workbook(workbook)
+    if not requested_changes:
+        return None
+
+    backup_admin = _get_backup_administrator()
+    request_payload = {
+        'file_name': file_name,
+        'row_count': len(requested_changes),
+    }
+
+    return create_pending_approval(
+        transaction_type='Import Inventory Excel',
+        module='Inventory',
+        summary=f'Import {len(requested_changes)} tape rows from {file_name}',
+        requester=request.user,
+        backup_administrator=backup_admin,
+        priority='Medium',
+        risk_level='High',
+        status='Pending',
+        request_payload=request_payload,
+        requested_changes=requested_changes,
+        related_model='tape',
+        related_object_id='',
+        audit_history=[{
+            'action': 'Requested',
+            'user': request.user.get_full_name() or request.user.username,
+            'timestamp': timezone.localtime().isoformat(),
+        }],
+    )
+
+
+def _parse_inventory_excel_workbook(workbook):
+    sheet = workbook.active
+    rows = list(sheet.iter_rows(values_only=True))
+    if len(rows) < 2:
+        return []
+
+    headers = [str(cell).strip() if cell is not None else '' for cell in rows[0]]
+    header_map = {normalize_excel_column_name(name): idx for idx, name in enumerate(headers) if name}
+    changes = []
+    for row in rows[1:]:
+        if not any(cell not in (None, '') for cell in row):
+            continue
+        values = {
+            normalize_excel_column_name(header): (row[idx] if idx < len(row) else '')
+            for header, idx in ((header, idx) for idx, header in enumerate(headers) if header)
+        }
+        volser = str(values.get('volser', '')).strip()
+        barcode = str(values.get('barcode', '')).strip()
+        tape_type = str(values.get('tape_type', '')).strip()
+        status = str(values.get('status', '')).strip() or 'Active'
+        current_location = str(values.get('current_location', '')).strip()
+        retention_end_date_value = values.get('retention_end_date', '')
+        manufacturer = str(values.get('manufacturer', '')).strip()
+
+        if not volser or not barcode or not tape_type:
+            continue
+
+        try:
+            retention_end_date = parse_date(str(retention_end_date_value)) if retention_end_date_value not in (None, '') else date.today() + timedelta(days=365)
+        except Exception:
+            retention_end_date = date.today() + timedelta(days=365)
+
+        normalized_fields = {}
+        for field_name, field_value in values.items():
+            if field_value in (None, ''):
+                normalized_fields[field_name] = ''
+                continue
+            if field_name == 'retention_end_date':
+                try:
+                    parsed_date = parse_date(str(field_value).strip())
+                    normalized_fields[field_name] = parsed_date.isoformat() if parsed_date else date.today().isoformat()
+                except Exception:
+                    normalized_fields[field_name] = date.today().isoformat()
+                continue
+            if isinstance(field_value, datetime):
+                normalized_fields[field_name] = field_value.isoformat()
+                continue
+            if isinstance(field_value, date) and not isinstance(field_value, datetime):
+                normalized_fields[field_name] = field_value.isoformat()
+                continue
+            normalized_fields[field_name] = str(field_value).strip()
+
+        normalized_fields['status'] = normalized_fields.get('status') or 'Active'
+        if normalized_fields['status'] not in dict(Tape.STATUS_CHOICES):
+            normalized_fields['status'] = 'Active'
+
+        existing_tape = Tape.objects.filter(volser__iexact=volser).first()
+        change_payload = {
+            'action': 'update' if existing_tape else 'create',
+            'model': 'Tape',
+            'fields': normalized_fields,
+        }
+        if existing_tape:
+            change_payload['object_id'] = str(existing_tape.pk)
+        changes.append(change_payload)
+    return changes
+
+
+def _create_bulk_tape_import_pending_approval(request, workbook, file_name='inventory_import.xlsx'):
+    requested_changes = _parse_inventory_excel_workbook(workbook)
+    if not requested_changes:
+        return None
+    backup_admin = _get_backup_administrator()
+    request_payload = {
+        'file_name': file_name,
+        'row_count': len(requested_changes),
+    }
+    return create_pending_approval(
+        transaction_type='Bulk Tape Import',
+        module='Inventory',
+        summary=f'Bulk tape import from {file_name} ({len(requested_changes)} rows)',
+        requester=request.user,
+        backup_administrator=backup_admin,
+        priority='High',
+        risk_level='High',
+        status='Pending',
+        request_payload=request_payload,
+        requested_changes=requested_changes,
+        related_model='tape',
+        related_object_id='',
+        audit_history=[{
+            'action': 'Requested Bulk Tape Import',
+            'user': request.user.get_full_name() or request.user.username,
+            'timestamp': timezone.localtime().isoformat(),
+        }],
+    )
+
+
+def _create_schema_sync_pending_approval(request, pending_preview):
+    file_bytes = base64.b64decode(pending_preview.get('file_bytes', ''))
+    workbook = load_workbook(BytesIO(file_bytes), data_only=True)
+    new_columns = pending_preview.get('preview', {}).get('new_columns', [])
+    if not new_columns:
+        return None
+    sql_statements = []
+    for column in new_columns:
+        column_name = column['name']
+        column_type = column['detected_type']
+        if not is_safe_column_name(column_name):
+            return None
+        sql_statements.append(f'ALTER TABLE inventory_tape ADD COLUMN IF NOT EXISTS {column_name} {column_type};')
+    requested_changes = [
+        {
+            'action': 'schema_sync',
+            'model': 'Tape',
+            'sql_statements': sql_statements,
+            'import_changes': _parse_inventory_excel_workbook(workbook),
+        }
+    ]
+    backup_admin = _get_backup_administrator()
+    request_payload = {
+        'file_name': pending_preview.get('file_name', 'unknown.xlsx'),
+        'new_columns': new_columns,
+        'sql_statements': sql_statements,
+    }
+    return create_pending_approval(
+        transaction_type='Tape Schema Synchronization',
+        module='Inventory',
+        summary=f'Schema synchronization for {pending_preview.get("file_name", "inventory upload")}',
+        requester=request.user,
+        backup_administrator=backup_admin,
+        priority='Critical',
+        risk_level='Critical',
+        status='Pending',
+        request_payload=request_payload,
+        requested_changes=requested_changes,
+        related_model='tape',
+        related_object_id='',
+        audit_history=[{
+            'action': 'Requested Tape Schema Synchronization',
+            'user': request.user.get_full_name() or request.user.username,
+            'timestamp': timezone.localtime().isoformat(),
+        }],
+    )
 
 
 def _build_investigation_log_entry(exception, request):
@@ -175,20 +392,6 @@ def operations_dashboard_navigation(request, signed_token):
         return invalid_payload
 
     return operations_dashboard(request)
-
-
-@login_required(login_url='signin')
-def switch_dashboard(request, dashboard_key):
-    dashboard_roles = _get_user_dashboard_roles(request.user)
-    allowed_dashboard_keys = {role['dashboard_key'] for role in dashboard_roles}
-    if dashboard_key not in allowed_dashboard_keys and dashboard_key != 'admin':
-        raise PermissionDenied
-
-    previous_dashboard_key = request.session.get('active_dashboard_key') or _get_dashboard_destination_key(request.user, request=request)
-    request.session['active_dashboard_key'] = dashboard_key
-    request.session['active_dashboard_label'] = ROLE_DASHBOARD_LABELS.get(dashboard_key, dashboard_key.replace('_', ' ').title())
-    _record_dashboard_switch(request, previous_dashboard_key, dashboard_key)
-    return redirect(_get_dashboard_url(dashboard_key))
 
 
 def _parse_exception_metadata(alert):
@@ -743,14 +946,20 @@ def api_tape_list(request):
 
         form = AddTapeForm(payload)
         if form.is_valid():
-            tape = form.save()
-            AuditLog.objects.create(
-                name='Tape Registered',
-                action=f'Registered tape {tape.volser} via API',
-                user=request.user,
-                severity='success',
+            # Do not commit immediately — create a PendingApproval for backup review
+            data = form.cleaned_data
+            payload_fields = {k: (str(v) if not isinstance(v, (dict, list)) else v) for k, v in data.items()}
+            pa = _build_pending_tape_approval(
+                request,
+                transaction_type='Add Tape',
+                summary=f"Register tape {payload_fields.get('volser') or payload_fields.get('barcode')}",
+                payload_fields=payload_fields,
+                priority='Medium',
+                risk_level='High',
             )
-            return JsonResponse({'result': TapeSerializer(tape).data}, status=201)
+            if pa:
+                return JsonResponse({'result': 'pending', 'pending_id': str(pa.pk)}, status=202)
+            return JsonResponse({'detail': 'Failed to create pending approval.'}, status=500)
 
         return JsonResponse({'detail': 'Validation failed.', 'errors': form.errors}, status=400)
 
@@ -942,31 +1151,6 @@ from .forms import *
 from .models import *
 
 
-ROLE_DASHBOARD_ROUTE_MAP = {
-    'admin': 'dashboard',
-    'backup': 'backup-dashboard',
-    'operations': 'operations-dashboard',
-    'warehouse': 'warehouse-operations-dashboard',
-    'auditor': 'auditor-dashboard',
-    'supreme': 'supreme-approver-dashboard',
-    'courier': 'courier-dashboard',
-    'dr': 'investigation-dashboard',
-    'security': 'dashboard',
-}
-
-ROLE_DASHBOARD_LABELS = {
-    'admin': 'System Administrator',
-    'backup': 'Backup Administrator',
-    'operations': 'Operations Manager',
-    'warehouse': 'Warehouse Operations',
-    'auditor': 'Compliance Auditor',
-    'supreme': 'Supreme Approver',
-    'courier': 'Courier',
-    'dr': 'DR Team',
-    'security': 'Information Security Officer',
-}
-
-
 def is_valid_uuid(value):
     if not value:
         return False
@@ -981,132 +1165,6 @@ def get_object_by_uuid_pk(model, pk_value):
     if not is_valid_uuid(pk_value):
         return None
     return model.objects.filter(pk=pk_value).first()
-
-
-def _get_legacy_dashboard_key_for_user(user):
-    if not user or not getattr(user, 'is_authenticated', False):
-        return None
-
-    if user.is_superuser:
-        return 'admin'
-
-    role_name = (getattr(user, 'role', '') or '').strip().lower()
-    if role_name == 'operations_manager':
-        return 'operations'
-    if role_name == 'auditor':
-        return 'auditor'
-
-    group_names = [group.name.lower() for group in user.groups.all()]
-    for group_name in group_names:
-        if 'supreme' in group_name:
-            return 'supreme'
-        if 'backup' in group_name:
-            return 'backup'
-        if 'operations' in group_name:
-            return 'operations'
-        if 'warehouse' in group_name:
-            return 'warehouse'
-        if 'auditor' in group_name:
-            return 'auditor'
-        if 'courier' in group_name:
-            return 'courier'
-        if 'dr' in group_name:
-            return 'dr'
-        if 'security' in group_name:
-            return 'security'
-
-    return 'backup'
-
-
-def _get_user_dashboard_roles(user):
-    if not user or not getattr(user, 'is_authenticated', False):
-        return []
-
-    approved_assignments = UserRoleAssignment.objects.select_related('role', 'role__group').filter(
-        user=user,
-        status__in=['Backup Approved', 'Supreme Approved', 'Active'],
-        role__is_active=True,
-    ).order_by('-is_primary_dashboard', 'role__sort_order', 'role__name')
-
-    role_entries = []
-    seen_dashboard_keys = set()
-    for assignment in approved_assignments:
-        role = assignment.role
-        if not role or role.dashboard_key in seen_dashboard_keys:
-            continue
-        seen_dashboard_keys.add(role.dashboard_key)
-        role_entries.append({
-            'id': str(role.id),
-            'label': role.name,
-            'dashboard_key': role.dashboard_key,
-            'url_name': ROLE_DASHBOARD_ROUTE_MAP.get(role.dashboard_key, 'dashboard'),
-            'url': reverse(ROLE_DASHBOARD_ROUTE_MAP.get(role.dashboard_key, 'dashboard')),
-            'is_primary': assignment.is_primary_dashboard,
-            'status': assignment.status,
-        })
-
-    if role_entries:
-        return role_entries
-
-    legacy_dashboard_key = _get_legacy_dashboard_key_for_user(user)
-    if not legacy_dashboard_key:
-        return []
-
-    return [{
-        'id': legacy_dashboard_key,
-        'label': ROLE_DASHBOARD_LABELS.get(legacy_dashboard_key, legacy_dashboard_key.replace('_', ' ').title()),
-        'dashboard_key': legacy_dashboard_key,
-        'url_name': ROLE_DASHBOARD_ROUTE_MAP.get(legacy_dashboard_key, 'dashboard'),
-        'url': reverse(ROLE_DASHBOARD_ROUTE_MAP.get(legacy_dashboard_key, 'dashboard')),
-        'is_primary': True,
-        'status': 'Active',
-    }]
-
-
-def _get_dashboard_destination_key(user, request=None):
-    dashboard_roles = _get_user_dashboard_roles(user)
-    if not dashboard_roles:
-        return None
-
-    if request is not None:
-        session_dashboard_key = request.session.get('active_dashboard_key')
-        if session_dashboard_key and any(role['dashboard_key'] == session_dashboard_key for role in dashboard_roles):
-            return session_dashboard_key
-
-    primary_role = next((role for role in dashboard_roles if role.get('is_primary')), None)
-    if primary_role:
-        return primary_role['dashboard_key']
-    return dashboard_roles[0]['dashboard_key']
-
-
-def _get_dashboard_url(dashboard_key):
-    route_name = ROLE_DASHBOARD_ROUTE_MAP.get(dashboard_key, 'dashboard')
-    return reverse(route_name)
-
-
-def _record_dashboard_switch(request, previous_dashboard_key, new_dashboard_key):
-    if not request.user.is_authenticated or previous_dashboard_key == new_dashboard_key:
-        return
-
-    browser = (request.META.get('HTTP_USER_AGENT') or '')[:255]
-    ip_address = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', 'unknown'))
-    AuditLog.objects.create(
-        name='Dashboard Switched',
-        action=f'{request.user.username} switched dashboard from {previous_dashboard_key} to {new_dashboard_key}',
-        user=request.user,
-        message=f'previous_dashboard={previous_dashboard_key}|new_dashboard={new_dashboard_key}|ip={ip_address}|browser={browser}',
-        severity='info',
-    )
-
-
-def _redirect_user_to_dashboard(request, user):
-    dashboard_key = _get_dashboard_destination_key(user, request=request)
-    if not dashboard_key:
-        return None
-
-    request.session['active_dashboard_key'] = dashboard_key
-    request.session['active_dashboard_label'] = ROLE_DASHBOARD_LABELS.get(dashboard_key, dashboard_key.replace('_', ' ').title())
-    return redirect(_get_dashboard_url(dashboard_key))
 
 
 def _resolve_courier_selection(courier_selection):
@@ -1152,6 +1210,17 @@ def feature_module(request, feature_key):
     feature = next((item for item in get_dashboard_feature_catalog() if item['key'] == feature_key), None)
     if not feature:
         raise Http404
+
+    configured_url = feature.get('url')
+    if configured_url:
+        return redirect(configured_url)
+
+    configured_url_name = feature.get('url_name')
+    if configured_url_name:
+        try:
+            return redirect(reverse(configured_url_name, kwargs=feature.get('url_kwargs', {})))
+        except Exception:
+            pass
 
     def render_feature_view(view_func):
         request.GET = request.GET.copy()
@@ -2172,10 +2241,23 @@ def index(request):
     return render(request, "index.html")
 
 
+def get_user_role(user):
+    if not user or not getattr(user, 'is_authenticated', False):
+        return None
+    role_key = (getattr(user, 'role', '') or '').strip().lower()
+    if not role_key:
+        return None
+    return Role.objects.filter(Q(slug=role_key) | Q(dashboard_key=role_key), is_active=True).first()
+
+
 def has_dashboard_feature_access(user, feature_key):
     if not user or not user.is_authenticated or not feature_key:
         return False
     if user.is_superuser:
+        return True
+
+    role = get_user_role(user)
+    if role and RoleFeature.objects.filter(role=role, feature__feature_key=feature_key, is_active=True, feature__is_active=True).exists():
         return True
 
     if is_backup_administrator(user):
@@ -2201,13 +2283,24 @@ def has_dashboard_feature_access(user, feature_key):
 def is_backup_administrator(user):
     if not user or not user.is_authenticated:
         return False
-    return user.is_superuser or user.groups.filter(name='Backup Administrator').exists()
+    if user.is_superuser:
+        return True
+    role = get_user_role(user)
+    if role and role.dashboard_key in {'backup', 'backup_administrator'}:
+        return True
+    role_name = (getattr(user, 'role', '') or '').strip().lower()
+    if role_name in {'backup administrator', 'backup_administrator', 'backup', 'backup-admin'}:
+        return True
+    return user.groups.filter(name='Backup Administrator').exists()
 
 
 def is_operations_manager(user):
     if not user or not user.is_authenticated:
         return False
     if user.is_superuser:
+        return True
+    role = get_user_role(user)
+    if role and role.dashboard_key in {'operations', 'operations_manager'}:
         return True
     if (getattr(user, 'role', '') or '').strip().lower() == 'operations_manager':
         return True
@@ -2219,6 +2312,9 @@ def is_supreme_approver(user):
         return False
     if user.is_superuser:
         return True
+    role = get_user_role(user)
+    if role and role.dashboard_key in {'supreme', 'supreme_approver'}:
+        return True
     role_name = (getattr(user, 'role', '') or '').strip().lower()
     if role_name in {'supreme approver', 'supreme_approver', 'supremeapprover'}:
         return True
@@ -2229,6 +2325,9 @@ def is_warehouse_staff(user):
     if not user or not user.is_authenticated:
         return False
     if user.is_superuser:
+        return True
+    role = get_user_role(user)
+    if role and role.dashboard_key in {'warehouse', 'warehouse_operations'}:
         return True
     role_name = (getattr(user, 'role', '') or '').strip().lower()
     if role_name in {'warehouse', 'warehouse ops', 'warehouse_ops', 'warehouse_operator', 'warehouse operator'}:
@@ -2271,6 +2370,10 @@ def is_it_compliance_auditor(user):
     if not user.is_authenticated:
         return False
     if user.is_superuser:
+        return True
+
+    role = get_user_role(user)
+    if role and role.dashboard_key in {'auditor', 'compliance_auditor'}:
         return True
 
     role_name = (getattr(user, 'role', '') or '').strip().lower()
@@ -3169,8 +3272,7 @@ def signin(request):
                 pending_user.save(update_fields=['otp_code', 'otp_expires_at', 'failed_login_attempts', 'account_locked_until', 'otp_resend_count', 'otp_resend_window_started_at'])
                 login(request, pending_user)
                 request.session['invalid_login_attempts'] = 0
-                dashboard_key = _get_dashboard_destination_key(pending_user, request=request)
-                if pending_user.is_superuser or dashboard_key == 'admin':
+                if pending_user.is_superuser:
                     AuditLog.objects.create(
                         name='Admin Login',
                         action=f'User {pending_user.username} signed in as superuser',
@@ -3178,36 +3280,62 @@ def signin(request):
                         severity='success',
                     )
                     return redirect('/admin/')
-
-                dashboard_log_labels = {
-                    'backup': 'Backup Administrator',
-                    'operations': 'Operations Manager',
-                    'warehouse': 'Warehouse Operations',
-                    'auditor': 'Compliance Auditor',
-                    'supreme': 'Supreme Approver',
-                    'courier': 'Courier',
-                    'dr': 'DR Team',
-                    'security': 'Information Security Officer',
-                }
-                dashboard_login_names = {
-                    'backup': 'Backup Administrator Login',
-                    'operations': 'Operations Manager Login',
-                    'warehouse': 'Warehouse Ops Login',
-                    'auditor': 'Compliance Auditor Login',
-                    'supreme': 'Supreme Approver Login',
-                    'courier': 'Courier Login',
-                    'dr': 'DR Team Login',
-                    'security': 'Security Officer Login',
-                }
-                if dashboard_key in dashboard_log_labels:
+                if is_it_compliance_auditor(pending_user):
                     AuditLog.objects.create(
-                        name=dashboard_login_names.get(dashboard_key, 'Dashboard Login'),
-                        action=f'User {pending_user.username} signed in as {dashboard_log_labels[dashboard_key]}',
+                        name='Compliance Auditor Login',
+                        action=f'User {pending_user.username} signed in as IT Compliance Auditor',
                         user=pending_user,
                         severity='success',
                     )
-                    return _redirect_user_to_dashboard(request, pending_user)
-
+                    return redirect('auditor-dashboard')
+                if is_backup_administrator(pending_user):
+                    AuditLog.objects.create(
+                        name='Backup Administrator Login',
+                        action=f'User {pending_user.username} signed in as Backup Administrator',
+                        user=pending_user,
+                        severity='success',
+                    )
+                    return redirect('backup-dashboard')
+                if is_supreme_approver(pending_user):
+                    AuditLog.objects.create(
+                        name='Supreme Approver Login',
+                        action=f'User {pending_user.username} signed in as Supreme Approver',
+                        user=pending_user,
+                        severity='success',
+                    )
+                    return redirect('supreme-approver-dashboard')
+                if is_operations_manager(pending_user):
+                    AuditLog.objects.create(
+                        name='Operations Manager Login',
+                        action=f'User {pending_user.username} signed in as Operations Manager',
+                        user=pending_user,
+                        severity='success',
+                    )
+                    return redirect('operations-dashboard')
+                if is_warehouse_staff(pending_user):
+                    AuditLog.objects.create(
+                        name='Warehouse Ops Login',
+                        action=f'User {pending_user.username} signed in as Warehouse Operations',
+                        user=pending_user,
+                        severity='success',
+                    )
+                    return redirect('warehouse-operations-dashboard')
+                if is_courier(pending_user):
+                    AuditLog.objects.create(
+                        name='Courier Login',
+                        action=f'User {pending_user.username} signed in as Courier',
+                        user=pending_user,
+                        severity='success',
+                    )
+                    return redirect('courier-dashboard')
+                if is_dr_team(pending_user):
+                    AuditLog.objects.create(
+                        name='DR Team Login',
+                        action=f'User {pending_user.username} signed in as DR Team',
+                        user=pending_user,
+                        severity='success',
+                    )
+                    return redirect('investigation-dashboard')
                 AuditLog.objects.create(
                     name='Unauthorized Dashboard Login',
                     action=f'User {pending_user.username} attempted dashboard login without appropriate role',
@@ -3295,32 +3423,48 @@ def dashboard(request):
     role_feature_initial = {}
     selected_group = None
     if selected_group_id:
-        selected_group = Group.objects.filter(pk=selected_group_id).first()
+        selected_group = Role.objects.filter(pk=selected_group_id).first()
     if not selected_group:
-        selected_group = Group.objects.first()
+        selected_group = Role.objects.filter(is_active=True).first()
     if selected_group:
-        template = RoleTemplate.objects.filter(group=selected_group).first()
+        template = RoleTemplate.objects.filter(group=selected_group.group).first() if selected_group.group else None
         role_feature_initial = {
-            'group': selected_group,
-            'features': template.features if template else [],
+            'role': selected_group,
+            'features': selected_group.get_active_features() if selected_group else [],
         }
     role_feature_form = RoleFeatureUpdateForm(request.POST or None, initial=role_feature_initial)
     role_form = UserRoleAssignmentForm(request.POST or None)
     role_form.fields['user'].queryset = User.objects.filter(is_active=True, verified=True).order_by('username')
+    role_feature_form.fields['group'].queryset = Role.objects.filter(is_active=True).order_by('sort_order', 'name')
+    role_form.fields['group'].queryset = Role.objects.filter(is_active=True).order_by('sort_order', 'name')
     edit_user = None
 
     if request.method == 'POST':
         if request.POST.get('form_type') == 'add_tape':
             if tape_form.is_valid():
-                tape = tape_form.save()
-                AuditLog.objects.create(
-                    name='Tape Registered',
-                    action=f'Registered tape {tape.volser}',
-                    user=request.user,
-                    severity='success',
+                data = tape_form.cleaned_data
+                payload_fields = {
+                    k: (str(v) if not isinstance(v, (dict, list)) else v)
+                    for k, v in data.items()
+                }
+                pa = _build_pending_tape_approval(
+                    request,
+                    transaction_type='Add Tape',
+                    summary=f"Register tape {payload_fields.get('volser') or payload_fields.get('barcode')}",
+                    payload_fields=payload_fields,
+                    priority='Medium',
+                    risk_level='High',
                 )
-                messages.success(request, 'New tape registered successfully.')
-                return redirect('dashboard')
+                if pa:
+                    AuditLog.objects.create(
+                        name='Pending Tape Registration',
+                        action=f'Pending registration for tape {payload_fields.get("volser") or payload_fields.get("barcode")}',
+                        user=request.user,
+                        severity='info',
+                    )
+                    messages.success(request, 'Tape registration submitted for approval.')
+                    return redirect('dashboard')
+                messages.error(request, 'Failed to submit tape registration for approval.')
             else:
                 messages.error(request, 'Please correct the tape form errors below and try again.')
         elif request.POST.get('form_type') == 'add_user':
@@ -3362,12 +3506,38 @@ def dashboard(request):
         elif request.POST.get('form_type') == 'create_role':
             if role_creation_form.is_valid():
                 role_name = role_creation_form.cleaned_data['role_name']
-                features = role_creation_form.cleaned_data['features']
-                group, created = Group.objects.get_or_create(name=role_name)
+                selected_features = list(role_creation_form.cleaned_data['features'])
+                role_slug = re.sub(r'[^a-z0-9]+', '_', role_name.strip().lower()).strip('_') or 'role'
+                group, _ = Group.objects.get_or_create(name=role_name)
+                role, created = Role.objects.get_or_create(
+                    slug=role_slug,
+                    defaults={
+                        'name': role_name,
+                        'dashboard_key': role_slug,
+                        'group': group,
+                    },
+                )
                 if not created:
                     messages.error(request, 'Role name already exists.')
                 else:
-                    RoleTemplate.objects.create(group=group, features=features)
+                    if not role.group_id:
+                        role.group = group
+                        role.save(update_fields=['group'])
+                    existing_role_features = {rf.feature.feature_key: rf for rf in RoleFeature.objects.filter(role=role)}
+                    for feature in selected_features:
+                        rf = existing_role_features.get(feature.feature_key)
+                        if rf:
+                            if not rf.is_active:
+                                rf.is_active = True
+                                rf.assigned_by = request.user
+                                rf.save(update_fields=['is_active', 'assigned_by', 'updated_at'])
+                        else:
+                            RoleFeature.objects.create(
+                                role=role,
+                                feature=feature,
+                                is_active=True,
+                                assigned_by=request.user,
+                            )
                     AuditLog.objects.create(
                         name='Role Created',
                         action=f'Created role {role_name}',
@@ -3381,14 +3551,16 @@ def dashboard(request):
         elif request.POST.get('form_type') == 'assign_role':
             if role_form.is_valid():
                 user = role_form.cleaned_data['user']
-                group = role_form.cleaned_data['group']
+                role = role_form.cleaned_data.get('role') or role_form.cleaned_data.get('group')
                 user.groups.clear()
-                user.groups.add(group)
-                user.is_staff = group.name.lower() in ['admin', 'system administrator']
+                if role.group:
+                    user.groups.add(role.group)
+                user.role = role.dashboard_key
+                user.is_staff = role.dashboard_key in ['admin', 'system_administrator', 'system administrator']
                 user.save()
                 AuditLog.objects.create(
                     name='Role Assigned',
-                    action=f'Assigned {group.name} role to {user.username}',
+                    action=f'Assigned {role.name} role to {user.username}',
                     user=request.user,
                     severity='success',
                 )
@@ -3398,18 +3570,46 @@ def dashboard(request):
                 messages.error(request, 'Please correct the role assignment errors below and try again.')
         elif request.POST.get('form_type') == 'update_role_features':
             if role_feature_form.is_valid():
-                group = role_feature_form.cleaned_data['group']
+                role = role_feature_form.cleaned_data.get('role') or role_feature_form.cleaned_data.get('group')
                 features = role_feature_form.cleaned_data['features']
-                template, created = RoleTemplate.objects.get_or_create(group=group)
-                template.features = features
-                template.save()
+                current_feature_keys = list(role.get_active_features().values_list('feature_key', flat=True))
+                backup_admin = User.objects.filter(is_active=True, groups__name='Backup Administrator').first()
+                payload = {
+                    'role_id': str(role.pk),
+                    'role_name': role.name,
+                    'previous_feature_keys': current_feature_keys,
+                    'feature_keys': features,
+                }
+                from .utils import create_pending_approval
+
+                create_pending_approval(
+                    transaction_type='Role Feature Update',
+                    module='Administration',
+                    summary=f'Update role features for {role.name}',
+                    requester=request.user,
+                    backup_administrator=backup_admin,
+                    priority='High',
+                    risk_level='High',
+                    status='Pending',
+                    request_payload=payload,
+                    requested_changes=[{'action': 'replace_role_features', 'role': role.name, 'previous': current_feature_keys, 'new': features}],
+                    related_model='role_feature',
+                    related_object_id=str(role.pk),
+                    audit_history=[{
+                        'action': 'Requested',
+                        'user': request.user.get_full_name() or request.user.username,
+                        'timestamp': timezone.localtime().isoformat(),
+                        'previous_configuration': current_feature_keys,
+                        'new_configuration': features,
+                    }],
+                )
                 AuditLog.objects.create(
                     name='Role Features Updated',
-                    action=f'Updated features for {group.name}',
+                    action=f'Requested feature update for {role.name}',
                     user=request.user,
-                    severity='success',
+                    severity='info',
                 )
-                messages.success(request, f'Features for role {group.name} were updated successfully.')
+                messages.success(request, f'Feature change request for role {role.name} was submitted for approval.')
                 return redirect(f"{reverse('dashboard')}?active_tab=roles&active_panel=%23editRoleFeaturesPanel")
             else:
                 messages.error(request, 'Please correct the role feature form errors below and try again.')
@@ -3440,23 +3640,21 @@ def dashboard(request):
                 edit_user_form = CustomUserEditForm(instance=edit_user)
 
     users = User.objects.all().order_by("username")
-    groups = Group.objects.all().order_by("name")
+    groups = Role.objects.filter(is_active=True).order_by("sort_order", "name")
     role_templates = RoleTemplate.objects.select_related('group').all()
     shipments = Shipment.objects.all().order_by("shipment_id")
     reports = ReportTemplate.objects.all()
     audit_logs = AuditLog.objects.order_by("-timestamp")
 
-    role_templates_by_group = {template.group.name: template for template in role_templates}
+    role_templates_by_group = {template.group.name: template for template in role_templates if template.group}
 
     pending_users = User.objects.filter(verified=False).order_by('date_joined')
 
     user_feature_names = []
-    user_groups = request.user.groups.all()
-    if user_groups.exists():
-        assigned_templates = RoleTemplate.objects.filter(group__in=user_groups)
-        for template in assigned_templates:
-            if template.features:
-                user_feature_names.extend(template.features)
+    active_role = get_user_role(request.user)
+    if active_role:
+        for feature in active_role.get_active_features():
+            user_feature_names.append(feature.feature_key)
     user_feature_names = sorted(set(user_feature_names))
 
     tapes = Tape.objects.all().order_by('-date_registered')
@@ -3598,106 +3796,100 @@ def backup_dashboard(request):
             if shipment and assignment_form.is_valid():
                 comments = (assignment_form.cleaned_data.get('comments') or '').strip()
                 if decision == 'approve':
+                    # Backup admin approval moves the shipment to awaiting supreme approval.
+                    # Do NOT notify or assign courier for pickup at this stage.
                     tape = assignment_form.cleaned_data['tape']
                     courier_selection = assignment_form.cleaned_data['courier']
                     courier_profile = None
                     courier_user = None
                     courier_name = ''
                     courier_contact = ''
-                    if courier_selection and courier_selection.startswith('profile:'):
-                        profile_id = courier_selection.split(':', 1)[1]
-                        courier_profile = CourierProfile.objects.filter(pk=profile_id).first()
-                        if courier_profile:
-                            courier_user = courier_profile.user
-                            courier_name = courier_profile.full_name
-                            courier_contact = courier_profile.phone_number
-                    elif courier_selection and courier_selection.startswith('user:'):
-                        user_id = courier_selection.split(':', 1)[1]
-                        courier_user = get_user_model().objects.filter(pk=user_id).first()
-                        if courier_user:
-                            courier_name = courier_user.get_full_name() or courier_user.username
-                            courier_contact = courier_user.email or ''
-                            courier_profile = getattr(courier_user, 'courier_profile', None)
-                    elif courier_selection:
-                        courier_profile = CourierProfile.objects.filter(pk=courier_selection).first()
-                        if courier_profile:
-                            courier_user = courier_profile.user
-                            courier_name = courier_profile.full_name
-                            courier_contact = courier_profile.phone_number
-                        else:
-                            courier_user = get_user_model().objects.filter(pk=courier_selection).first()
+                    if courier_selection and isinstance(courier_selection, str):
+                        if courier_selection.startswith('profile:'):
+                            profile_id = courier_selection.split(':', 1)[1]
+                            courier_profile = CourierProfile.objects.filter(pk=profile_id).first()
+                            if courier_profile:
+                                courier_user = courier_profile.user
+                                courier_name = courier_profile.full_name
+                                courier_contact = courier_profile.phone_number
+                        elif courier_selection.startswith('user:'):
+                            user_id = courier_selection.split(':', 1)[1]
+                            courier_user = get_user_model().objects.filter(pk=user_id).first()
                             if courier_user:
                                 courier_name = courier_user.get_full_name() or courier_user.username
                                 courier_contact = courier_user.email or ''
                                 courier_profile = getattr(courier_user, 'courier_profile', None)
+                        else:
+                            courier_profile = CourierProfile.objects.filter(pk=courier_selection).first()
+                            if courier_profile:
+                                courier_user = courier_profile.user
+                                courier_name = courier_profile.full_name
+                                courier_contact = courier_profile.phone_number
+                            else:
+                                courier_user = get_user_model().objects.filter(pk=courier_selection).first()
+                                if courier_user:
+                                    courier_name = courier_user.get_full_name() or courier_user.username
+                                    courier_contact = courier_user.email or ''
+                                    courier_profile = getattr(courier_user, 'courier_profile', None)
 
+                    # Persist the selected tape and courier details but do not notify courier.
                     shipment.tapes.add(tape)
                     shipment.number_of_tapes = shipment.tapes.count()
                     shipment.courier_name = courier_name or (courier_profile.full_name if courier_profile else '')
                     shipment.courier_contact = courier_contact or (courier_profile.phone_number if courier_profile else '')
                     shipment.tracking_number = f"TRK-{shipment.shipment_id[:8].upper()}"
-                    shipment.status = 'Approved'
+                    previous_status = shipment.status
+                    shipment.status = 'Pending'
+                    shipment.approval_stage = 'awaiting_supreme'
+                    shipment.approved_by_backup = request.user
                     shipment.approved_by = request.user
                     shipment.approval_date = timezone.localtime()
-                    shipment.approval_remarks = comments or 'Approved by backup administrator.'
+                    shipment.approval_remarks = comments or 'Approved by backup administrator. Pending supreme approver.'
                     shipment.last_updated_by = request.user
-                    shipment.save(update_fields=['status', 'approved_by', 'approval_date', 'approval_remarks', 'last_updated_by', 'last_updated_at', 'courier_name', 'courier_contact', 'tracking_number', 'number_of_tapes'])
-                    ShipmentApprovalHistory.objects.create(shipment=shipment, action='Approved', comments=comments, user=request.user)
-                    AuditLog.objects.create(name='Shipment Assigned', action=f'Shipment {shipment.shipment_id} assigned to courier {courier_name or (courier_profile.full_name if courier_profile else "selected courier")}', user=request.user, severity='success')
+                    shipment.save(update_fields=['status', 'approved_by', 'approved_by_backup', 'approval_stage', 'approval_date', 'approval_remarks', 'last_updated_by', 'last_updated_at', 'courier_name', 'courier_contact', 'tracking_number', 'number_of_tapes'])
+                    ShipmentApprovalHistory.objects.create(shipment=shipment, action='Backup Approved', comments=comments, user=request.user)
+                    AuditLog.objects.create(name='Shipment Backup Approved', action=f'Shipment {shipment.shipment_id} approved by backup administrator and awaiting supreme approval.', user=request.user, severity='info')
 
-                    operator = shipment.created_by
-                    requester_name = operator.get_full_name() or operator.username if operator else 'the requester'
-                    assigned_courier = courier_name or (courier_profile.full_name if courier_profile else 'the selected courier')
-                    if operator:
-                        operator_message = (
-                            f'You approved shipment {shipment.shipment_id} requested by {requester_name} '
-                            f'and assigned it to {assigned_courier}.'
+                    # Create a pending approval record to notify the supreme approver(s)
+                    try:
+                        from .utils import create_pending_approval
+                        create_pending_approval(
+                            transaction_type='Shipment',
+                            module='Shipment Workflow',
+                            summary=f"Shipment {shipment.shipment_id} awaiting supreme approval",
+                            requester=shipment.created_by,
+                            backup_administrator=request.user,
+                            branch=shipment.requesting_branch or None,
+                            priority=shipment.priority_level or 'Normal',
+                            risk_level='High' if shipment.priority_level in {'High', 'Critical'} else 'Medium',
+                            status='Awaiting Supreme Approval',
+                            request_date=timezone.localtime(),
+                            request_payload={'shipment_id': shipment.shipment_id},
+                            related_object_id=str(shipment.pk),
+                            related_model='shipment',
                         )
+                    except Exception:
+                        pass
+
+                    # Notify operators that backup approved (do not notify courier)
+                    operator = shipment.created_by
+                    if operator:
                         AuditLog.objects.create(
-                            name='Shipment Approved',
-                            action=operator_message,
+                            name='Shipment Backup Approved',
+                            action=(f'Your shipment request {shipment.shipment_id} was approved by the backup administrator and is awaiting supreme approval.'),
                             user=operator,
-                            severity='success',
+                            severity='info',
                         )
                         if application_settings.email_alerts_enabled and operator.email:
                             send_mail(
-                                f'Shipment {shipment.shipment_id} approved',
-                                f'Your shipment request {shipment.shipment_id} was approved by the backup administrator and assigned to {assigned_courier}.',
+                                f'Shipment {shipment.shipment_id} pending supreme approval',
+                                f'Your shipment request {shipment.shipment_id} was approved by the backup administrator and is awaiting supreme approval.',
                                 settings.DEFAULT_FROM_EMAIL,
                                 [operator.email],
                                 fail_silently=True,
                             )
-                    if courier_user:
-                        courier_message = (
-                            f'Shipment {shipment.shipment_id} was approved by you and assigned to {assigned_courier}.'
-                        )
-                        pickup_url = reverse('pickup-confirmation', args=[shipment.pk])
-                        AuditLog.objects.create(
-                            name='Shipment Assigned',
-                            action=courier_message,
-                            message=f'target_url={pickup_url}',
-                            user=courier_user,
-                            severity='warning',
-                        )
-                    elif courier_profile and courier_profile.email:
-                        courier_message = (
-                            f'Shipment {shipment.shipment_id} was assigned to you and requires pickup confirmation.'
-                        )
-                        pickup_url = reverse('pickup-confirmation', args=[shipment.pk])
-                        AuditLog.objects.create(
-                            name='Shipment Assigned',
-                            action=courier_message,
-                            message=f'target_url={pickup_url}',
-                            user=None,
-                            severity='warning',
-                        )
-                        send_courier_profile_email_alert(
-                            courier_profile,
-                            f'Shipment {shipment.shipment_id} assigned to you',
-                            f'You were assigned to handle shipment {shipment.shipment_id}. Please confirm pickup at {request.build_absolute_uri(pickup_url)}.'
-                        )
 
-                    messages.success(request, f'You approved shipment {shipment.shipment_id} requested by {requester_name} and assigned it to {assigned_courier}.')
+                    messages.success(request, f'You approved shipment {shipment.shipment_id}; it is now awaiting supreme approval.')
                 else:
                     shipment.status = 'Rejected'
                     shipment.approved_by = request.user
@@ -3828,15 +4020,27 @@ def backup_dashboard(request):
             return redirect(f'{reverse("backup-dashboard")}?show_alerts=1')
         elif form_type == 'add_tape':
             if tape_form.is_valid():
-                tape = tape_form.save()
-                AuditLog.objects.create(
-                    name='Tape Registered',
-                    action=f'Registered tape {tape.volser} via backup dashboard',
-                    user=request.user,
-                    severity='success',
+                data = tape_form.cleaned_data
+                payload_fields = {k: (str(v) if not isinstance(v, (dict, list)) else v) for k, v in data.items()}
+                pa = _build_pending_tape_approval(
+                    request,
+                    transaction_type='Add Tape',
+                    summary=f"Register tape {payload_fields.get('volser') or payload_fields.get('barcode')}",
+                    payload_fields=payload_fields,
+                    priority='Medium',
+                    risk_level='High',
                 )
-                messages.success(request, 'New tape registered successfully.')
-                return redirect(f'{reverse("backup-dashboard")}?show_add_tape=1')
+                if pa:
+                    AuditLog.objects.create(
+                        name='Pending Tape Registration',
+                        action=f'Pending registration for tape {payload_fields.get("volser") or payload_fields.get("barcode")}',
+                        user=request.user,
+                        severity='info',
+                    )
+                    messages.success(request, 'Tape registration submitted for approval.')
+                    return redirect(f'{reverse("backup-dashboard")}?show_add_tape=1')
+                show_add_tape_panel = True
+                messages.error(request, 'Failed to submit tape registration for approval.')
             else:
                 show_add_tape_panel = True
                 messages.error(request, 'Please correct the tape form errors below and try again.')
@@ -3848,67 +4052,150 @@ def backup_dashboard(request):
                 action = request.POST.get('action')
                 if action == 'edit_details':
                     if tape_action_form.is_valid():
-                        tape_action_form.save()
-                        AuditLog.objects.create(
-                            name='Tape Updated',
-                            action=f'Updated tape details for {selected_tape.volser}',
-                            user=request.user,
-                            severity='success',
+                        data = tape_action_form.cleaned_data
+                        UserModel = get_user_model()
+                        backup_admin = UserModel.objects.filter(is_active=True, groups__name='Backup Administrator').first()
+                        payload_fields = {k: (str(v) if not isinstance(v, (dict, list)) else v) for k, v in data.items()}
+                        pa = create_pending_approval(
+                            transaction_type='Update Tape',
+                            module='Inventory',
+                            summary=f"Update tape {selected_tape.volser}",
+                            requester=request.user,
+                            backup_administrator=backup_admin,
+                            priority='Medium',
+                            risk_level='Medium',
+                            status='Pending',
+                            request_payload=payload_fields,
+                            requested_changes=[{'action': 'update', 'model': 'Tape', 'object_id': str(selected_tape.pk), 'fields': payload_fields}],
+                            related_model='tape',
+                            related_object_id=str(selected_tape.pk),
+                            audit_history=[{
+                                'action': 'Requested Update',
+                                'user': request.user.get_full_name() or request.user.username,
+                                'timestamp': timezone.localtime().isoformat(),
+                            }],
                         )
-                        messages.success(request, f'Tape {selected_tape.volser} updated successfully.')
-                        return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
+                        if pa:
+                            AuditLog.objects.create(
+                                name='Pending Tape Update',
+                                action=f'Pending update for tape {selected_tape.volser}',
+                                user=request.user,
+                                severity='info',
+                            )
+                            messages.success(request, f'Update for tape {selected_tape.volser} submitted for approval.')
+                            return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
+                        show_tape_actions_panel = True
+                        messages.error(request, 'Failed to submit tape update for approval.')
                     else:
                         show_tape_actions_panel = True
                         messages.error(request, 'Please correct the tape form errors and try again.')
                 elif action == 'update_location':
-                    selected_tape.current_location = request.POST.get('current_location', selected_tape.current_location)
-                    selected_tape.save()
-                    AuditLog.objects.create(
-                        name='Tape Location Updated',
-                        action=f'Updated location for {selected_tape.volser} to {selected_tape.current_location}',
-                        user=request.user,
-                        severity='success',
+                    new_location = request.POST.get('current_location', selected_tape.current_location)
+                    UserModel = get_user_model()
+                    backup_admin = UserModel.objects.filter(is_active=True, groups__name='Backup Administrator').first()
+                    payload_fields = {'current_location': new_location}
+                    pa = create_pending_approval(
+                        transaction_type='Update Tape Location',
+                        module='Inventory',
+                        summary=f"Update location for {selected_tape.volser} to {new_location}",
+                        requester=request.user,
+                        backup_administrator=backup_admin,
+                        priority='Low',
+                        risk_level='Medium',
+                        status='Pending',
+                        request_payload=payload_fields,
+                        requested_changes=[{'action': 'update', 'model': 'Tape', 'object_id': str(selected_tape.pk), 'fields': payload_fields}],
+                        related_model='tape',
+                        related_object_id=str(selected_tape.pk),
+                        audit_history=[{
+                            'action': 'Requested Location Update',
+                            'user': request.user.get_full_name() or request.user.username,
+                            'timestamp': timezone.localtime().isoformat(),
+                        }],
                     )
-                    messages.success(request, f'Location updated for {selected_tape.volser}.')
+                    if pa:
+                        AuditLog.objects.create(
+                            name='Pending Tape Location Update',
+                            action=f'Pending location update for {selected_tape.volser} to {new_location}',
+                            user=request.user,
+                            severity='info',
+                        )
+                        messages.success(request, f'Location update for {selected_tape.volser} submitted for approval.')
+                        return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
+                    messages.error(request, 'Failed to submit location update for approval.')
                     return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
                 elif action == 'mark_scratch':
                     try:
-                        selected_tape.status = 'Scratch Eligible'
-                        selected_tape.save()
+                        payload_fields = {'status': 'Scratch Eligible'}
+                        pa = _build_pending_tape_approval(
+                            request,
+                            transaction_type='Mark Tape Scratch Eligible',
+                            summary=f'Mark {selected_tape.volser} as scratch eligible',
+                            payload_fields=payload_fields,
+                            object_id=str(selected_tape.pk),
+                            priority='Low',
+                            risk_level='Medium',
+                        )
+                        if pa:
+                            AuditLog.objects.create(
+                                name='Pending Tape Scratch Mark',
+                                action=f'Pending scratch mark for {selected_tape.volser}',
+                                user=request.user,
+                                severity='info',
+                            )
+                            messages.success(request, f'Mark scratch request for {selected_tape.volser} submitted for approval.')
+                            return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
+                        messages.error(request, 'Failed to submit scratch mark for approval.')
+                        return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
                     except ValidationError as exc:
                         messages.error(request, exc.messages[0])
                         return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
-
-                    AuditLog.objects.create(
-                        name='Tape Marked Scratch Eligible',
-                        action=f'Marked tape {selected_tape.volser} as scratch eligible',
-                        user=request.user,
-                        severity='warning',
-                    )
-                    messages.success(request, f'{selected_tape.volser} marked as scratch eligible.')
-                    return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
                 elif action == 'mark_damaged':
-                    selected_tape.status = 'Damaged'
-                    selected_tape.save()
-                    AuditLog.objects.create(
-                        name='Tape Marked Damaged',
-                        action=f'Marked tape {selected_tape.volser} as damaged',
-                        user=request.user,
-                        severity='warning',
+                    payload_fields = {'status': 'Damaged'}
+                    pa = _build_pending_tape_approval(
+                        request,
+                        transaction_type='Mark Tape Damaged',
+                        summary=f'Mark {selected_tape.volser} as damaged',
+                        payload_fields=payload_fields,
+                        object_id=str(selected_tape.pk),
+                        priority='Low',
+                        risk_level='High',
                     )
-                    messages.success(request, f'{selected_tape.volser} marked as damaged.')
+                    if pa:
+                        AuditLog.objects.create(
+                            name='Pending Tape Damaged',
+                            action=f'Pending damaged mark for {selected_tape.volser}',
+                            user=request.user,
+                            severity='info',
+                        )
+                        messages.success(request, f'Mark damaged request for {selected_tape.volser} submitted for approval.')
+                        return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
+                    messages.error(request, 'Failed to submit damaged mark for approval.')
                     return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
                 elif action == 'scan_rfid':
-                    selected_tape.barcode = request.POST.get('barcode', selected_tape.barcode)
-                    selected_tape.rfid_tag = request.POST.get('rfid_tag', selected_tape.rfid_tag)
-                    selected_tape.save()
-                    AuditLog.objects.create(
-                        name='Tape Barcode/RFID Updated',
-                        action=f'Updated barcode/rfid for {selected_tape.volser}',
-                        user=request.user,
-                        severity='success',
+                    payload_fields = {
+                        'barcode': request.POST.get('barcode', selected_tape.barcode),
+                        'rfid_tag': request.POST.get('rfid_tag', selected_tape.rfid_tag),
+                    }
+                    pa = _build_pending_tape_approval(
+                        request,
+                        transaction_type='Update Tape Barcode/RFID',
+                        summary=f'Update barcode/RFID for {selected_tape.volser}',
+                        payload_fields=payload_fields,
+                        object_id=str(selected_tape.pk),
+                        priority='Low',
+                        risk_level='Medium',
                     )
-                    messages.success(request, f'Barcode/RFID updated for {selected_tape.volser}.')
+                    if pa:
+                        AuditLog.objects.create(
+                            name='Pending Tape Barcode/RFID Update',
+                            action=f'Pending barcode/RFID update for {selected_tape.volser}',
+                            user=request.user,
+                            severity='info',
+                        )
+                        messages.success(request, f'Barcode/RFID update for {selected_tape.volser} submitted for approval.')
+                        return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
+                    messages.error(request, 'Failed to submit barcode/RFID update for approval.')
                     return redirect(f'{reverse("backup-dashboard")}?show_tape_actions=1&selected_tape={selected_tape.id}')
             else:
                 messages.error(request, 'Please select a valid tape to update.')
@@ -4227,17 +4514,22 @@ def backup_dashboard(request):
                     messages.info(request, 'Schema synchronization preview is ready. Review the proposed changes before continuing.')
                     show_tape_inventory_panel = True
                 else:
-                    imported_count, message, success = import_inventory_excel_file(uploaded_file)
-                    if success:
-                        messages.success(request, message)
-                        AuditLog.objects.create(
-                            name='Inventory Import Completed',
-                            action=f'Imported {imported_count} tape records from Excel upload by {request.user.username}',
-                            user=request.user,
-                            severity='success',
-                        )
-                    else:
-                        messages.error(request, message)
+                    try:
+                        uploaded_file.seek(0)
+                        workbook = load_workbook(BytesIO(uploaded_file.read()), data_only=True)
+                        pa = _build_pending_inventory_import_approval(request, workbook, file_name=uploaded_file.name)
+                        if pa:
+                            AuditLog.objects.create(
+                                name='Pending Inventory Import',
+                                action=f'Pending Excel import submitted for approval by {request.user.username}',
+                                user=request.user,
+                                severity='info',
+                            )
+                            messages.success(request, 'Inventory import submitted for approval. It will be applied once approved.')
+                        else:
+                            messages.error(request, 'Unable to stage inventory import for approval.')
+                    except Exception as exc:
+                        messages.error(request, f'Unable to read the Excel file for staging import: {exc}')
                     return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
             else:
                 messages.error(request, 'Please choose an Excel file to import.')
@@ -4257,56 +4549,46 @@ def backup_dashboard(request):
                 messages.info(request, 'No schema changes were required.')
                 return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
 
-            sql_statements = []
-            log_entries = []
-            try:
-                with transaction.atomic():
-                    for column in new_columns:
-                        column_name = column['name']
-                        column_type = column['detected_type']
-                        if not is_safe_column_name(column_name):
-                            raise ValueError(f'Unsafe column name: {column_name}')
-                        sql_statement = f'ALTER TABLE inventory_tape ADD COLUMN IF NOT EXISTS {column_name} {column_type};'
-                        sql_statements.append(sql_statement)
-                        with connection.cursor() as cursor:
-                            cursor.execute(sql_statement)
-                        log_entries.append((column_name, column_type, sql_statement))
-
-                    for column_name, column_type, sql_statement in log_entries:
-                        SchemaChangeLog.objects.create(
-                            column_name=column_name,
-                            detected_data_type=column_type,
-                            target_table='inventory_tape',
-                            source_excel_filename=pending_preview.get('file_name', 'unknown.xlsx'),
-                            uploaded_by=request.user,
-                            approved_by=request.user,
-                            approval_timestamp=timezone.now(),
-                            sql_executed=sql_statement,
-                            synchronization_status='applied',
-                        )
-
-                    file_bytes = base64.b64decode(pending_preview.get('file_bytes', ''))
-                    workbook = load_workbook(BytesIO(file_bytes), data_only=True)
-                    imported_count, message, success = import_inventory_excel_file(workbook=workbook, file_name=pending_preview.get('file_name', 'unknown.xlsx'))
-                    if success:
-                        messages.success(request, f'Schema synchronized successfully. {len(new_columns)} new columns added. {message}')
-                        AuditLog.objects.create(
-                            name='Schema Synchronization Completed',
-                            action=f'Applied schema sync for {pending_preview.get("file_name", "unknown.xlsx")} by {request.user.username}',
-                            user=request.user,
-                            severity='success',
-                        )
-                    else:
-                        raise Exception(message)
-            except Exception as exc:
-                messages.error(request, f'Schema synchronization failed. Database rolled back. {exc}')
-                AuditLog.objects.create(
-                    name='Schema Synchronization Failed',
-                    action=f'Schema sync failed for {pending_preview.get("file_name", "unknown.xlsx")}: {exc}',
-                    user=request.user,
-                    severity='error',
-                )
-                return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
+            pa = _create_schema_sync_pending_approval(request, pending_preview)
+            if pa:
+                if request.user.is_superuser or is_backup_administrator(request.user):
+                    pa.status = 'Approved'
+                    pa.approved_by = request.user
+                    pa.reviewed_by = request.user
+                    pa.approved_at = timezone.localtime()
+                    pa.review_comment = 'Schema synchronization approved and executed.'
+                    pa.audit_history = list(pa.audit_history or []) + [{
+                        'action': 'Approved',
+                        'user': request.user.get_full_name() or request.user.username,
+                        'timestamp': timezone.localtime().isoformat(),
+                        'comment': pa.review_comment,
+                    }]
+                    pa.save(update_fields=['status', 'approved_by', 'reviewed_by', 'approved_at', 'review_comment', 'audit_history', 'updated_at'])
+                    exec_results = _execute_pending_changes(pa, request.user)
+                    pa.audit_history = list(pa.audit_history or []) + [{
+                        'action': 'Executed',
+                        'user': request.user.get_full_name() or request.user.username,
+                        'timestamp': timezone.localtime().isoformat(),
+                        'results': exec_results,
+                    }]
+                    pa.save(update_fields=['audit_history', 'updated_at'])
+                    AuditLog.objects.create(
+                        name='Tape Schema Synchronized',
+                        action=f'Schema synchronization for {pending_preview.get("file_name", "unknown.xlsx")} was approved and executed',
+                        user=request.user,
+                        severity='success',
+                    )
+                    messages.success(request, 'Schema synchronization approved and applied.')
+                else:
+                    AuditLog.objects.create(
+                        name='Pending Tape Schema Synchronization',
+                        action=f'Pending schema sync for {pending_preview.get("file_name", "unknown.xlsx")} submitted for approval',
+                        user=request.user,
+                        severity='info',
+                    )
+                    messages.success(request, 'Schema synchronization submitted for approval.')
+            else:
+                messages.error(request, 'Unable to stage schema synchronization for approval.')
 
             return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
         elif form_type == 'edit_profile':
@@ -5918,7 +6200,9 @@ def _sync_pending_approval_queue_from_shipments():
         backup_admin = shipment.approved_by_backup or getattr(shipment, 'created_by', None)
         requester = getattr(shipment, 'created_by', None)
         risk_level = 'High' if shipment.priority_level in {'High', 'Critical'} else 'Medium'
-        PendingApproval.objects.create(
+        from .utils import create_pending_approval
+
+        create_pending_approval(
             transaction_type='Shipment',
             module='Shipment Workflow',
             summary=f"Shipment {shipment.shipment_id} requires supreme approval.",
@@ -6030,39 +6314,230 @@ def supreme_approver_dashboard(request):
     return render(request, 'supreme_approver_dashboard.html', context)
 
 
-@user_passes_test(lambda u: u.is_superuser or is_supreme_approver(u), login_url='signin')
+def _apply_role_feature_change_request(approval, actor, comment=''):
+    payload = approval.request_payload or {}
+    role_id = payload.get('role_id')
+    feature_keys = list(payload.get('feature_keys') or [])
+    role = Role.objects.filter(pk=role_id).first()
+    if not role:
+        raise Http404
+
+    existing_features = {feature.feature_key: feature for feature in role.get_active_features()}
+    target_features = {feature.feature_key: feature for feature in Feature.objects.filter(feature_key__in=feature_keys, is_active=True)}
+
+    for feature_key, feature in target_features.items():
+        RoleFeature.objects.update_or_create(
+            role=role,
+            feature=feature,
+            defaults={
+                'is_active': True,
+                'assigned_by': actor,
+            },
+        )
+
+    for feature_key, feature in existing_features.items():
+        if feature_key not in target_features:
+            RoleFeature.objects.filter(role=role, feature=feature).update(is_active=False, assigned_by=actor)
+
+    if role.group:
+        template, _ = RoleTemplate.objects.get_or_create(group=role.group)
+        template.features = feature_keys
+        template.save(update_fields=['features'])
+
+    approval.status = 'Approved'
+    approval.approved_by = actor
+    approval.reviewed_by = actor
+    approval.approved_at = timezone.localtime()
+    approval.review_comment = comment or f'Approved role feature update for {role.name}.'
+    approval.rejection_reason = ''
+    approval.audit_history = list(approval.audit_history or []) + [{
+        'action': 'Approved',
+        'user': actor.get_full_name() or actor.username,
+        'timestamp': timezone.localtime().isoformat(),
+        'comment': approval.review_comment,
+        'role': role.name,
+        'previous_configuration': payload.get('previous_feature_keys', []),
+        'new_configuration': feature_keys,
+    }]
+    approval.save(update_fields=['status', 'approved_by', 'reviewed_by', 'approved_at', 'review_comment', 'rejection_reason', 'audit_history', 'updated_at'])
+
+
+def _execute_pending_changes(approval, actor):
+    """Execute requested_changes for a PendingApproval. Handles simple create/update for Tape model."""
+    changes = approval.requested_changes or []
+    results = []
+    tape_model_fields = {field.name for field in Tape._meta.get_fields() if getattr(field, 'concrete', False) and not getattr(field, 'many_to_many', False) and not getattr(field, 'one_to_many', False)}
+    with transaction.atomic():
+        for change in changes:
+            try:
+                action = (change.get('action') or '').lower()
+                model_name = (change.get('model') or '').lower()
+                if model_name == 'tape':
+                    if action == 'create':
+                        fields = change.get('fields') or {}
+                        model_fields = {k: v for k, v in fields.items() if k in tape_model_fields}
+                        extra_fields = {k: v for k, v in fields.items() if k not in tape_model_fields}
+                        tape = Tape.objects.create(**model_fields)
+                        if extra_fields:
+                            set_clause = ', '.join(f"{connection.ops.quote_name(name)} = %s" for name in extra_fields)
+                            params = list(extra_fields.values()) + [tape.pk]
+                            with connection.cursor() as cursor:
+                                cursor.execute(f"UPDATE inventory_tape SET {set_clause} WHERE id = %s", params)
+                        AuditLog.objects.create(name='Tape Registered (Approved)', action=f'Registered tape {getattr(tape, "volser", "n/a")}', user=actor, severity='success')
+                        results.append(('create', str(tape.pk)))
+                    elif action == 'update':
+                        obj_id = change.get('object_id') or approval.related_object_id
+                        tape = Tape.objects.filter(pk=obj_id).first()
+                        if tape:
+                            fields = change.get('fields') or {}
+                            model_fields = {k: v for k, v in fields.items() if k in tape_model_fields}
+                            extra_fields = {k: v for k, v in fields.items() if k not in tape_model_fields}
+                            for k, v in model_fields.items():
+                                setattr(tape, k, v)
+                            tape.save()
+                            if extra_fields:
+                                set_clause = ', '.join(f"{connection.ops.quote_name(name)} = %s" for name in extra_fields)
+                                params = list(extra_fields.values()) + [tape.pk]
+                                with connection.cursor() as cursor:
+                                    cursor.execute(f"UPDATE inventory_tape SET {set_clause} WHERE id = %s", params)
+                            AuditLog.objects.create(name='Tape Updated (Approved)', action=f'Updated tape {tape.volser}', user=actor, severity='success')
+                            results.append(('update', str(tape.pk)))
+                        else:
+                            logger.warning('PendingApproval execution: Tape not found %s', obj_id)
+                            results.append(('missing', str(obj_id)))
+                    elif action == 'schema_sync':
+                        sql_statements = change.get('sql_statements') or []
+                        import_changes = change.get('import_changes') or []
+                        for sql_statement in sql_statements:
+                            with connection.cursor() as cursor:
+                                cursor.execute(sql_statement)
+                        new_columns = approval.request_payload.get('new_columns') or []
+                        if not new_columns:
+                            for sql_statement in sql_statements:
+                                match = re.search(r'ADD COLUMN IF NOT EXISTS\s+([a-z0-9_]+)\s+([A-Z0-9\(\),]+)', sql_statement, re.IGNORECASE)
+                                if match:
+                                    new_columns.append({'name': match.group(1), 'detected_type': match.group(2)})
+                        for column_info in new_columns:
+                            SchemaChangeLog.objects.create(
+                                column_name=column_info.get('name', ''),
+                                detected_data_type=column_info.get('detected_type', ''),
+                                target_table='inventory_tape',
+                                source_excel_filename=approval.request_payload.get('file_name', ''),
+                                uploaded_by=approval.requester,
+                                approved_by=actor,
+                                approval_timestamp=timezone.localtime(),
+                                sql_executed='; '.join(sql_statements),
+                                synchronization_status='applied',
+                            )
+                        AuditLog.objects.create(name='Tape Schema Synchronized (Approved)', action=f'Executed {len(sql_statements)} schema changes for Tape', user=actor, severity='success')
+                        for import_change in import_changes:
+                            sub_action = (import_change.get('action') or '').lower()
+                            if sub_action == 'create':
+                                fields = import_change.get('fields') or {}
+                                model_fields = {k: v for k, v in fields.items() if k in tape_model_fields}
+                                extra_fields = {k: v for k, v in fields.items() if k not in tape_model_fields}
+                                created_tape = Tape.objects.create(**model_fields)
+                                if extra_fields:
+                                    set_clause = ', '.join(f"{connection.ops.quote_name(name)} = %s" for name in extra_fields)
+                                    params = list(extra_fields.values()) + [created_tape.pk]
+                                    with connection.cursor() as cursor:
+                                        cursor.execute(f"UPDATE inventory_tape SET {set_clause} WHERE id = %s", params)
+                                AuditLog.objects.create(name='Tape Registered (Schema Sync)', action=f'Registered tape {getattr(created_tape, "volser", "n/a")}', user=actor, severity='success')
+                                results.append(('create', str(created_tape.pk)))
+                            elif sub_action == 'update':
+                                obj_id = import_change.get('object_id')
+                                tape = Tape.objects.filter(pk=obj_id).first()
+                                if tape:
+                                    fields = import_change.get('fields') or {}
+                                    model_fields = {k: v for k, v in fields.items() if k in tape_model_fields}
+                                    extra_fields = {k: v for k, v in fields.items() if k not in tape_model_fields}
+                                    for k, v in model_fields.items():
+                                        setattr(tape, k, v)
+                                    tape.save()
+                                    if extra_fields:
+                                        set_clause = ', '.join(f"{connection.ops.quote_name(name)} = %s" for name in extra_fields)
+                                        params = list(extra_fields.values()) + [tape.pk]
+                                        with connection.cursor() as cursor:
+                                            cursor.execute(f"UPDATE inventory_tape SET {set_clause} WHERE id = %s", params)
+                                    AuditLog.objects.create(name='Tape Updated (Schema Sync)', action=f'Updated tape {tape.volser}', user=actor, severity='success')
+                                    results.append(('update', str(tape.pk)))
+                                else:
+                                    logger.warning('PendingApproval execution: Tape not found during schema sync %s', obj_id)
+                                    results.append(('missing', str(obj_id)))
+                            else:
+                                logger.warning('Unsupported import action %s in schema sync approval %s', sub_action, approval.pk)
+                        results.append(('schema_sync', len(sql_statements)))
+                    else:
+                        logger.warning('Unsupported tape action %s in approval %s', action, approval.pk)
+                else:
+                    logger.warning('Unsupported model %s in approval execution %s', model_name, approval.pk)
+            except Exception as exc:
+                logger.exception('Error executing pending change for approval %s: %s', approval.pk, exc)
+                results.append(('error', str(exc)))
+    return results
+
+
+@user_passes_test(lambda u: u.is_superuser or is_supreme_approver(u) or is_backup_administrator(u), login_url='signin')
 @login_required(login_url='signin')
 def approval_review(request, approval_id):
     approval = get_object_or_404(PendingApproval.objects.select_related('requester', 'backup_administrator', 'branch'), pk=approval_id)
     related_object = approval.get_related_object()
+    is_role_feature_request = (approval.related_model == 'role_feature' or approval.transaction_type.lower() == 'role feature update')
 
     if request.method == 'POST':
         decision = (request.POST.get('decision') or 'approve').strip().lower()
         comment = (request.POST.get('comment') or '').strip()
         if decision == 'approve':
-            approval.status = 'Approved'
-            approval.approved_by = request.user
-            approval.reviewed_by = request.user
-            approval.approved_at = timezone.localtime()
-            approval.review_comment = comment or 'Approved by supreme approver.'
-            approval.rejection_reason = ''
-            approval.audit_history = list(approval.audit_history or []) + [{
-                'action': 'Approved',
-                'user': request.user.get_full_name() or request.user.username,
-                'timestamp': timezone.localtime().isoformat(),
-                'comment': approval.review_comment,
-            }]
-            approval.save(update_fields=['status', 'approved_by', 'reviewed_by', 'approved_at', 'review_comment', 'rejection_reason', 'audit_history', 'updated_at'])
-            if related_object and hasattr(related_object, 'approval_stage'):
-                related_object.status = 'Approved'
-                related_object.approval_stage = 'approved'
-                related_object.approved_by_supreme = request.user
-                related_object.approved_by = request.user
-                related_object.approval_date = timezone.localtime()
-                related_object.approval_remarks = approval.review_comment
-                related_object.last_updated_by = request.user
-                related_object.save(update_fields=['status', 'approval_stage', 'approved_by_supreme', 'approved_by', 'approval_date', 'approval_remarks', 'last_updated_by', 'last_updated_at'])
-            messages.success(request, 'Approval request approved and the staged change was executed.')
+            if is_role_feature_request and is_backup_administrator(request.user) and not is_supreme_approver(request.user):
+                approval.status = 'Awaiting Supreme Approval'
+                approval.backup_approved_by = request.user
+                approval.backup_approved_at = timezone.localtime()
+                approval.review_comment = comment or 'Approved by backup administrator and forwarded to supreme approver.'
+                approval.audit_history = list(approval.audit_history or []) + [{
+                    'action': 'Backup Approved',
+                    'user': request.user.get_full_name() or request.user.username,
+                    'timestamp': timezone.localtime().isoformat(),
+                    'comment': approval.review_comment,
+                }]
+                approval.save(update_fields=['status', 'backup_approved_by', 'backup_approved_at', 'review_comment', 'audit_history', 'updated_at'])
+                messages.success(request, 'Role feature change request approved by backup administrator and sent to supreme approval.')
+            elif is_role_feature_request and (is_supreme_approver(request.user) or request.user.is_superuser):
+                role = _apply_role_feature_change_request(approval, request.user, comment=comment)
+                messages.success(request, f'Role features for {role.name} were approved and activated.')
+            else:
+                approval.status = 'Approved'
+                approval.approved_by = request.user
+                approval.reviewed_by = request.user
+                approval.approved_at = timezone.localtime()
+                approval.review_comment = comment or 'Approved by supreme approver.'
+                approval.rejection_reason = ''
+                approval.audit_history = list(approval.audit_history or []) + [{
+                    'action': 'Approved',
+                    'user': request.user.get_full_name() or request.user.username,
+                    'timestamp': timezone.localtime().isoformat(),
+                    'comment': approval.review_comment,
+                }]
+                approval.save(update_fields=['status', 'approved_by', 'reviewed_by', 'approved_at', 'review_comment', 'rejection_reason', 'audit_history', 'updated_at'])
+                # Execute requested changes for approved pending approvals (generic executor)
+                if approval.requested_changes:
+                    exec_results = _execute_pending_changes(approval, request.user)
+                    approval.audit_history = list(approval.audit_history or []) + [{
+                        'action': 'Executed',
+                        'user': request.user.get_full_name() or request.user.username,
+                        'timestamp': timezone.localtime().isoformat(),
+                        'results': exec_results,
+                    }]
+                    approval.save(update_fields=['audit_history', 'updated_at'])
+                if related_object and hasattr(related_object, 'approval_stage'):
+                    related_object.status = 'Approved'
+                    related_object.approval_stage = 'approved'
+                    related_object.approved_by_supreme = request.user
+                    related_object.approved_by = request.user
+                    related_object.approval_date = timezone.localtime()
+                    related_object.approval_remarks = approval.review_comment
+                    related_object.last_updated_by = request.user
+                    related_object.save(update_fields=['status', 'approval_stage', 'approved_by_supreme', 'approved_by', 'approval_date', 'approval_remarks', 'last_updated_by', 'last_updated_at'])
+                messages.success(request, 'Approval request approved and the staged change was executed.')
         else:
             approval.status = 'Rejected'
             approval.reviewed_by = request.user
@@ -6158,6 +6633,28 @@ def shipment_approvals(request):
                 shipment.save(update_fields=['status', 'approved_by', 'approved_by_supreme', 'approval_stage', 'approval_date', 'approval_remarks', 'last_updated_by', 'last_updated_at'])
                 ShipmentApprovalHistory.objects.create(shipment=shipment, action='Approved', comments=comments, user=request.user)
                 AuditLog.objects.create(name='Shipment Approved', action=f'Shipment {shipment.shipment_id} was approved by the supreme approver.', user=request.user, severity='success')
+                # Notify the backup administrator to print the approval form (prefilled)
+                try:
+                    backup_admin = shipment.approved_by_backup or getattr(shipment, 'created_by', None)
+                    if backup_admin:
+                        preview_url = reverse('approval-form-preview', args=[shipment.pk])
+                        AuditLog.objects.create(
+                            name='Shipment Approval Ready for Printing',
+                            action=f'Shipment {shipment.shipment_id} approved and ready for printing by backup admin.',
+                            message=f'target_url={preview_url}',
+                            user=backup_admin,
+                            severity='warning',
+                        )
+                        if application_settings.email_alerts_enabled and getattr(backup_admin, 'email', None):
+                            send_mail(
+                                f'Shipment {shipment.shipment_id} approved - print approval form',
+                                f'Shipment {shipment.shipment_id} was approved. Print the approval form here: {request.build_absolute_uri(preview_url)}',
+                                settings.DEFAULT_FROM_EMAIL,
+                                [backup_admin.email],
+                                fail_silently=True,
+                            )
+                except Exception:
+                    pass
                 messages.success(request, 'Shipment approved and released for operations.')
                 return redirect(reverse('shipment-approvals'))
 
@@ -6605,9 +7102,129 @@ def shipment_detail(request, shipment_pk):
                     severity='success' if decision == 'approve' else 'warning',
                 )
 
+                # If supreme approved, notify backup admin to print the approval form
+                if decision == 'approve' and is_supreme_approver(request.user):
+                    try:
+                        backup_admin = shipment.approved_by_backup or getattr(shipment, 'created_by', None)
+                        if backup_admin:
+                            preview_url = reverse('approval-form-preview', args=[shipment.pk])
+                            AuditLog.objects.create(
+                                name='Shipment Approval Ready for Printing',
+                                action=f'Shipment {shipment.shipment_id} approved and ready for printing by backup admin.',
+                                message=f'target_url={preview_url}',
+                                user=backup_admin,
+                                severity='warning',
+                            )
+                            if application_settings.email_alerts_enabled and getattr(backup_admin, 'email', None):
+                                send_mail(
+                                    f'Shipment {shipment.shipment_id} approved - print approval form',
+                                    f'Shipment {shipment.shipment_id} was approved. Print the approval form here: {request.build_absolute_uri(preview_url)}',
+                                    settings.DEFAULT_FROM_EMAIL,
+                                    [backup_admin.email],
+                                    fail_silently=True,
+                                )
+                    except Exception:
+                        pass
+
                 messages.success(request, f'Shipment has been marked as {shipment.status}.')
                 if not partial_request:
                     return redirect('shipment-detail', shipment_pk=shipment.pk)
+        elif request.POST.get('form_type') == 'release_shipment':
+            # Release the shipment to the assigned courier (final step by Backup Admin)
+            if not is_backup_administrator(request.user):
+                messages.error(request, 'Only Backup Administrators may release shipments to couriers.')
+                return redirect('shipment-detail', shipment_pk=shipment.pk)
+
+            # Only allow release when shipment has been supreme-approved
+            if shipment.approval_stage != 'approved':
+                messages.error(request, 'Shipment must be fully approved before release.')
+                return redirect('shipment-detail', shipment_pk=shipment.pk)
+
+            # Update shipment status and release metadata
+            shipment.status = 'Dispatched'
+            shipment.release_datetime = timezone.localtime()
+            shipment.last_updated_by = request.user
+            shipment.save(update_fields=['status', 'release_datetime', 'last_updated_by', 'last_updated_at'])
+
+            # Record transport event and approval history
+            ShipmentTransportEvent.objects.create(
+                shipment=shipment,
+                courier=None,
+                event_type='Released',
+                event_date=timezone.localdate(),
+                event_time=timezone.localtime().time(),
+                comments='Shipment released for courier pickup.'
+            )
+            ShipmentApprovalHistory.objects.create(
+                shipment=shipment,
+                action='Released',
+                comments='Released by backup administrator.',
+                user=request.user,
+            )
+
+            # Attempt to find a courier profile/user to notify
+            courier_user = None
+            courier_profile = None
+            try:
+                from .models import CourierProfile
+                if shipment.courier_name or shipment.courier_contact:
+                    courier_profile = CourierProfile.objects.filter(
+                        Q(full_name__iexact=shipment.courier_name) |
+                        Q(phone_number__iexact=shipment.courier_contact) |
+                        Q(email__iexact=shipment.courier_contact)
+                    ).first()
+                    if courier_profile:
+                        courier_user = getattr(courier_profile, 'user', None)
+            except Exception:
+                courier_profile = None
+                courier_user = None
+
+            pickup_url = reverse('pickup-confirmation', args=[shipment.pk])
+            app_settings = ApplicationSetting.objects.first() or ApplicationSetting.objects.create()
+
+            # Create audit log targeted to courier (if known) or fallback to operator
+            if courier_user:
+                AuditLog.objects.create(
+                    name='Shipment Released',
+                    action=f'Shipment {shipment.shipment_id} released for pickup by courier.',
+                    message=f'target_url={pickup_url}',
+                    user=courier_user,
+                    severity='warning',
+                )
+                if app_settings.email_alerts_enabled and getattr(courier_user, 'email', None):
+                    send_mail(
+                        f'Shipment ready for pickup: {shipment.shipment_id}',
+                        f'Shipment {shipment.shipment_id} has been released and is ready for pickup. Confirm pickup here: {request.build_absolute_uri(pickup_url)}',
+                        settings.DEFAULT_FROM_EMAIL,
+                        [courier_user.email],
+                        fail_silently=True,
+                    )
+            elif courier_profile:
+                AuditLog.objects.create(
+                    name='Shipment Released',
+                    action=f'Shipment {shipment.shipment_id} released for pickup by courier {courier_profile.full_name}.',
+                    message=f'target_url={pickup_url}',
+                    user=None,
+                    severity='warning',
+                )
+                send_courier_profile_email_alert(
+                    courier_profile,
+                    f'Shipment ready for pickup: {shipment.shipment_id}',
+                    f'Shipment {shipment.shipment_id} has been released and is ready for pickup. Confirm pickup here: {request.build_absolute_uri(pickup_url)}',
+                )
+            else:
+                # Fallback: notify the original requester/operator that shipment was released
+                if shipment.created_by:
+                    AuditLog.objects.create(
+                        name='Shipment Released',
+                        action=f'Shipment {shipment.shipment_id} was released for courier pickup.',
+                        message=f'target_url={reverse("shipment-detail", args=[shipment.pk])}',
+                        user=shipment.created_by,
+                        severity='info',
+                    )
+
+            messages.success(request, 'Shipment released to courier and notifications queued.')
+            return redirect('shipment-detail', shipment_pk=shipment.pk)
 
     template = 'shipment_detail_fragment.html' if partial_request else 'shipment_detail.html'
 
@@ -6941,9 +7558,11 @@ def receive_return_shipment(request, shipment_pk):
 def courier_dashboard(request):
     courier = get_courier_profile(request.user)
     shipments = get_courier_shipments(request.user)
-    assigned_count = shipments.filter(status__in=['Dispatched', 'Picked Up', 'In Transit']).count()
-    pending_count = shipments.filter(status__in=['Pending', 'Approved']).count()
-    delivered_count = shipments.filter(status='Delivered').count()
+    # Hide shipments that are not yet released for courier visibility
+    visible_shipments = shipments.exclude(status__in=['Pending', 'Awaiting Supreme Approval', 'Approved', 'Draft', 'Cancelled', 'Rejected'])
+    assigned_count = visible_shipments.filter(status__in=['Dispatched', 'Picked Up', 'In Transit']).count()
+    pending_count = visible_shipments.filter(status__in=['Pending', 'Approved']).count()
+    delivered_count = visible_shipments.filter(status='Delivered').count()
     exception_count = ShipmentException.objects.filter(shipment__in=shipments, status__in=['Open', 'Investigating']).count()
     activity_count = ShipmentTransportEvent.objects.filter(courier=courier).count() if courier else 0
     recent_events = ShipmentTransportEvent.objects.filter(courier=courier).order_by('-event_date', '-event_time')[:6] if courier else []
@@ -6972,7 +7591,7 @@ def courier_dashboard(request):
 
     context = {
         'courier': courier,
-        'shipments': shipments,
+        'shipments': visible_shipments,
         'assigned_count': assigned_count,
         'pending_count': pending_count,
         'delivered_count': delivered_count,
@@ -6993,6 +7612,9 @@ def assigned_shipments(request):
     courier = get_courier_profile(request.user)
     filter_form = CourierShipmentFilterForm(request.GET or None)
     shipments = get_courier_shipments(request.user)
+
+    # Only show shipments that have been released to couriers
+    shipments = shipments.exclude(status__in=['Pending', 'Awaiting Supreme Approval', 'Approved', 'Draft', 'Cancelled', 'Rejected'])
 
     if filter_form.is_valid():
         search = filter_form.cleaned_data.get('search')
@@ -7287,15 +7909,28 @@ def add_tape(request):
 
     if request.method == 'POST':
         if form.is_valid():
-            tape = form.save()
-            AuditLog.objects.create(
-                name='Tape Registered',
-                action=f'Registered tape {tape.volser} via add_tape view',
-                user=request.user,
-                severity='success',
+            payload_fields = {
+                k: (str(v) if not isinstance(v, (dict, list)) else v)
+                for k, v in form.cleaned_data.items()
+            }
+            pa = _build_pending_tape_approval(
+                request,
+                transaction_type='Add Tape',
+                summary=f"Register tape {payload_fields.get('volser') or payload_fields.get('barcode')}",
+                payload_fields=payload_fields,
+                priority='Medium',
+                risk_level='High',
             )
-            messages.success(request, 'New tape registered successfully.')
-            return redirect('dashboard')
+            if pa:
+                AuditLog.objects.create(
+                    name='Pending Tape Registration',
+                    action=f'Pending registration for tape {payload_fields.get("volser") or payload_fields.get("barcode")}',
+                    user=request.user,
+                    severity='info',
+                )
+                messages.success(request, 'Tape registration submitted for approval.')
+                return redirect('dashboard')
+            messages.error(request, 'Failed to submit tape registration for approval.')
         else:
             messages.error(request, 'Please correct the errors below and try again.')
 

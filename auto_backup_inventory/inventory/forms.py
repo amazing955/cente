@@ -7,7 +7,7 @@ from django.core.validators import validate_email
 from django.db.models import Q
 from django.utils import timezone
 
-from .models import ApplicationSetting, BankBranch, CustomUser, CourierProfile, Reconciliation, ReconciliationResult, Shipment, ShipmentException, ShipmentReceipt, ShipmentTransportEvent, Tape, TapeRequest, DeliveryConfirmation
+from .models import ApplicationSetting, BankBranch, CustomUser, CourierProfile, Feature, Reconciliation, ReconciliationResult, Role, Shipment, ShipmentException, ShipmentReceipt, ShipmentTransportEvent, Tape, TapeRequest, DeliveryConfirmation
 
 
 class CustomPasswordResetForm(DjangoPasswordResetForm):
@@ -190,6 +190,16 @@ FEATURE_CHOICES = [
 
 def get_feature_choices():
     choices = list(FEATURE_CHOICES)
+    try:
+        features = Feature.objects.filter(is_active=True).order_by('menu_group', 'display_order', 'name')
+        if features.exists():
+            for feature in features:
+                label = f"{feature.name} ({feature.feature_key})"
+                choices.append((feature.feature_key, label))
+            return choices
+    except Exception:
+        return choices
+
     permissions = Permission.objects.select_related('content_type').order_by(
         'content_type__app_label',
         'content_type__model',
@@ -208,8 +218,8 @@ class RoleCreationForm(forms.Form):
         widget=forms.TextInput(attrs={'class': 'form-control', 'placeholder': 'Enter role name', 'required': True}),
         label='Role Name',
     )
-    features = forms.MultipleChoiceField(
-        choices=get_feature_choices(),
+    features = forms.ModelMultipleChoiceField(
+        queryset=Feature.objects.filter(is_active=True).order_by('menu_group', 'display_order', 'name'),
         widget=forms.CheckboxSelectMultiple(attrs={'class': 'form-check-input'}),
         label='Features',
         required=False,
@@ -217,17 +227,17 @@ class RoleCreationForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['features'].choices = get_feature_choices()
+        self.fields['features'].queryset = Feature.objects.filter(is_active=True).order_by('menu_group', 'display_order', 'name')
 
 
 class RoleFeatureUpdateForm(forms.Form):
     group = forms.ModelChoiceField(
-        queryset=Group.objects.all().order_by('name'),
+        queryset=Role.objects.filter(is_active=True).order_by('sort_order', 'name'),
         widget=forms.Select(attrs={'class': 'form-select', 'id': 'id_role_feature_group'}),
         label='Role',
     )
-    features = forms.MultipleChoiceField(
-        choices=get_feature_choices(),
+    features = forms.ModelMultipleChoiceField(
+        queryset=Feature.objects.filter(is_active=True).order_by('menu_group', 'display_order', 'name'),
         widget=forms.CheckboxSelectMultiple(attrs={'class': 'form-check-input'}),
         label='Features',
         required=False,
@@ -235,7 +245,7 @@ class RoleFeatureUpdateForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['features'].choices = get_feature_choices()
+        self.fields['features'].queryset = Feature.objects.filter(is_active=True).order_by('menu_group', 'display_order', 'name')
 
 
 class UserRoleAssignmentForm(forms.Form):
@@ -245,7 +255,7 @@ class UserRoleAssignmentForm(forms.Form):
         label='User',
     )
     group = forms.ModelChoiceField(
-        queryset=Group.objects.all().order_by('name'),
+        queryset=Role.objects.filter(is_active=True).order_by('sort_order', 'name'),
         widget=forms.Select(attrs={'class': 'form-select'}),
         label='Role',
     )

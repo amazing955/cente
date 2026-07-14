@@ -2,6 +2,7 @@ import uuid
 
 from django import forms
 from django.contrib import admin
+from django.contrib.admin.widgets import FilteredSelectMultiple
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.hashers import make_password
 
@@ -12,57 +13,19 @@ from .models import (
     BranchImportLog,
     CourierProfile,
     CustomUser,
+    Feature,
     DashboardFeatureExemption,
     DashboardFeaturePermission,
     MonthlyReport,
-    Role,
     ReportTemplate,
-    UserRoleAssignment,
     Reconciliation,
+    Role,
+    RoleFeature,
     ReconciliationResult,
     Shipment,
     TapeInventory,
     Tape,
 )
-
-
-class UserRoleAssignmentInline(admin.TabularInline):
-    model = UserRoleAssignment
-    extra = 0
-    fk_name = 'user'
-    autocomplete_fields = ('role', 'assigned_by', 'backup_approved_by', 'supreme_approved_by')
-    fields = (
-        'role',
-        'status',
-        'is_primary_dashboard',
-        'assigned_by',
-        'backup_approved_by',
-        'supreme_approved_by',
-        'assigned_at',
-        'backup_approved_at',
-        'supreme_approved_at',
-        'activated_at',
-        'rejected_at',
-        'rejection_reason',
-    )
-    readonly_fields = ('assigned_at', 'backup_approved_at', 'supreme_approved_at', 'activated_at', 'rejected_at')
-
-
-@admin.register(Role)
-class RoleAdmin(admin.ModelAdmin):
-    list_display = ('name', 'dashboard_key', 'group', 'is_active', 'sort_order')
-    list_filter = ('dashboard_key', 'is_active')
-    search_fields = ('name', 'slug', 'group__name', 'description')
-    prepopulated_fields = {'slug': ('name',)}
-
-
-@admin.register(UserRoleAssignment)
-class UserRoleAssignmentAdmin(admin.ModelAdmin):
-    list_display = ('user', 'role', 'status', 'is_primary_dashboard', 'assigned_at', 'activated_at')
-    list_filter = ('status', 'is_primary_dashboard', 'role__dashboard_key')
-    search_fields = ('user__username', 'user__email', 'role__name', 'role__dashboard_key')
-    autocomplete_fields = ('user', 'role', 'assigned_by', 'backup_approved_by', 'supreme_approved_by')
-    readonly_fields = ('assigned_at', 'backup_approved_at', 'supreme_approved_at', 'activated_at', 'rejected_at', 'audit_history')
 
 
 class BaseCustomUserAdminForm(forms.ModelForm):
@@ -146,7 +109,6 @@ class CustomUserAdmin(UserAdmin):
     add_form = CustomUserAdminForm
     form = CustomUserChangeForm
     model = CustomUser
-    inlines = (UserRoleAssignmentInline,)
     fieldsets = (
         (None, {'fields': ('username', 'email', 'password', 'first_name', 'last_name', 'is_staff', 'is_active', 'groups')}),
         ('Extra info', {'fields': ('role', 'assigned_branch', 'vehicle_number', 'verified', 'verified_at')}),
@@ -155,38 +117,9 @@ class CustomUserAdmin(UserAdmin):
         (None, {'classes': ('wide',), 'fields': ('username', 'email', 'password', 'first_name', 'last_name', 'is_staff', 'is_active', 'groups')}),
         ('Extra info', {'fields': ('role', 'assigned_branch', 'vehicle_number', 'verified', 'verified_at')}),
     )
-    list_display = ('username', 'email', 'first_name', 'last_name', 'role', 'primary_dashboard_role', 'assigned_roles_summary', 'assigned_branch', 'is_staff', 'is_active')
+    list_display = ('username', 'email', 'first_name', 'last_name', 'role', 'assigned_branch', 'is_staff', 'is_active')
     list_filter = ('role', 'is_staff', 'is_active', 'groups')
-    readonly_fields = ('assigned_branch_code', 'assigned_branch_status', 'assigned_roles_summary', 'primary_dashboard_role', 'role_assignment_status_summary')
-
-    def assigned_roles_summary(self, obj):
-        assignments = obj.role_assignments.select_related('role').all()
-        if not assignments:
-            return '-'
-        labels = []
-        for assignment in assignments:
-            marker = ' (Primary)' if assignment.is_primary_dashboard else ''
-            labels.append(f'{assignment.role.name} [{assignment.status}]{marker}')
-        return ', '.join(labels)
-    assigned_roles_summary.short_description = 'Assigned Roles'
-
-    def primary_dashboard_role(self, obj):
-        assignment = obj.primary_role_assignment
-        if assignment and assignment.role:
-            return assignment.role.name
-        return obj.get_primary_dashboard_key().replace('_', ' ').title()
-    primary_dashboard_role.short_description = 'Primary Role'
-
-    def role_assignment_status_summary(self, obj):
-        assignments = obj.role_assignments.all()
-        if not assignments:
-            return 'No role assignments'
-        counts = {
-            status: assignments.filter(status=status).count()
-            for status in ['Pending', 'Backup Approved', 'Supreme Approved', 'Active', 'Rejected']
-        }
-        return ', '.join(f'{label}: {value}' for label, value in counts.items() if value)
-    role_assignment_status_summary.short_description = 'Approval Status'
+    readonly_fields = ('assigned_branch_code', 'assigned_branch_status')
 
     def assigned_branch_code(self, obj):
         return obj.assigned_branch.branch_code if obj.assigned_branch else '-'
@@ -233,6 +166,30 @@ class DashboardFeatureExemptionAdmin(admin.ModelAdmin):
     list_display = ('user', 'feature_key', 'is_active', 'reason')
     list_filter = ('is_active', 'feature_key')
     search_fields = ('user__username', 'user__email', 'feature_key', 'reason')
+
+
+@admin.register(Role)
+class RoleAdmin(admin.ModelAdmin):
+    list_display = ('name', 'dashboard_key', 'group', 'is_active', 'sort_order')
+    list_filter = ('is_active', 'dashboard_key')
+    search_fields = ('name', 'slug', 'dashboard_key', 'description', 'group__name')
+    prepopulated_fields = {'slug': ('name',)}
+    raw_id_fields = ('features',)
+
+
+@admin.register(Feature)
+class FeatureAdmin(admin.ModelAdmin):
+    list_display = ('name', 'feature_key', 'menu_group', 'display_order', 'sidebar_visible', 'is_active', 'requires_approval', 'requires_audit')
+    list_filter = ('menu_group', 'sidebar_visible', 'is_active', 'requires_approval', 'requires_audit')
+    search_fields = ('name', 'feature_key', 'description', 'menu_group', 'url', 'url_name')
+    prepopulated_fields = {'feature_key': ('name',)}
+
+
+@admin.register(RoleFeature)
+class RoleFeatureAdmin(admin.ModelAdmin):
+    list_display = ('role', 'feature', 'is_active', 'assigned_by', 'assigned_at')
+    list_filter = ('is_active', 'role', 'feature__menu_group')
+    search_fields = ('role__name', 'feature__name', 'feature__feature_key')
 
 
 @admin.register(TapeInventory)

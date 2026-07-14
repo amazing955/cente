@@ -10,8 +10,38 @@ from django.db.models import Count
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.urls import NoReverseMatch, reverse
-from django.utils.text import slugify
 from django.utils import timezone
+
+
+ROLE_KEY_CHOICES = [
+    ('admin', 'System Administrator'),
+    ('system_administrator', 'System Administrator'),
+    ('system administrator', 'System Administrator'),
+    ('backup', 'Backup Administrator'),
+    ('backup_administrator', 'Backup Administrator'),
+    ('backup administrator', 'Backup Administrator'),
+    ('operations', 'Operations Manager'),
+    ('operations_manager', 'Operations Manager'),
+    ('operations manager', 'Operations Manager'),
+    ('warehouse', 'Warehouse Operations'),
+    ('warehouse_operations', 'Warehouse Operations'),
+    ('warehouse operations', 'Warehouse Operations'),
+    ('warehouse ops', 'Warehouse Operations'),
+    ('supreme', 'Supreme Approver'),
+    ('supreme_approver', 'Supreme Approver'),
+    ('supreme approver', 'Supreme Approver'),
+    ('auditor', 'Compliance Auditor'),
+    ('compliance_auditor', 'Compliance Auditor'),
+    ('compliance auditor', 'Compliance Auditor'),
+    ('information_security_officer', 'Information Security Officer'),
+    ('information security officer', 'Information Security Officer'),
+    ('security', 'Information Security Officer'),
+    ('courier', 'Courier'),
+    ('dr', 'DR Team'),
+    ('dr_team', 'DR Team'),
+    ('dr team', 'DR Team'),
+    ('user', 'User'),
+]
 
 
 def generate_shipment_id():
@@ -112,12 +142,7 @@ class CustomUser(AbstractUser):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     email = models.EmailField(unique=True)
 
-    ROLE_CHOICES = [
-        ('admin', 'Admin'),
-        ('auditor', 'IT Compliance Auditor'),
-        ('user', 'User'),
-        ('operations_manager', 'Operations Manager'),
-    ]
+    ROLE_CHOICES = ROLE_KEY_CHOICES
 
     role = models.CharField(
         max_length=50,
@@ -147,81 +172,38 @@ class CustomUser(AbstractUser):
     def __str__(self):
         return self.username
 
-    @property
-    def approved_role_assignments(self):
-        return self.role_assignments.select_related('role', 'role__group').filter(
-            status__in=['Backup Approved', 'Supreme Approved', 'Active'],
-        ).order_by('-is_primary_dashboard', 'role__sort_order', 'role__name')
+    def get_role_key(self):
+        return (self.role or '').strip().lower()
 
-    @property
-    def active_roles(self):
-        return [assignment.role for assignment in self.approved_role_assignments if assignment.role and assignment.role.is_active]
+    def get_active_role(self):
+        role_key = self.get_role_key()
+        if not role_key:
+            return None
+        return Role.objects.filter(models.Q(slug=role_key) | models.Q(dashboard_key=role_key), is_active=True).first()
 
-    @property
-    def primary_role_assignment(self):
-        assignment = self.approved_role_assignments.filter(is_primary_dashboard=True).first()
-        if assignment:
-            return assignment
-        return self.approved_role_assignments.first()
+    def get_role_name(self):
+        role = self.get_active_role()
+        if role:
+            return role.name
+        return self.get_role_key().replace('_', ' ').title() if self.role else 'User'
 
-    def get_primary_dashboard_key(self):
-        assignment = self.primary_role_assignment
-        if assignment and assignment.role:
-            return assignment.role.dashboard_key
-
-        role_name = (getattr(self, 'role', '') or '').strip().lower()
-        legacy_dashboard_map = {
-            'admin': 'admin',
-            'auditor': 'auditor',
-            'user': 'backup',
-            'operations_manager': 'operations',
-        }
-        if role_name in legacy_dashboard_map:
-            return legacy_dashboard_map[role_name]
-
-        group_names = [group.name.lower() for group in self.groups.all()]
-        for group_name in group_names:
-            if 'supreme' in group_name:
-                return 'supreme'
-            if 'backup' in group_name:
-                return 'backup'
-            if 'operations' in group_name:
-                return 'operations'
-            if 'warehouse' in group_name:
-                return 'warehouse'
-            if 'auditor' in group_name:
-                return 'auditor'
-            if 'courier' in group_name:
-                return 'courier'
-            if 'dr' in group_name:
-                return 'dr'
-            if 'security' in group_name:
-                return 'security'
-
-        return 'backup'
+    def get_role_features(self):
+        role = self.get_active_role()
+        if not role:
+            return Feature.objects.none()
+        return role.get_active_features()
 
 
 class Role(models.Model):
-    DASHBOARD_CHOICES = [
-        ('admin', 'System Administrator'),
-        ('backup', 'Backup Administrator'),
-        ('operations', 'Operations Manager'),
-        ('warehouse', 'Warehouse Operations'),
-        ('auditor', 'Compliance Auditor'),
-        ('supreme', 'Supreme Approver'),
-        ('courier', 'Courier'),
-        ('dr', 'DR Team'),
-        ('security', 'Information Security Officer'),
-    ]
-
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=150, unique=True)
     slug = models.SlugField(max_length=160, unique=True, blank=True)
-    dashboard_key = models.CharField(max_length=50, choices=DASHBOARD_CHOICES)
-    group = models.OneToOneField(Group, null=True, blank=True, on_delete=models.SET_NULL, related_name='role_profile')
+    dashboard_key = models.CharField(max_length=50, choices=ROLE_KEY_CHOICES)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
     sort_order = models.PositiveSmallIntegerField(default=0)
+    group = models.OneToOneField(Group, on_delete=models.SET_NULL, related_name='role_profile', null=True, blank=True)
+    features = models.ManyToManyField('Feature', through='RoleFeature', related_name='roles', blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -230,11 +212,85 @@ class Role(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.slug:
-            self.slug = slugify(self.name)
+            self.slug = self.dashboard_key
         super().save(*args, **kwargs)
 
     def __str__(self):
         return self.name
+
+    def get_active_features(self):
+        return self.features.filter(
+            role_features__role=self,
+            role_features__is_active=True,
+            is_active=True,
+            sidebar_visible=True,
+        ).select_related('parent_feature').order_by('menu_group', 'display_order', 'name')
+
+    def get_sidebar_sections(self):
+        sections = {}
+        for feature in self.get_active_features():
+            sections.setdefault(feature.menu_group or 'General', []).append(feature)
+        return sections
+
+
+class Feature(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    feature_key = models.SlugField(max_length=120, unique=True)
+    name = models.CharField(max_length=160)
+    description = models.TextField(blank=True)
+    menu_group = models.CharField(max_length=120, default='General')
+    parent_feature = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL, related_name='child_features')
+    url = models.CharField(max_length=255, blank=True)
+    url_name = models.CharField(max_length=120, blank=True)
+    url_params = models.JSONField(default=dict, blank=True)
+    icon = models.CharField(max_length=120, blank=True)
+    display_order = models.PositiveSmallIntegerField(default=0)
+    sidebar_visible = models.BooleanField(default=True)
+    is_active = models.BooleanField(default=True)
+    requires_approval = models.BooleanField(default=False)
+    requires_audit = models.BooleanField(default=False)
+    scope = models.CharField(max_length=50, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['menu_group', 'display_order', 'name']
+
+    def __str__(self):
+        return self.name
+
+    def get_url_kwargs(self):
+        params = self.url_params or {}
+        if self.url_name and self.feature_key and not params:
+            return {'feature_key': self.feature_key}
+        return params
+
+    def get_display_url(self):
+        if self.url:
+            return self.url
+        if self.url_name:
+            try:
+                return reverse(self.url_name, kwargs=self.get_url_kwargs())
+            except NoReverseMatch:
+                return ''
+        return ''
+
+
+class RoleFeature(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    role = models.ForeignKey(Role, on_delete=models.CASCADE, related_name='role_features')
+    feature = models.ForeignKey(Feature, on_delete=models.CASCADE, related_name='role_features')
+    is_active = models.BooleanField(default=True)
+    assigned_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='role_feature_assignments')
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['role__name', 'feature__menu_group', 'feature__display_order']
+        unique_together = [('role', 'feature')]
+
+    def __str__(self):
+        return f'{self.role.name} → {self.feature.name}'
 
 
 class UserRoleAssignment(models.Model):
@@ -265,70 +321,11 @@ class UserRoleAssignment(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        unique_together = [('user', 'role')]
         ordering = ['-created_at']
+        unique_together = [('user', 'role')]
 
     def __str__(self):
-        return f'{self.user.username} -> {self.role.name}'
-
-    def mark_backup_approved(self, approver, comment=''):
-        if self.status not in {'Pending', 'Rejected'}:
-            raise ValidationError('Role assignment cannot be backup-approved in its current state.')
-        self.status = 'Backup Approved'
-        self.backup_approved_by = approver
-        self.backup_approved_at = timezone.now()
-        self.rejection_reason = ''
-        self.audit_history = list(self.audit_history or []) + [{
-            'action': 'Backup Approved',
-            'user': approver.get_full_name() or approver.username,
-            'timestamp': timezone.localtime().isoformat(),
-            'comment': comment,
-        }]
-        self.save(update_fields=['status', 'backup_approved_by', 'backup_approved_at', 'rejection_reason', 'audit_history', 'updated_at'])
-
-    def mark_supreme_approved(self, approver, comment=''):
-        if self.status != 'Backup Approved':
-            raise ValidationError('Supreme approval requires a prior backup approval.')
-        self.status = 'Supreme Approved'
-        self.supreme_approved_by = approver
-        self.supreme_approved_at = timezone.now()
-        self.rejection_reason = ''
-        self.audit_history = list(self.audit_history or []) + [{
-            'action': 'Supreme Approved',
-            'user': approver.get_full_name() or approver.username,
-            'timestamp': timezone.localtime().isoformat(),
-            'comment': comment,
-        }]
-        self.save(update_fields=['status', 'supreme_approved_by', 'supreme_approved_at', 'rejection_reason', 'audit_history', 'updated_at'])
-
-    def activate(self, approver=None, make_primary=False):
-        if self.status != 'Supreme Approved':
-            raise ValidationError('Role assignment must receive supreme approval before activation.')
-        self.status = 'Active'
-        self.activated_at = timezone.now()
-        if make_primary:
-            self.is_primary_dashboard = True
-        self.audit_history = list(self.audit_history or []) + [{
-            'action': 'Activated',
-            'user': getattr(approver, 'username', 'System'),
-            'timestamp': timezone.localtime().isoformat(),
-            'comment': '',
-        }]
-        self.save(update_fields=['status', 'activated_at', 'is_primary_dashboard', 'audit_history', 'updated_at'])
-        if self.role and self.role.group:
-            self.user.groups.add(self.role.group)
-
-    def reject(self, approver, reason=''):
-        self.status = 'Rejected'
-        self.rejected_at = timezone.now()
-        self.rejection_reason = reason
-        self.audit_history = list(self.audit_history or []) + [{
-            'action': 'Rejected',
-            'user': approver.get_full_name() or approver.username,
-            'timestamp': timezone.localtime().isoformat(),
-            'comment': reason,
-        }]
-        self.save(update_fields=['status', 'rejected_at', 'rejection_reason', 'audit_history', 'updated_at'])
+        return f'{self.user.username} → {self.role.name}'
 
 
 class RoleTemplate(models.Model):
@@ -777,6 +774,8 @@ class PendingApproval(models.Model):
     def get_related_object(self):
         if self.related_model == 'shipment':
             return Shipment.objects.filter(pk=self.related_object_id).first()
+        if self.related_model == 'tape':
+            return Tape.objects.filter(pk=self.related_object_id).first()
         return None
 
     def get_display_reference(self):
@@ -1505,6 +1504,33 @@ DASHBOARD_FEATURE_CHOICES = [(entry['key'], entry['name']) for entry in DASHBOAR
 
 
 def get_dashboard_feature_catalog(scope=None):
+    try:
+        queryset = Feature.objects.filter(is_active=True)
+        if scope:
+            queryset = queryset.filter(scope=scope)
+
+        features = []
+        for feature in queryset.order_by('menu_group', 'display_order', 'name'):
+            features.append({
+                'key': feature.feature_key,
+                'name': feature.name,
+                'icon': feature.icon,
+                'url_name': feature.url_name,
+                'url_params': feature.url_params or {},
+                'url_kwargs': {'feature_key': feature.feature_key},
+                'scope': feature.scope or scope or 'backup',
+                'description': feature.description,
+                'menu_group': feature.menu_group,
+                'url': feature.get_display_url(),
+                'sidebar_visible': feature.sidebar_visible,
+                'requires_approval': feature.requires_approval,
+                'requires_audit': feature.requires_audit,
+            })
+        if features:
+            return features
+    except Exception:
+        pass
+
     features = []
     for entry in DASHBOARD_FEATURE_CATALOG:
         if scope and entry['scope'] != scope:
@@ -1518,6 +1544,11 @@ def get_dashboard_feature_catalog(scope=None):
             'url_kwargs': {'feature_key': entry['key']},
             'scope': entry['scope'],
             'description': entry['description'],
+            'menu_group': 'Operations' if entry['scope'] == 'operations' else 'Backup',
+            'url': '',
+            'sidebar_visible': True,
+            'requires_approval': False,
+            'requires_audit': False,
         })
     return features
 

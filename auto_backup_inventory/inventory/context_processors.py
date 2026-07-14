@@ -1,31 +1,7 @@
+from django.core.cache import cache
 from django.urls import reverse
 
-from .models import DashboardFeatureExemption, DashboardFeaturePermission, Role, UserRoleAssignment, get_dashboard_feature_catalog
-
-
-ROLE_DASHBOARD_ROUTE_MAP = {
-    'admin': 'dashboard',
-    'backup': 'backup-dashboard',
-    'operations': 'operations-dashboard',
-    'warehouse': 'warehouse-operations-dashboard',
-    'auditor': 'auditor-dashboard',
-    'supreme': 'supreme-approver-dashboard',
-    'courier': 'courier-dashboard',
-    'dr': 'investigation-dashboard',
-    'security': 'dashboard',
-}
-
-ROLE_DISPLAY_LABELS = {
-    'admin': 'System Administrator',
-    'backup': 'Backup Administrator',
-    'operations': 'Operations Manager',
-    'warehouse': 'Warehouse Operations',
-    'auditor': 'Compliance Auditor',
-    'supreme': 'Supreme Approver',
-    'courier': 'Courier',
-    'dr': 'DR Team',
-    'security': 'Information Security Officer',
-}
+from .models import DashboardFeatureExemption, DashboardFeaturePermission, Feature, Role, RoleFeature, get_dashboard_feature_catalog
 
 
 def build_feature_target_url(feature, feature_key):
@@ -35,21 +11,79 @@ def build_feature_target_url(feature, feature_key):
     if not params:
         params = {f'show_{feature_key}': '1'}
 
+    if feature.get('url'):
+        return feature['url']
+
     dashboard = 'operations' if feature.get('scope') == 'operations' else 'backup'
     return build_dashboard_navigation_url(feature_key, params=params, dashboard=dashboard)
+
+
+def _resolve_user_role(user):
+    if not user or not user.is_authenticated:
+        return None
+    if hasattr(user, 'get_active_role'):
+        role = user.get_active_role()
+        if role:
+            return role
+    role_key = (getattr(user, 'role', '') or '').strip().lower()
+    if not role_key:
+        return None
+    return Role.objects.filter(slug=role_key, is_active=True).first() or Role.objects.filter(dashboard_key=role_key, is_active=True).first()
+
+
+def _build_sidebar_sections_for_role(role):
+    if not role:
+        return []
+
+    cache_key = f'role-sidebar-sections:{role.pk}:{role.updated_at.isoformat()}'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    sections = []
+    grouped_features = {}
+    role_features = RoleFeature.objects.filter(
+        role=role,
+        is_active=True,
+        feature__is_active=True,
+        feature__sidebar_visible=True,
+    ).select_related('feature', 'feature__parent_feature').order_by('feature__menu_group', 'feature__display_order', 'feature__name')
+
+    for role_feature in role_features:
+        feature = role_feature.feature
+        grouped_features.setdefault(feature.menu_group or 'General', []).append({
+            'key': feature.feature_key,
+            'name': feature.name,
+            'description': feature.description,
+            'icon': feature.icon,
+            'target_url': feature.get_display_url() or build_feature_target_url({
+                'url': feature.url,
+                'url_params': feature.url_params,
+                'scope': feature.scope,
+            }, feature.feature_key),
+            'requires_approval': feature.requires_approval,
+            'requires_audit': feature.requires_audit,
+            'parent_key': feature.parent_feature.feature_key if feature.parent_feature else None,
+            'display_order': feature.display_order,
+        })
+
+    for menu_group, items in grouped_features.items():
+        sections.append({
+            'label': menu_group,
+            'items': items,
+        })
+
+    cache.set(cache_key, sections, 300)
+    return sections
 
 
 def dashboard_features(request):
     user = getattr(request, 'user', None)
     if not user or not user.is_authenticated:
-        return {
-            'dashboard_features': [],
-            'user_dashboard_roles': [],
-            'current_dashboard_key': None,
-            'current_dashboard_label': None,
-            'current_dashboard_url': None,
-            'dashboard_selector_available': False,
-        }
+        return {'dashboard_features': [], 'role_sidebar_sections': [], 'active_role': None}
+
+    active_role = _resolve_user_role(user)
+    role_sidebar_sections = _build_sidebar_sections_for_role(active_role)
 
     if request.user.is_superuser:
         perms = DashboardFeaturePermission.objects.filter(can_view=True)
@@ -65,7 +99,10 @@ def dashboard_features(request):
     for feature in get_dashboard_feature_catalog():
         if feature['key'] in exempted_keys:
             continue
-        if not perms.filter(feature_key=feature['key']).exists():
+        role_allows = False
+        if active_role:
+            role_allows = RoleFeature.objects.filter(role=active_role, feature__feature_key=feature['key'], is_active=True, feature__is_active=True).exists()
+        if not role_allows and not perms.filter(feature_key=feature['key']).exists():
             continue
 
         target_url = build_feature_target_url(feature, feature['key'])
@@ -79,53 +116,8 @@ def dashboard_features(request):
             'description': feature['description'],
         })
 
-    approved_assignments = UserRoleAssignment.objects.select_related('role', 'role__group').filter(
-        user=user,
-        status__in=['Backup Approved', 'Supreme Approved', 'Active'],
-        role__is_active=True,
-    ).order_by('-is_primary_dashboard', 'role__sort_order', 'role__name')
-
-    role_entries = []
-    seen_dashboard_keys = set()
-    for assignment in approved_assignments:
-        role = assignment.role
-        if not role or role.dashboard_key in seen_dashboard_keys:
-            continue
-        seen_dashboard_keys.add(role.dashboard_key)
-        role_entries.append({
-            'id': str(role.id),
-            'label': role.name,
-            'dashboard_key': role.dashboard_key,
-            'url_name': ROLE_DASHBOARD_ROUTE_MAP.get(role.dashboard_key, 'dashboard'),
-            'url': reverse(ROLE_DASHBOARD_ROUTE_MAP.get(role.dashboard_key, 'dashboard')),
-            'is_primary': assignment.is_primary_dashboard,
-            'is_current': request.session.get('active_dashboard_key') == role.dashboard_key,
-            'status': assignment.status,
-        })
-
-    if not role_entries:
-        legacy_dashboard_key = getattr(user, 'get_primary_dashboard_key', lambda: None)()
-        if legacy_dashboard_key:
-            role_entries.append({
-                'id': legacy_dashboard_key,
-                'label': ROLE_DISPLAY_LABELS.get(legacy_dashboard_key, legacy_dashboard_key.replace('_', ' ').title()),
-                'dashboard_key': legacy_dashboard_key,
-                'url_name': ROLE_DASHBOARD_ROUTE_MAP.get(legacy_dashboard_key, 'dashboard'),
-                'url': reverse(ROLE_DASHBOARD_ROUTE_MAP.get(legacy_dashboard_key, 'dashboard')),
-                'is_primary': True,
-                'is_current': request.session.get('active_dashboard_key') == legacy_dashboard_key,
-                'status': 'Active',
-            })
-
-    current_dashboard_key = request.session.get('active_dashboard_key') or (role_entries[0]['dashboard_key'] if role_entries else None)
-    current_dashboard_label = ROLE_DISPLAY_LABELS.get(current_dashboard_key, None) if current_dashboard_key else None
-    current_dashboard_url = reverse(ROLE_DASHBOARD_ROUTE_MAP.get(current_dashboard_key, 'dashboard')) if current_dashboard_key else None
-
     return {
         'dashboard_features': visible_features,
-        'user_dashboard_roles': role_entries,
-        'current_dashboard_key': current_dashboard_key,
-        'current_dashboard_label': current_dashboard_label,
-        'current_dashboard_url': current_dashboard_url,
-        'dashboard_selector_available': len(role_entries) > 1,
+        'role_sidebar_sections': role_sidebar_sections,
+        'active_role': active_role,
     }

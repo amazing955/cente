@@ -12,89 +12,78 @@
   <small>Final Approval Control</small>
 </div>
 
-{% if user_dashboard_roles %}
-<div class="sidebar-section-label">My Dashboards</div>
-<div class="px-3 pb-2">
-  <div class="dropdown">
-    <button class="btn btn-light dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-      <i class="bi bi-grid-1x2 me-2"></i>{{ current_dashboard_label|default:'Dashboard' }}
-    </button>
-    <ul class="dropdown-menu shadow-sm w-100">
-      {% for dashboard in user_dashboard_roles %}
-        <li>
-          <a class="dropdown-item{% if dashboard.dashboard_key == current_dashboard_key %} active{% endif %}" href="{% url 'switch-dashboard' dashboard_key=dashboard.dashboard_key %}">
-            {{ dashboard.label }}{% if dashboard.is_primary %} <span class="badge bg-success ms-2">Primary</span>{% endif %}
-          </a>
-        </li>
-      {% endfor %}
-    </ul>
-  </div>
-</div>
-{% endif %}
-
 <nav class="nav flex-column sidebar-menu supreme-nav px-3 pb-3">
-  <div class="sidebar-section-label">Dashboard</div>
-  <a class="nav-link active d-flex align-items-center justify-content-between" href="#approval-overview">
-    <span><i class="bi bi-speedometer2 me-2"></i>Overview</span>
-  </a>
-  <a class="nav-link" href="#approval-metrics">
-    <i class="bi bi-grid-3x3-gap me-2"></i>Approval Metrics
-  </a>
-  <a class="nav-link d-flex align-items-center justify-content-between" href="#approval-queue">
-    <span><i class="bi bi-list-check me-2"></i>Approval Queue</span>
-    <span class="badge bg-danger rounded-pill">{{ total_pending }}</span>
-  </a>
-  <a class="nav-link" href="#approval-timeline">
-    <i class="bi bi-diagram-3 me-2"></i>Approval Timeline
-  </a>
-  <a class="nav-link d-flex align-items-center justify-content-between" href="#risk-analysis">
-    <span><i class="bi bi-shield-exclamation me-2"></i>Risk Analysis</span>
-    <span class="badge bg-warning text-dark rounded-pill">{{ high_risk_transactions|length }}</span>
-  </a>
-  <a class="nav-link" href="#high-risk-section">
-    <i class="bi bi-exclamation-octagon me-2"></i>High Risk Section
-  </a>
-  <a class="nav-link d-flex align-items-center justify-content-between" href="#notifications">
-    <span><i class="bi bi-bell me-2"></i>Notifications</span>
-    <span class="badge bg-info rounded-pill">{{ notifications|length }}</span>
-  </a>
-  <a class="nav-link" href="#recent-activity">
-    <i class="bi bi-clock-history me-2"></i>Recent Activity
-  </a>
-  <a class="nav-link" href="#quick-actions">
-    <i class="bi bi-lightning-charge me-2"></i>Quick Actions
-  </a>
-  <a class="nav-link" href="#system-status">
-    <i class="bi bi-activity me-2"></i>System Status
-  </a>
+  {% if role_sidebar_sections %}
+    {% for section in role_sidebar_sections %}
+      <div class="sidebar-section-label {% if not forloop.first %}mt-3{% endif %}">{{ section.label }}</div>
+      {% for item in section.items %}
+        <a class="nav-link" href="{{ item.target_url }}"><i class="{{ item.icon }} me-2"></i>{{ item.name }}</a>
+      {% endfor %}
+    {% endfor %}
+  {% else %}
+    <div class="sidebar-section-label">Dashboard</div>
+    <a class="nav-link active d-flex align-items-center justify-content-between" href="#approval-overview">
+      <span><i class="bi bi-speedometer2 me-2"></i>Overview</span>
+    </a>
+    <a class="nav-link" href="#approval-metrics">
+      <i class="bi bi-grid-3x3-gap me-2"></i>Approval Metrics
+    </a>
+    <a class="nav-link d-flex align-items-center justify-content-between" href="#approval-queue">
+      <span><i class="bi bi-list-check me-2"></i>Approval Queue</span>
+      <span class="badge bg-danger rounded-pill">{{ total_pending }}</span>
+    </a>
+    <a class="nav-link" href="#approval-timeline">
+      <i class="bi bi-diagram-3 me-2"></i>Approval Timeline
+    </a>
+    <a class="nav-link d-flex align-items-center justify-content-between" href="#risk-analysis">
+      <span><i class="bi bi-shield-exclamation me-2"></i>Risk Analysis</span>
+      <span class="badge bg-warning text-dark rounded-pill">{{ high_risk_transactions|length }}</span>
+    </a>
+    <a class="nav-link" href="#high-risk-section">
+      <i class="bi bi-exclamation-octagon me-2"></i>High Risk Section
+    </a>
+    <a class="nav-link d-flex align-items-center justify-content-between" href="#notifications">
+      <span><i class="bi bi-bell me-2"></i>Notifications</span>
+      <span class="badge bg-info rounded-pill">{{ notifications|length }}</span>
+    </a>
+    <a class="nav-link" href="#recent-activity">
+      <i class="bi bi-clock-history me-2"></i>Recent Activity
+    </a>
+    <a class="nav-link" href="#quick-actions">
+      <i class="bi bi-lightning-charge me-2"></i>Quick Actions
+    </a>
+    <a class="nav-link" href="#system-status">
+      <i class="bi bi-activity me-2"></i>System Status
+    </a>
 
-  <div class="sidebar-section-label mt-3">Features</div>
-  <a class="nav-link" href="#feature-shipment-approvals" data-dashboard-panel="feature-shipment-approvals">
-    <i class="bi bi-clipboard-check me-2"></i>Shipment Approvals
-  </a>
-  <a class="nav-link d-flex align-items-center justify-content-between" href="#feature-tape-requests" data-dashboard-panel="feature-tape-requests">
-    <span><i class="bi bi-hdd-stack me-2"></i>Tape Requests</span>
-    <span class="badge bg-warning text-dark rounded-pill">{{ pending_tape_requests|length }}</span>
-  </a>
-  <a class="nav-link d-flex align-items-center justify-content-between" href="#feature-warehouse-releases" data-dashboard-panel="feature-warehouse-releases">
-    <span><i class="bi bi-building-up me-2"></i>Warehouse Releases</span>
-    <span class="badge bg-info rounded-pill">{{ pending_warehouse_release }}</span>
-  </a>
-  <a class="nav-link d-flex align-items-center justify-content-between" href="#feature-reconciliation" data-dashboard-panel="feature-reconciliation">
-    <span><i class="bi bi-arrow-repeat me-2"></i>Reconciliation</span>
-    <span class="badge bg-primary rounded-pill">{{ pending_reconciliations|length }}</span>
-  </a>
-  <a class="nav-link" href="#feature-reports" data-dashboard-panel="feature-reports">
-    <i class="bi bi-file-earmark-bar-graph me-2"></i>Reports
-  </a>
-  <a class="nav-link" href="#feature-audit-logs" data-dashboard-panel="feature-audit-logs">
-    <i class="bi bi-journal-text me-2"></i>Audit Logs
-  </a>
+    <div class="sidebar-section-label mt-3">Features</div>
+    <a class="nav-link" href="#feature-shipment-approvals" data-dashboard-panel="feature-shipment-approvals">
+      <i class="bi bi-clipboard-check me-2"></i>Shipment Approvals
+    </a>
+    <a class="nav-link d-flex align-items-center justify-content-between" href="#feature-tape-requests" data-dashboard-panel="feature-tape-requests">
+      <span><i class="bi bi-hdd-stack me-2"></i>Tape Requests</span>
+      <span class="badge bg-warning text-dark rounded-pill">{{ pending_tape_requests|length }}</span>
+    </a>
+    <a class="nav-link d-flex align-items-center justify-content-between" href="#feature-warehouse-releases" data-dashboard-panel="feature-warehouse-releases">
+      <span><i class="bi bi-building-up me-2"></i>Warehouse Releases</span>
+      <span class="badge bg-info rounded-pill">{{ pending_warehouse_release }}</span>
+    </a>
+    <a class="nav-link d-flex align-items-center justify-content-between" href="#feature-reconciliation" data-dashboard-panel="feature-reconciliation">
+      <span><i class="bi bi-arrow-repeat me-2"></i>Reconciliation</span>
+      <span class="badge bg-primary rounded-pill">{{ pending_reconciliations|length }}</span>
+    </a>
+    <a class="nav-link" href="#feature-reports" data-dashboard-panel="feature-reports">
+      <i class="bi bi-file-earmark-bar-graph me-2"></i>Reports
+    </a>
+    <a class="nav-link" href="#feature-audit-logs" data-dashboard-panel="feature-audit-logs">
+      <i class="bi bi-journal-text me-2"></i>Audit Logs
+    </a>
 
-  <div class="sidebar-section-label mt-3">Account</div>
-  <a class="nav-link" href="#approval-overview" data-dashboard-home>
-    <i class="bi bi-house-door me-2"></i>Dashboard Home
-  </a>
+    <div class="sidebar-section-label mt-3">Account</div>
+    <a class="nav-link" href="#approval-overview" data-dashboard-home>
+      <i class="bi bi-house-door me-2"></i>Dashboard Home
+    </a>
+  {% endif %}
   <a class="nav-link text-danger" href="{% url 'signout' %}">
     <i class="bi bi-box-arrow-left me-2"></i>Logout
   </a>
@@ -160,9 +149,6 @@
                 </div>
                 <div>
                   <div class="text-uppercase small fw-semibold opacity-75">Enterprise Banking Approval Console</div>
-                  {% if current_dashboard_label %}
-                  <div class="small opacity-75 mb-1">Current Dashboard: {{ current_dashboard_label }}</div>
-                  {% endif %}
                   <h2 class="mb-2 fw-bold">Welcome back, {% if current_user %}{{ current_user.get_full_name|default:current_user.username }}{% else %}Supreme Approver{% endif %}</h2>
                   <p class="mb-3 opacity-75">Highest authority approvals for sensitive banking operations, warehouse releases, tape movements, and critical user changes.</p>
                   <div class="d-flex flex-wrap gap-2">

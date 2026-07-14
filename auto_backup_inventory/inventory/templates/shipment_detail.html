@@ -258,6 +258,14 @@
                     </div>
                     <button type="submit" class="btn btn-primary w-100">Submit Decision</button>
                 </form>
+                {% if shipment.approval_stage == 'approved' %}
+                <hr>
+                <form method="post" action="{% url 'shipment-detail' shipment.pk %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="form_type" value="release_shipment">
+                    <button type="submit" class="btn btn-danger w-100">Release Shipment to Courier</button>
+                </form>
+                {% endif %}
             </div>
         </div>
 

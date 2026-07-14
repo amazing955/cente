@@ -281,72 +281,65 @@ footer{
         </div>
     </div>
 
-    {% if user_dashboard_roles %}
-    <div class="sidebar-section-title">My Dashboards</div>
-    <div class="dropdown px-2 mb-2">
-        <button class="btn btn-light dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-            <i class="bi bi-grid-1x2 me-2"></i>{{ current_dashboard_label|default:'Dashboard' }}
-        </button>
-        <ul class="dropdown-menu shadow-sm w-100">
-            {% for dashboard in user_dashboard_roles %}
-                <li>
-                    <a class="dropdown-item{% if dashboard.dashboard_key == current_dashboard_key %} active{% endif %}" href="{% url 'switch-dashboard' dashboard_key=dashboard.dashboard_key %}">
-                        <i class="bi bi-arrow-repeat me-2"></i>{{ dashboard.label }}
-                        {% if dashboard.is_primary %}<span class="badge bg-success ms-2">Primary</span>{% endif %}
-                    </a>
-                </li>
-            {% endfor %}
-        </ul>
-    </div>
-    {% endif %}
-
     <nav class="nav flex-column" aria-label="Backup dashboard navigation">
-        <div class="sidebar-section-title">Dashboard</div>
-        <a class="nav-link {% if active_dashboard_section == 'dashboard' %}active{% endif %}" href="{% url 'backup-dashboard' %}">
-            <i class="bi bi-speedometer2"></i> Overview
-        </a>
-        <a class="nav-link {% if active_dashboard_section == 'alerts' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.alerts %}">
-            <i class="bi bi-bell"></i> Notifications
-            {% if alert_count > 0 %}<span class="badge bg-danger ms-auto">{{ alert_count }}</span>{% endif %}
-        </a>
+        {% if role_sidebar_sections %}
+            {% for section in role_sidebar_sections %}
+                <div class="sidebar-section-title">{{ section.label }}</div>
+                {% for item in section.items %}
+                    <a class="nav-link {% if active_feature_key == item.key or active_dashboard_section == item.key %}active{% endif %}" href="{{ item.target_url }}">
+                        <i class="{{ item.icon }}"></i> {{ item.name }}
+                        {% if item.key == 'alerts' and alert_count > 0 %}<span class="badge bg-danger ms-auto">{{ alert_count }}</span>{% endif %}
+                    </a>
+                {% endfor %}
+            {% endfor %}
+        {% else %}
+            <div class="sidebar-section-title">Dashboard</div>
+            <a class="nav-link {% if active_dashboard_section == 'dashboard' %}active{% endif %}" href="{% url 'backup-dashboard' %}">
+                <i class="bi bi-speedometer2"></i> Overview
+            </a>
+            <a class="nav-link {% if active_dashboard_section == 'alerts' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.alerts %}">
+                <i class="bi bi-bell"></i> Notifications
+                {% if alert_count > 0 %}<span class="badge bg-danger ms-auto">{{ alert_count }}</span>{% endif %}
+            </a>
 
-        <div class="sidebar-section-title">Inventory</div>
-        <a class="nav-link {% if active_dashboard_section == 'add_tape' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.add_tape %}">
-            <i class="bi bi-plus-circle"></i> Add Tape
-        </a>
-        <a class="nav-link {% if active_dashboard_section == 'tape_inventory' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.tape_inventory %}">
-            <i class="bi bi-hdd-stack"></i> Tape Inventory
-        </a>
+            <div class="sidebar-section-title">Inventory</div>
+            <a class="nav-link {% if active_dashboard_section == 'add_tape' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.add_tape %}">
+                <i class="bi bi-plus-circle"></i> Add Tape
+            </a>
+            <a class="nav-link {% if active_dashboard_section == 'tape_inventory' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.tape_inventory %}">
+                <i class="bi bi-hdd-stack"></i> Tape Inventory
+            </a>
 
-        <div class="sidebar-section-title">Operations</div>
-        <a class="nav-link {% if active_dashboard_section == 'shipments' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.shipments %}">
-            <i class="bi bi-truck"></i> Shipments
-        </a>
-        <a class="nav-link {% if active_dashboard_section == 'reconciliation' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.reconciliation %}">
-            <i class="bi bi-arrow-repeat"></i> Reconciliation
-        </a>
+            <div class="sidebar-section-title">Operations</div>
+            <a class="nav-link {% if active_dashboard_section == 'shipments' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.shipments %}">
+                <i class="bi bi-truck"></i> Shipments
+            </a>
+            <a class="nav-link {% if active_dashboard_section == 'reconciliation' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.reconciliation %}">
+                <i class="bi bi-arrow-repeat"></i> Reconciliation
+            </a>
 
-        <div class="sidebar-section-title">Reports & Audit</div>
-        <a class="nav-link {% if active_dashboard_section == 'reports' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.reports %}">
-            <i class="bi bi-file-earmark-bar-graph"></i> Reports
-        </a>
-        <a class="nav-link {% if active_dashboard_section == 'reconciliation_reports' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.reconciliation_reports %}">
-            <i class="bi bi-bar-chart-line-fill"></i> Reconciliation Reports
-        </a>
-        <a class="nav-link {% if active_dashboard_section == 'audit_logs' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.audit_logs %}">
-            <i class="bi bi-shield-check"></i> Audit Logs
-        </a>
+            <div class="sidebar-section-title">Reports & Audit</div>
+            <a class="nav-link {% if active_dashboard_section == 'reports' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.reports %}">
+                <i class="bi bi-file-earmark-bar-graph"></i> Reports
+            </a>
+            <a class="nav-link {% if active_dashboard_section == 'reconciliation_reports' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.reconciliation_reports %}">
+                <i class="bi bi-bar-chart-line-fill"></i> Reconciliation Reports
+            </a>
+            <a class="nav-link {% if active_dashboard_section == 'audit_logs' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.audit_logs %}">
+                <i class="bi bi-shield-check"></i> Audit Logs
+            </a>
 
-        <div class="sidebar-section-title">Account</div>
-        <a class="nav-link {% if active_dashboard_section == 'admin' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.admin %}">
-            <i class="bi bi-person-badge"></i> Administrator
-        </a>
-        <a class="nav-link {% if active_dashboard_section == 'profile' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.profile %}">
-            <i class="bi bi-person-circle"></i> My Profile
-        </a>
-        <a class="nav-link {% if active_dashboard_section == 'settings' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.settings %}">
-            <i class="bi bi-gear"></i> Settings
-        </a>
+            <div class="sidebar-section-title">Account</div>
+            <a class="nav-link {% if active_dashboard_section == 'admin' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.admin %}">
+                <i class="bi bi-person-badge"></i> Administrator
+            </a>
+            <a class="nav-link {% if active_dashboard_section == 'profile' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.profile %}">
+                <i class="bi bi-person-circle"></i> My Profile
+            </a>
+            <a class="nav-link {% if active_dashboard_section == 'settings' %}active{% endif %}" href="{% url 'backup-dashboard-navigation' signed_token=dashboard_nav_urls.settings %}">
+                <i class="bi bi-gear"></i> Settings
+            </a>
+        {% endif %}
         <a class="nav-link text-danger" href="{% url 'signout' %}">
             <i class="bi bi-box-arrow-left"></i> Logout
         </a>
@@ -383,23 +376,6 @@ footer{
     </div>
 
     <div class="ms-auto d-flex align-items-center flex-wrap gap-2">
-        {% if user_dashboard_roles %}
-        <div class="dropdown">
-            <button class="btn btn-outline-secondary btn-sm mt-2 dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-                <i class="bi bi-columns-gap me-1"></i>{{ current_dashboard_label|default:'Current Dashboard' }}
-            </button>
-            <ul class="dropdown-menu dropdown-menu-end shadow-sm">
-                {% for dashboard in user_dashboard_roles %}
-                    <li>
-                        <a class="dropdown-item{% if dashboard.dashboard_key == current_dashboard_key %} active{% endif %}" href="{% url 'switch-dashboard' dashboard_key=dashboard.dashboard_key %}">
-                            {{ dashboard.label }}
-                            {% if dashboard.is_primary %}<span class="badge bg-success ms-2">Primary</span>{% endif %}
-                        </a>
-                    </li>
-                {% endfor %}
-            </ul>
-        </div>
-        {% endif %}
         {% if dashboard_features %}
             <div class="dropdown">
                 <button class="btn btn-outline-primary btn-sm mt-2 dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
@@ -765,6 +741,25 @@ footer{
                 <h6 class="fw-semibold mb-2">Approve shipment request {{ approval_shipment.shipment_id }}</h6>
                 <p class="small text-muted mb-3">{{ approval_shipment.source_location|default:'-' }} → {{ approval_shipment.destination_location|default:'Pending review' }}</p>
                 <p class="mb-3">{{ approval_shipment.approval_remarks|default:'No request details have been provided yet.' }}</p>
+                {% if approval_shipment.tapes.all %}
+                <div class="mb-3">
+                    <h6 class="mb-2">Requested Tapes</h6>
+                    <div class="list-group small">
+                        {% for tape in approval_shipment.tapes.all %}
+                        <div class="list-group-item d-flex justify-content-between align-items-center">
+                            <div>
+                                <div class="fw-semibold">{{ tape.volser }}</div>
+                                <div class="text-muted small">{{ tape.tape_type|default:'-' }}</div>
+                            </div>
+                            <div class="text-end">
+                                <div class="small text-muted">Location</div>
+                                <div class="fw-semibold">{{ tape.current_location|default:'-' }}</div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
                 <form method="post" action="{% url 'backup-dashboard' %}">
                     {% csrf_token %}
                     <input type="hidden" name="form_type" value="backup_admin_assignment">

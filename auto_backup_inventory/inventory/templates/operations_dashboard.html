@@ -125,35 +125,25 @@ body {
         <h3 class="mb-1">Ops Manager</h3>
         <p class="small text-white-50 mb-0">Backup Tape Governance</p>
     </div></center>
-    {% if user_dashboard_roles %}
-    <div class="px-3 pb-2">
-        <div class="sidebar-section-title">My Dashboards</div>
-        <div class="dropdown">
-            <button class="btn btn-light dropdown-toggle w-100 text-start" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-                <i class="bi bi-grid-1x2 me-2"></i>{{ current_dashboard_label|default:'Dashboard' }}
-            </button>
-            <ul class="dropdown-menu shadow-sm w-100">
-                {% for dashboard in user_dashboard_roles %}
-                    <li>
-                        <a class="dropdown-item{% if dashboard.dashboard_key == current_dashboard_key %} active{% endif %}" href="{% url 'switch-dashboard' dashboard_key=dashboard.dashboard_key %}">
-                            {{ dashboard.label }}{% if dashboard.is_primary %} <span class="badge bg-success ms-2">Primary</span>{% endif %}
-                        </a>
-                    </li>
-                {% endfor %}
-            </ul>
-        </div>
-    </div>
-    {% endif %}
     <nav class="nav flex-column gap-2">
-        <a class="nav-link active" href="#dashboard" id="dashboardNavLink"><i class="bi bi-speedometer2"></i> Dashboard</a>
-            <a class="nav-link partial-load" href="#shipment_approvals" data-url="{% url 'shipment-approvals' %}"><i class="bi bi-check2-square"></i> Shipment Recieval</a>
-            <a class="nav-link analytics-toggle" href="#analytics"><i class="bi bi-graph-up"></i> Analytics</a>
-            <a class="nav-link" href="#shipment_monitoring"><i class="bi bi-truck"></i> Shipment Monitoring</a>
-            <a class="nav-link" href="#exception_management"><i class="bi bi-exclamation-triangle"></i> Exception Management</a>
-            <a class="nav-link" href="#custody_governance"><i class="bi bi-shield-lock"></i> Custody Governance</a>
-            <a class="nav-link" href="#reconciliation_review"><i class="bi bi-arrow-repeat"></i> Reconciliation Review</a>
-            <a class="nav-link" href="#compliance_monitoring"><i class="bi bi-file-earmark-check"></i> Compliance Monitoring</a>
-            <a class="nav-link" href="#reports"><i class="bi bi-bar-chart-line"></i> Reports</a>
+        {% if role_sidebar_sections %}
+            {% for section in role_sidebar_sections %}
+                <div class="small text-uppercase text-white-50 fw-semibold mt-2">{{ section.label }}</div>
+                {% for item in section.items %}
+                    <a class="nav-link {% if active_feature_key == item.key %}active{% endif %}" href="{{ item.target_url }}"><i class="{{ item.icon }}"></i> {{ item.name }}</a>
+                {% endfor %}
+            {% endfor %}
+        {% else %}
+            <a class="nav-link active" href="#dashboard" id="dashboardNavLink"><i class="bi bi-speedometer2"></i> Dashboard</a>
+                <a class="nav-link partial-load" href="#shipment_approvals" data-url="{% url 'shipment-approvals' %}"><i class="bi bi-check2-square"></i> Shipment Recieval</a>
+                <a class="nav-link analytics-toggle" href="#analytics"><i class="bi bi-graph-up"></i> Analytics</a>
+                <a class="nav-link" href="#shipment_monitoring"><i class="bi bi-truck"></i> Shipment Monitoring</a>
+                <a class="nav-link" href="#exception_management"><i class="bi bi-exclamation-triangle"></i> Exception Management</a>
+                <a class="nav-link" href="#custody_governance"><i class="bi bi-shield-lock"></i> Custody Governance</a>
+                <a class="nav-link" href="#reconciliation_review"><i class="bi bi-arrow-repeat"></i> Reconciliation Review</a>
+                <a class="nav-link" href="#compliance_monitoring"><i class="bi bi-file-earmark-check"></i> Compliance Monitoring</a>
+                <a class="nav-link" href="#reports"><i class="bi bi-bar-chart-line"></i> Reports</a>
+        {% endif %}
     </nav>
 </div>
 <div class="main-content" id="dashboard">
@@ -179,18 +169,6 @@ body {
                 <p class="small-note mb-0">Banking Operations Command Center</p>
             </div>
         <div class="d-flex align-items-center gap-3">
-            {% if user_dashboard_roles %}
-            <div class="dropdown">
-                <button class="btn btn-outline-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-                    <i class="bi bi-columns-gap me-1"></i>{{ current_dashboard_label|default:'Current Dashboard' }}
-                </button>
-                <ul class="dropdown-menu dropdown-menu-end shadow-sm">
-                    {% for dashboard in user_dashboard_roles %}
-                        <li><a class="dropdown-item{% if dashboard.dashboard_key == current_dashboard_key %} active{% endif %}" href="{% url 'switch-dashboard' dashboard_key=dashboard.dashboard_key %}">{{ dashboard.label }}</a></li>
-                    {% endfor %}
-                </ul>
-            </div>
-            {% endif %}
             {% if dashboard_features %}
                 <div class="dropdown">
                     <button class="btn btn-outline-primary btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
@@ -1510,6 +1488,157 @@ function updateSidebarActiveLink(targetHref) {
     });
 }
 
+function attachTapeSelectorHandlers(root = document) {
+    const forms = root.querySelectorAll('form#shipmentRequestForm, form#shipmentRequestFragmentForm');
+    forms.forEach(form => {
+        if (form.dataset.tapeSelectorBound === '1') {
+            return;
+        }
+        form.dataset.tapeSelectorBound = '1';
+
+        const hiddenSelect = form.querySelector('select[name="tapes"]');
+        const availableList = form.querySelector('[id^="availableTapeList"]');
+        const selectedList = form.querySelector('[id^="selectedTapeList"]');
+        const searchInput = form.querySelector('[id^="tapeSearch"]');
+        const selectAllBtn = form.querySelector('[id^="selectAllBtn"]');
+        const clearAllBtn = form.querySelector('[id^="clearAllBtn"]');
+        const selectedCountLabel = form.querySelector('[id^="selectedTapeCount"]');
+        const availableCountLabel = form.querySelector('[id^="availableTapeCount"]');
+        const alertBox = form.querySelector('[id^="tapeSelectionAlert"]');
+        const allCards = Array.from(form.querySelectorAll('.tape-card'));
+
+        if (!hiddenSelect || !availableList || !selectedList || !searchInput || !selectAllBtn || !clearAllBtn || !selectedCountLabel || !availableCountLabel || allCards.length === 0) {
+            return;
+        }
+
+        function syncHiddenSelect() {
+            Array.from(hiddenSelect.options).forEach(option => option.selected = false);
+            allCards.forEach(card => {
+                const option = Array.from(hiddenSelect.options).find(opt => opt.value === card.dataset.id);
+                if (option) {
+                    option.selected = card.classList.contains('selected');
+                }
+            });
+
+            const selectedCount = allCards.filter(card => card.classList.contains('selected')).length;
+            selectedCountLabel.textContent = `${selectedCount} Selected`;
+            availableCountLabel.textContent = `${allCards.filter(card => !card.classList.contains('selected') && card.style.display !== 'none').length} available`;
+
+            const emptyState = selectedList.querySelector('.empty-state');
+            if (selectedCount === 0) {
+                if (!emptyState) {
+                    const placeholder = document.createElement('div');
+                    placeholder.className = 'text-muted small empty-state';
+                    placeholder.textContent = 'No tapes selected yet.';
+                    selectedList.appendChild(placeholder);
+                }
+            } else if (emptyState) {
+                emptyState.remove();
+            }
+        }
+
+        function updateVisibility() {
+            const query = (searchInput.value || '').trim().toLowerCase();
+            let visibleCount = 0;
+            allCards.forEach(card => {
+                if (card.classList.contains('selected')) {
+                    return;
+                }
+                const matches = !query || card.dataset.search.toLowerCase().includes(query);
+                card.style.display = matches ? 'block' : 'none';
+                if (matches) {
+                    visibleCount += 1;
+                }
+            });
+            availableCountLabel.textContent = `${visibleCount} available`;
+        }
+
+        function moveCard(card, targetList) {
+            if (targetList === selectedList) {
+                card.classList.add('selected');
+                selectedList.appendChild(card);
+            } else {
+                card.classList.remove('selected');
+                const currentCards = Array.from(availableList.querySelectorAll('.tape-card'));
+                let insertBefore = null;
+                const cardOrder = Number(card.dataset.order);
+                currentCards.forEach(candidate => {
+                    if (Number(candidate.dataset.order) > cardOrder) {
+                        insertBefore = candidate;
+                        return;
+                    }
+                });
+                if (insertBefore) {
+                    availableList.insertBefore(card, insertBefore);
+                } else {
+                    availableList.appendChild(card);
+                }
+            }
+            syncHiddenSelect();
+            updateVisibility();
+        }
+
+        function initializeSelection() {
+            allCards.forEach(card => {
+                const option = Array.from(hiddenSelect.options).find(opt => opt.value === card.dataset.id);
+                if (option && option.selected) {
+                    moveCard(card, selectedList);
+                }
+            });
+            syncHiddenSelect();
+            updateVisibility();
+        }
+
+        availableList.addEventListener('click', event => {
+            const card = event.target.closest('.tape-card');
+            if (!card || card.classList.contains('selected')) {
+                return;
+            }
+            moveCard(card, selectedList);
+        });
+
+        selectedList.addEventListener('click', event => {
+            const card = event.target.closest('.tape-card');
+            if (!card) {
+                return;
+            }
+            moveCard(card, availableList);
+        });
+
+        selectAllBtn.addEventListener('click', () => {
+            allCards.forEach(card => {
+                if (!card.classList.contains('selected') && card.style.display !== 'none') {
+                    moveCard(card, selectedList);
+                }
+            });
+        });
+
+        clearAllBtn.addEventListener('click', () => {
+            allCards.forEach(card => {
+                if (card.classList.contains('selected')) {
+                    moveCard(card, availableList);
+                }
+            });
+        });
+
+        searchInput.addEventListener('input', updateVisibility);
+
+        form.addEventListener('submit', event => {
+            if (!Array.from(hiddenSelect.options).some(option => option.selected)) {
+                event.preventDefault();
+                if (alertBox) {
+                    alertBox.classList.remove('d-none');
+                    alertBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            } else if (alertBox) {
+                alertBox.classList.add('d-none');
+            }
+        });
+
+        initializeSelection();
+    });
+}
+
 function renderEmbeddedPanelContent(html) {
     const embedded = document.getElementById('embeddedContent');
     if (!embedded) {
@@ -1528,6 +1657,7 @@ function renderEmbeddedPanelContent(html) {
             </div>
         </div>`;
     attachEmbeddedHandlers();
+    attachTapeSelectorHandlers(embedded);
 }
 
 function loadEmbeddedFragment(url, panel = '#shipment_approvals') {
@@ -2098,6 +2228,7 @@ function openFinishScanForm(button) {
 
 document.addEventListener('DOMContentLoaded', () => {
     attachEmbeddedHandlers();
+    attachTapeSelectorHandlers(document);
     const finishScanPanel = document.getElementById('finishScanInlineForm');
     const reconciliationPkField = document.getElementById('finishScanReconciliationPk');
     const reconciliationNameField = document.getElementById('finishScanReconciliationName');

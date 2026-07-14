@@ -31,7 +31,6 @@ from .models import (
     DeliveryConfirmation,
     ExceptionCloseRequest,
     PendingApproval,
-    Role,
     Reconciliation,
     Shipment,
     ShipmentApprovalHistory,
@@ -41,7 +40,6 @@ from .models import (
     Tape,
     TapeRequest,
     SchemaChangeLog,
-    UserRoleAssignment,
     get_dashboard_feature_catalog,
 )
 from .serializer import TapeSerializer
@@ -214,53 +212,6 @@ class LoginAttemptLimitTests(TestCase):
         response = self.client.post(reverse('signin'), {'action': 'resend_otp'})
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'You have exceeded the maximum OTP resend attempts')
-
-
-class MultiRoleDashboardTests(TestCase):
-    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
-    def test_multiple_approved_roles_default_to_primary_dashboard_and_allow_switching(self):
-        backup_group, _ = Group.objects.get_or_create(name='Backup Administrator')
-        supreme_group, _ = Group.objects.get_or_create(name='Supreme Approver')
-        backup_role, _ = Role.objects.get_or_create(name='Backup Administrator', defaults={'dashboard_key': 'backup', 'group': backup_group, 'sort_order': 1})
-        if backup_role.group_id != backup_group.id:
-            backup_role.group = backup_group
-            backup_role.save(update_fields=['group', 'updated_at'])
-        supreme_role, _ = Role.objects.get_or_create(name='Supreme Approver', defaults={'dashboard_key': 'supreme', 'group': supreme_group, 'sort_order': 2})
-        if supreme_role.group_id != supreme_group.id:
-            supreme_role.group = supreme_group
-            supreme_role.save(update_fields=['group', 'updated_at'])
-        user = get_user_model().objects.create_user(
-            username='multi-role-user',
-            email='multi-role-user@example.com',
-            password='StrongPass123!',
-        )
-
-        backup_assignment = UserRoleAssignment.objects.create(user=user, role=backup_role, is_primary_dashboard=True)
-        backup_assignment.mark_backup_approved(user, 'Approved for backup role testing.')
-        backup_assignment.mark_supreme_approved(user, 'Approved for backup role testing.')
-        backup_assignment.activate(approver=user, make_primary=True)
-
-        supreme_assignment = UserRoleAssignment.objects.create(user=user, role=supreme_role)
-        supreme_assignment.mark_backup_approved(user, 'Approved for supreme role testing.')
-        supreme_assignment.mark_supreme_approved(user, 'Approved for supreme role testing.')
-        supreme_assignment.activate(approver=user)
-
-        response = self.client.post(reverse('signin'), {
-            'username': 'multi-role-user',
-            'password': 'StrongPass123!',
-        })
-        self.assertEqual(response.status_code, 200)
-        otp_code = self.client.session['pending_2fa_otp']
-
-        response = self.client.post(reverse('signin'), {'otp_code': otp_code})
-
-        self.assertRedirects(response, reverse('backup-dashboard'))
-        self.assertEqual(self.client.session.get('active_dashboard_key'), 'backup')
-
-        switch_response = self.client.get(reverse('switch-dashboard', kwargs={'dashboard_key': 'supreme'}))
-        self.assertRedirects(switch_response, reverse('supreme-approver-dashboard'))
-        self.assertEqual(self.client.session.get('active_dashboard_key'), 'supreme')
-        self.assertTrue(AuditLog.objects.filter(name='Dashboard Switched', user=user).exists())
 
 
 class DualApprovalWorkflowTests(TestCase):
@@ -2230,6 +2181,33 @@ class ShipmentWorkflowTests(TestCase):
         self.assertContains(response, 'Start a shipment request')
         self.assertNotContains(response, '<!DOCTYPE html>')
 
+    def test_start_shipment_request_renders_dual_panel_tape_selector(self):
+        operations_group = Group.objects.create(name='Operations Manager')
+        user = get_user_model().objects.create_user(
+            username='operator-selector',
+            email='operator-selector@example.com',
+            password='pass1234',
+        )
+        user.groups.add(operations_group)
+        Tape.objects.create(
+            volser='VOL-100',
+            barcode='BC-100',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+            status='Active',
+            current_location='Vault A',
+        )
+
+        self.client.force_login(user)
+        response = self.client.get(reverse('start-shipment-request'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Available Tapes')
+        self.assertContains(response, 'Selected Tapes')
+        self.assertContains(response, 'Search Tape')
+        self.assertContains(response, 'Select All')
+        self.assertContains(response, 'Clear All')
+
     def test_operator_shipment_request_stores_branch_name_as_destination(self):
         operations_group = Group.objects.create(name='Operations Manager')
         user = get_user_model().objects.create_user(
@@ -2679,6 +2657,43 @@ class BackupDashboardShipmentApprovalTests(TestCase):
         self.assertContains(response, target_url)
         self.assertContains(response, 'text-decoration-none text-dark w-100')
 
+    def test_backup_dashboard_alert_lists_requested_tapes_and_locations(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-tape-list',
+            email='backup-tape-list@example.com',
+            password='pass1234',
+        )
+        backup_admin.groups.add(backup_group)
+
+        tape = Tape.objects.create(
+            volser='TAPE-ALERT-001',
+            barcode='BAR-ALERT-001',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+            status='Active',
+            current_location='Vault A',
+        )
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            destination_location='Mombasa Branch',
+            status='Pending',
+            releasing_custodian='Ops User',
+            created_by=backup_admin,
+        )
+        shipment.tapes.add(tape)
+        shipment.number_of_tapes = shipment.tapes.count()
+        shipment.save(update_fields=['number_of_tapes'])
+
+        self.client.force_login(backup_admin)
+        response = self.client.get(reverse('backup-dashboard'), {'show_alerts': '1', 'approve_shipment': shipment.pk})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Requested Tapes')
+        self.assertContains(response, tape.volser)
+        self.assertContains(response, tape.current_location)
+
     def test_backup_admin_can_approve_pending_shipment_from_dashboard_with_barcode_and_courier(self):
         operations_group = Group.objects.create(name='Operations Manager')
         backup_group = Group.objects.create(name='Backup Administrator')
@@ -2884,6 +2899,57 @@ class BackupDashboardShipmentApprovalTests(TestCase):
         notification_log = AuditLog.objects.filter(name='Shipment Assigned', message__contains='target_url=').latest('timestamp')
         self.assertIsNotNone(notification_log)
         self.assertIn(reverse('pickup-confirmation', args=[shipment.pk]), notification_log.message)
+
+    def test_supreme_approval_notifies_backup_admin_with_print_ready_link(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        supreme_group = Group.objects.create(name='Supreme Approver')
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-print-notify',
+            email='backup-print-notify@example.com',
+            password='pass1234',
+            first_name='Backup',
+            last_name='Admin',
+        )
+        backup_admin.groups.add(backup_group)
+        supreme_approver = get_user_model().objects.create_user(
+            username='supreme-print-notify',
+            email='supreme-print-notify@example.com',
+            password='pass1234',
+            first_name='Supreme',
+            last_name='Approver',
+        )
+        supreme_approver.groups.add(supreme_group)
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            destination_location='Mombasa Branch',
+            status='Pending',
+            approval_stage='awaiting_supreme',
+            approved_by_backup=backup_admin,
+            created_by=backup_admin,
+            last_updated_by=backup_admin,
+            approval_remarks='Ready for final approval.',
+        )
+
+        self.client.force_login(supreme_approver)
+        response = self.client.post(
+            reverse('shipment-approvals'),
+            {
+                'form_type': 'backup_admin_decision',
+                'shipment_id': shipment.pk,
+                'decision': 'approve',
+                'comments': 'Final approval granted.',
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        shipment.refresh_from_db()
+        self.assertEqual(shipment.approval_stage, 'approved')
+        self.assertEqual(shipment.status, 'Approved')
+        notification = AuditLog.objects.filter(user=backup_admin, name='Shipment Approval Ready for Printing').latest('timestamp')
+        self.assertIn('target_url=', notification.message)
+        self.assertIn(reverse('approval-form-preview', args=[shipment.pk]), notification.message)
 
     def test_assignment_form_includes_courier_group_user_without_existing_profile(self):
         courier_group = Group.objects.create(name='Courier')
@@ -3316,7 +3382,7 @@ class InventoryImportTests(TestCase):
             password='pass1234',
         )
 
-    def test_excel_upload_creates_or_updates_tape_records(self):
+    def test_excel_upload_creates_pending_import_approval(self):
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = 'Inventory'
@@ -3338,8 +3404,8 @@ class InventoryImportTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 302)
-        self.assertTrue(Tape.objects.filter(volser='ABC123', barcode='BAR001').exists())
-        self.assertTrue(Tape.objects.filter(volser='XYZ999', barcode='BAR002').exists())
+        self.assertTrue(PendingApproval.objects.filter(transaction_type='Import Inventory Excel', requester=self.user, status='Pending').exists())
+        self.assertEqual(Tape.objects.count(), 0)
 
 
 class InventoryReportExportTests(TestCase):
