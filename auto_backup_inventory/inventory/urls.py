@@ -83,5 +83,6 @@ urlpatterns = [
     path('auditor-dashboard/shipments/', views.shipment_compliance_view, name='auditor-shipments'),
     path('auditor-dashboard/retention/', views.retention_compliance_view, name='auditor-retention'),
     path('auditor-dashboard/reconciliation/', views.reconciliation_review_view, name='auditor-reconciliation'),
+    path('approval-form-preview/<uuid:shipment_pk>/', views.approval_form_preview, name='approval-form-preview'),
     path('reports/', include('inventory.reports_urls')),
 ]

@@ -631,6 +631,28 @@ def approve_close_exception(request, close_request_id):
 
 
 
+@login_required(login_url='signin')
+def approval_form_preview(request, shipment_pk):
+    """Render a printable approval form preview for a shipment.
+    Accessible to backup administrators, the backup approver, the shipment creator, or superusers.
+    """
+    shipment = get_object_or_404(Shipment.objects.prefetch_related('tapes'), pk=shipment_pk)
+
+    # Permission check: allow backup admins, the backup approver, the creator, or superusers
+    allowed = (
+        request.user.is_superuser or
+        is_backup_administrator(request.user) or
+        (getattr(shipment, 'approved_by_backup', None) == request.user) or
+        (getattr(shipment, 'created_by', None) == request.user)
+    )
+    if not allowed:
+        raise PermissionDenied
+
+    return render(request, 'approval_form_preview.html', {
+        'shipment': shipment,
+    })
+
+
 def _authenticate_api_user(request):
     if getattr(request.user, 'is_authenticated', False):
         return request.user
