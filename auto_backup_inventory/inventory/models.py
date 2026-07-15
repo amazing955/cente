@@ -13,6 +13,10 @@ from django.urls import NoReverseMatch, reverse
 from django.utils import timezone
 
 
+def default_retention_end_date():
+    return (timezone.now().date() + timedelta(days=3650))
+
+
 ROLE_KEY_CHOICES = [
     ('admin', 'System Administrator'),
     ('system_administrator', 'System Administrator'),
@@ -398,7 +402,7 @@ class Tape(models.Model):
         related_name='scanned_tapes'
     )
     current_location = models.CharField(max_length=200, blank=True)
-    retention_end_date = models.DateField()
+    retention_end_date = models.DateField(default=default_retention_end_date)
     legal_hold = models.BooleanField(default=False)
     audit_hold = models.BooleanField(default=False)
     remarks = models.TextField(blank=True)
