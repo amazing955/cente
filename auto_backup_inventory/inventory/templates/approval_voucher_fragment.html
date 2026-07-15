@@ -44,7 +44,7 @@
     <table>
         <tr>
             <td width="15%">Date</td>
-            <td width="25%"><span class="line">{{ shipment.release_datetime|date:'M d, Y H:i'|default:shipment.shipment_date|date:'M d, Y H:i' }}</span></td>
+            <td width="25%"><span class="line">{% if shipment.release_datetime %}{{ shipment.release_datetime|date:"M d, Y H:i" }}{% elif shipment.shipment_date %}{{ shipment.shipment_date|date:"M d, Y" }}{% else %}-{% endif %}</span></td>
 
             <td width="25%">Asset Current Location</td>
             <td width="35%"><span class="line">{{ shipment.source_location|default:'-' }}</span></td>

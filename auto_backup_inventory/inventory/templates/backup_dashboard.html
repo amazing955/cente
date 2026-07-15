@@ -430,6 +430,10 @@ footer{
                         <label class="form-label">Choose Excel file</label>
                         <input class="form-control" type="file" name="inventory_file" accept=".xlsx,.xlsm,.xls" required>
                     </div>
+                    <div class="mb-3 form-check">
+                        <input class="form-check-input" type="checkbox" id="replaceColumns" name="replace_columns">
+                        <label class="form-check-label" for="replaceColumns">Replace existing columns (full schema replacement)</label>
+                    </div>
                     <div class="form-text">Expected columns: volser, barcode, tape_type, status, current_location, retention_end_date, manufacturer.</div>
                 </div>
                 <div class="modal-footer">

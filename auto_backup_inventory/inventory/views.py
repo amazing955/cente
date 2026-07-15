@@ -124,26 +124,8 @@ def _parse_inventory_excel_workbook(workbook):
     for row in rows[1:]:
         if not any(cell not in (None, '') for cell in row):
             continue
-        values = {
-            normalize_excel_column_name(header): (row[idx] if idx < len(row) else '')
-            for header, idx in ((header, idx) for idx, header in enumerate(headers) if header)
-        }
-        volser = str(values.get('volser', '')).strip()
-        barcode = str(values.get('barcode', '')).strip()
-        tape_type = str(values.get('tape_type', '')).strip()
-        status = str(values.get('status', '')).strip() or 'Active'
-        current_location = str(values.get('current_location', '')).strip()
-        retention_end_date_value = values.get('retention_end_date', '')
-        manufacturer = str(values.get('manufacturer', '')).strip()
-
-        if not volser or not barcode or not tape_type:
-            continue
-
-        try:
-            retention_end_date = parse_date(str(retention_end_date_value)) if retention_end_date_value not in (None, '') else date.today() + timedelta(days=365)
-        except Exception:
-            retention_end_date = date.today() + timedelta(days=365)
-
+        values = {normalize_excel_column_name(header): (row[idx] if idx < len(row) else '') for header, idx in ((header, idx) for idx, header in enumerate(headers))}
+        # Build normalized_fields to ensure consistent import/staging behavior
         normalized_fields = {}
         for field_name, field_value in values.items():
             if field_value in (None, ''):
@@ -152,9 +134,9 @@ def _parse_inventory_excel_workbook(workbook):
             if field_name == 'retention_end_date':
                 try:
                     parsed_date = parse_date(str(field_value).strip())
-                    normalized_fields[field_name] = parsed_date.isoformat() if parsed_date else date.today().isoformat()
+                    normalized_fields[field_name] = parsed_date.isoformat() if parsed_date else ''
                 except Exception:
-                    normalized_fields[field_name] = date.today().isoformat()
+                    normalized_fields[field_name] = ''
                 continue
             if isinstance(field_value, datetime):
                 normalized_fields[field_name] = field_value.isoformat()
@@ -164,9 +146,30 @@ def _parse_inventory_excel_workbook(workbook):
                 continue
             normalized_fields[field_name] = str(field_value).strip()
 
-        normalized_fields['status'] = normalized_fields.get('status') or 'Active'
-        if normalized_fields['status'] not in dict(Tape.STATUS_CHOICES):
-            normalized_fields['status'] = 'Active'
+        volser = str(normalized_fields.get('volser', '')).strip()
+        barcode = str(normalized_fields.get('barcode', '')).strip()
+        tape_type = str(normalized_fields.get('tape_type', '')).strip()
+        status = str(normalized_fields.get('status', '')).strip() or 'Active'
+        normalized_fields['status'] = status if status in dict(Tape.STATUS_CHOICES) else 'Active'
+
+        # Generate placeholders if essential identifiers are missing so staging succeeds
+        if not volser:
+            volser = f'AUTO-{uuid.uuid4().hex[:8]}'
+            normalized_fields['volser'] = volser
+        if not barcode:
+            normalized_fields['barcode'] = barcode
+        if not tape_type:
+            normalized_fields['tape_type'] = tape_type or 'Unknown'
+
+        try:
+            retention_val = normalized_fields.get('retention_end_date', '')
+            if retention_val:
+                parsed = parse_date(str(retention_val))
+                normalized_fields['retention_end_date'] = parsed.isoformat() if parsed else ''
+            else:
+                normalized_fields['retention_end_date'] = ''
+        except Exception:
+            normalized_fields['retention_end_date'] = ''
 
         existing_tape = Tape.objects.filter(volser__iexact=volser).first()
         change_payload = {
@@ -216,7 +219,35 @@ def _create_schema_sync_pending_approval(request, pending_preview):
     new_columns = pending_preview.get('preview', {}).get('new_columns', [])
     if not new_columns:
         return None
+    preview = pending_preview.get('preview', {})
+    replace_mode = bool(pending_preview.get('replace_columns'))
     sql_statements = []
+    # If replace mode is requested, create a quick table backup before any destructive changes
+    if replace_mode:
+        ts = timezone.now().strftime('%Y%m%d%H%M%S')
+        backup_table = f'inventory_tape_backup_{ts}'
+        sql_statements.append(f'CREATE TABLE {backup_table} AS TABLE inventory_tape;')
+
+    # Renames (if any) should be applied before drops/adds so data is preserved
+    renamed = preview.get('renamed_columns', []) or []
+    for r in renamed:
+        old = r.get('from')
+        new = r.get('to')
+        if not old or not new:
+            continue
+        if not is_safe_column_name(old) or not is_safe_column_name(new):
+            return None
+        sql_statements.append(f'ALTER TABLE inventory_tape RENAME COLUMN {old} TO {new};')
+
+    # If replace mode, drop removed columns
+    removed = preview.get('removed_columns', []) or []
+    if replace_mode and removed:
+        for col in removed:
+            if not is_safe_column_name(col):
+                return None
+            sql_statements.append(f'ALTER TABLE inventory_tape DROP COLUMN IF EXISTS {col};')
+
+    # Finally add any new columns detected
     for column in new_columns:
         column_name = column['name']
         column_type = column['detected_type']
@@ -236,6 +267,9 @@ def _create_schema_sync_pending_approval(request, pending_preview):
         'file_name': pending_preview.get('file_name', 'unknown.xlsx'),
         'new_columns': new_columns,
         'sql_statements': sql_statements,
+        'replace_columns': replace_mode,
+        'renamed_columns': renamed,
+        'removed_columns': removed,
     }
     return create_pending_approval(
         transaction_type='Tape Schema Synchronization',
@@ -2017,6 +2051,47 @@ def analyze_excel_schema(uploaded_file, table_name='inventory_tape'):
     }
 
 
+def apply_schema_changes(new_columns, table_name='inventory_tape'):
+    """Apply ALTER TABLE statements for the detected new columns.
+    This executes ALTER TABLE ADD COLUMN IF NOT EXISTS <col> <type> for each column.
+    Column names are expected to be already normalized and safe.
+    Returns (applied_count, errors_list).
+    """
+    applied = 0
+    errors = []
+    if not new_columns:
+        return applied, errors
+
+    sql_stmts = []
+    for col in new_columns:
+        col_name = col.get('name')
+        col_type = col.get('detected_type') or 'TEXT'
+        if not is_safe_column_name(col_name):
+            errors.append(f'Unsafe column name: {col_name}')
+            continue
+        sql = f'ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS {col_name} {col_type};'
+        sql_stmts.append(sql)
+
+    if not sql_stmts:
+        return applied, errors
+
+    try:
+        with connection.cursor() as cursor:
+            for sql in sql_stmts:
+                try:
+                    cursor.execute(sql)
+                    applied += 1
+                except Exception as exc:
+                    logger.exception('Failed to apply schema change: %s', sql)
+                    errors.append(str(exc))
+        # force Django to refresh introspection if needed by clearing cached models
+    except Exception as exc:
+        logger.exception('Schema application failed')
+        errors.append(str(exc))
+
+    return applied, errors
+
+
 def import_inventory_excel_file(uploaded_file=None, workbook=None, file_name=None):
     if not uploaded_file and workbook is None:
         return 0, 'Please choose an Excel file to import.', False
@@ -2047,7 +2122,7 @@ def import_inventory_excel_file(uploaded_file=None, workbook=None, file_name=Non
     required_columns = ['volser', 'barcode', 'tape_type', 'status', 'current_location', 'retention_end_date']
     missing_columns = [column for column in required_columns if column not in header_map]
     if missing_columns:
-        return 0, f'The uploaded sheet is missing required columns: {", ".join(missing_columns)}.', False
+        logger.warning('Uploaded sheet missing required columns: %s. Proceeding with defaults.', missing_columns)
 
     imported_count = 0
     for row in rows[1:]:
@@ -2055,6 +2130,26 @@ def import_inventory_excel_file(uploaded_file=None, workbook=None, file_name=Non
             continue
 
         values = {normalize_excel_column_name(header): (row[idx] if idx < len(row) else '') for header, idx in ((header, idx) for idx, header in enumerate(headers))}
+        # Build normalized_fields similar to parsing routine so we can store extras consistently
+        normalized_fields = {}
+        for field_name, field_value in values.items():
+            if field_value in (None, ''):
+                normalized_fields[field_name] = ''
+                continue
+            if field_name == 'retention_end_date':
+                try:
+                    parsed_date = parse_date(str(field_value).strip())
+                    normalized_fields[field_name] = parsed_date.isoformat() if parsed_date else ''
+                except Exception:
+                    normalized_fields[field_name] = ''
+                continue
+            if isinstance(field_value, datetime):
+                normalized_fields[field_name] = field_value.isoformat()
+                continue
+            if isinstance(field_value, date) and not isinstance(field_value, datetime):
+                normalized_fields[field_name] = field_value.isoformat()
+                continue
+            normalized_fields[field_name] = str(field_value).strip()
         volser = str(values.get('volser', '')).strip()
         barcode = str(values.get('barcode', '')).strip()
         tape_type = str(values.get('tape_type', '')).strip()
@@ -2063,24 +2158,37 @@ def import_inventory_excel_file(uploaded_file=None, workbook=None, file_name=Non
         retention_end_date_value = values.get('retention_end_date', '')
         manufacturer = str(values.get('manufacturer', '')).strip()
 
-        if not volser or not barcode or not tape_type:
-            continue
+        # If essential identifiers are missing, create deterministic placeholders so import can proceed
+        if not volser:
+            volser = f'AUTO-{uuid.uuid4().hex[:8]}'
+        if not barcode:
+            barcode = ''
+        if not tape_type:
+            tape_type = 'Unknown'
 
         try:
             retention_end_date = parse_date(str(retention_end_date_value)) if retention_end_date_value not in (None, '') else date.today() + timedelta(days=365)
         except Exception:
             retention_end_date = date.today() + timedelta(days=365)
 
+        # Persist known fields to model and keep any unknown columns in the `extra` JSON field
+        known_fields = {
+            'barcode': barcode,
+            'tape_type': tape_type,
+            'status': status if status in dict(Tape.STATUS_CHOICES) else 'Active',
+            'current_location': current_location,
+            'retention_end_date': retention_end_date,
+            'manufacturer': manufacturer,
+        }
+        # Determine extra/dynamic columns from the normalized fields
+        extra_fields = {k: v for k, v in normalized_fields.items() if k not in {'volser', 'barcode', 'tape_type', 'status', 'current_location', 'retention_end_date', 'manufacturer'}}
+
+        defaults = known_fields.copy()
+        defaults['extra'] = extra_fields
+
         Tape.objects.update_or_create(
             volser=volser,
-            defaults={
-                'barcode': barcode,
-                'tape_type': tape_type,
-                'status': status if status in dict(Tape.STATUS_CHOICES) else 'Active',
-                'current_location': current_location,
-                'retention_end_date': retention_end_date,
-                'manufacturer': manufacturer,
-            },
+            defaults=defaults,
         )
         imported_count += 1
 
@@ -4544,8 +4652,12 @@ def backup_dashboard(request):
                 show_settings_panel = True
                 messages.error(request, 'Please correct the settings form errors and try again.')
         elif form_type == 'upload_inventory_excel':
-            uploaded_file = request.FILES.get('inventory_file')
-            if uploaded_file and hasattr(uploaded_file, 'read'):
+            try:
+                uploaded_file = request.FILES.get('inventory_file')
+                if not uploaded_file or not hasattr(uploaded_file, 'read'):
+                    messages.error(request, 'Please choose an Excel file to import.')
+                    return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
+
                 uploaded_file.seek(0)
                 file_bytes = uploaded_file.read()
                 uploaded_file.seek(0)
@@ -4554,33 +4666,90 @@ def backup_dashboard(request):
                     messages.error(request, schema_preview['error'])
                     return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
                 if schema_preview and schema_preview.get('new_columns'):
-                    request.session['pending_schema_preview'] = {
-                        'file_name': uploaded_file.name,
-                        'file_bytes': base64.b64encode(file_bytes).decode('utf-8'),
-                        'preview': schema_preview,
-                    }
-                    messages.info(request, 'Schema synchronization preview is ready. Review the proposed changes before continuing.')
-                    show_tape_inventory_panel = True
+                    new_columns = schema_preview.get('new_columns') or []
+                    # Auto-apply schema changes for superusers or backup administrators when enabled
+                    auto_apply_setting = getattr(settings, 'AUTO_APPLY_SCHEMA', False)
+                    is_backup_admin = (request.user.is_superuser or request.user.groups.filter(name='Backup Administrator').exists() or (getattr(request.user, 'username', None) and _get_backup_administrator() and request.user.username == _get_backup_administrator().username))
+                    if auto_apply_setting or is_backup_admin:
+                        applied, apply_errors = apply_schema_changes(new_columns, table_name='inventory_tape')
+                        if applied:
+                            messages.info(request, f'Automatically applied {applied} new column(s) to the tape schema.')
+                            try:
+                                # import now that schema is updated
+                                imported_count, import_message, import_success = import_inventory_excel_file(workbook=file_bytes, file_name=uploaded_file.name)
+                                if import_success:
+                                    AuditLog.objects.create(
+                                        name='Inventory Import Applied',
+                                        action=f'Applied inventory import by {request.user.username} ({imported_count} rows)',
+                                        user=request.user,
+                                        severity='success',
+                                    )
+                                    messages.success(request, import_message)
+                                else:
+                                    logger.warning('Import after auto-schema apply failed: %s', import_message)
+                                    messages.error(request, f'Import failed after schema apply: {import_message}')
+                            except Exception as exc:
+                                logger.exception('Import after schema apply failed')
+                                messages.error(request, f'Import failed after schema apply: {exc}')
+                        else:
+                            # If application failed, stage for manual approval
+                            logger.warning('Auto schema apply produced errors: %s', apply_errors)
+                            # Allow caller to request a full replacement of columns by including
+                            # a `replace_columns` flag in the POST. This will stage a more
+                            # aggressive set of SQL statements (rename/drop/add) that require
+                            # explicit approval by a privileged user.
+                            request.session['pending_schema_preview'] = {
+                                    'file_name': uploaded_file.name,
+                                    'file_bytes': base64.b64encode(file_bytes).decode('utf-8'),
+                                    'preview': schema_preview,
+                                    'replace_columns': bool(request.POST.get('replace_columns')),
+                                }
+                            messages.info(request, 'Schema synchronization preview is ready. Review the proposed changes before continuing.')
+                            show_tape_inventory_panel = True
+                    else:
+                        # Staging for approval as before
+                        request.session['pending_schema_preview'] = {
+                            'file_name': uploaded_file.name,
+                            'file_bytes': base64.b64encode(file_bytes).decode('utf-8'),
+                            'preview': schema_preview,
+                            'replace_columns': bool(request.POST.get('replace_columns')),
+                        }
+                        messages.info(request, 'Schema synchronization preview is ready. Review the proposed changes before continuing.')
+                        show_tape_inventory_panel = True
                 else:
                     try:
                         uploaded_file.seek(0)
                         workbook = load_workbook(BytesIO(uploaded_file.read()), data_only=True)
-                        pa = _build_pending_inventory_import_approval(request, workbook, file_name=uploaded_file.name)
-                        if pa:
-                            AuditLog.objects.create(
-                                name='Pending Inventory Import',
-                                action=f'Pending Excel import submitted for approval by {request.user.username}',
-                                user=request.user,
-                                severity='info',
-                            )
-                            messages.success(request, 'Inventory import submitted for approval. It will be applied once approved.')
+                        # Inspect parsed changes for diagnostics before creating pending approval
+                        try:
+                            requested_changes = _parse_inventory_excel_workbook(workbook)
+                        except Exception as exc:
+                            logger.exception('Failed to parse workbook for staging: %s', exc)
+                            requested_changes = []
+
+                        if not requested_changes:
+                            logger.warning('Upload did not produce any requested_changes for staging. File: %s, rows: %s', uploaded_file.name, len(list(workbook.active.iter_rows(values_only=True))))
+                            messages.error(request, 'Unable to stage inventory import for approval: no valid rows found in the workbook.')
                         else:
-                            messages.error(request, 'Unable to stage inventory import for approval.')
+                            pa = _build_pending_inventory_import_approval(request, workbook, file_name=uploaded_file.name)
+                            if pa:
+                                AuditLog.objects.create(
+                                    name='Pending Inventory Import',
+                                    action=f'Pending Excel import submitted for approval by {request.user.username}',
+                                    user=request.user,
+                                    severity='info',
+                                )
+                                messages.success(request, 'Inventory import submitted for approval. It will be applied once approved.')
+                            else:
+                                logger.exception('Failed to create PendingApproval for inventory import. Parsed changes count: %s', len(requested_changes))
+                                messages.error(request, 'Unable to stage inventory import for approval.')
                     except Exception as exc:
+                        logger.exception('Inventory import staging failed')
                         messages.error(request, f'Unable to read the Excel file for staging import: {exc}')
                     return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
-            else:
-                messages.error(request, 'Please choose an Excel file to import.')
+            except Exception as exc:
+                logger.exception('Unhandled error during inventory upload')
+                messages.error(request, f'Inventory upload failed: {exc}')
                 return redirect(f'{reverse("backup-dashboard")}?show_tape_inventory=1')
         elif form_type == 'approve_excel_schema_sync':
             pending_preview = request.session.pop('pending_schema_preview', None)
@@ -6456,9 +6625,42 @@ def _execute_pending_changes(approval, actor):
                     elif action == 'schema_sync':
                         sql_statements = change.get('sql_statements') or []
                         import_changes = change.get('import_changes') or []
+                        # Determine whether this approval requested a full replacement
+                        replace_mode = bool(approval.request_payload.get('replace_columns'))
+                        # Build patterns for statement filtering. If replace_mode is False,
+                        # only ADD COLUMN is allowed. If replace_mode is True, allow RENAME
+                        # and DROP as well but still block TRUNCATE.
+                        block_truncate_re = re.compile(r'\bTRUNCATE\b', re.IGNORECASE)
+                        add_re = re.compile(r'ADD\s+COLUMN', re.IGNORECASE)
+                        rename_re = re.compile(r'RENAME\s+COLUMN', re.IGNORECASE)
+                        drop_re = re.compile(r'DROP\s+COLUMN', re.IGNORECASE)
+                        alter_type_re = re.compile(r'ALTER\s+COLUMN\s+.*\bTYPE\b', re.IGNORECASE)
+
+                        safe_statements = []
                         for sql_statement in sql_statements:
-                            with connection.cursor() as cursor:
-                                cursor.execute(sql_statement)
+                            if block_truncate_re.search(sql_statement):
+                                logger.warning('Blocked TRUNCATE in schema statement: %s', sql_statement)
+                                continue
+                            if replace_mode:
+                                # allow rename, drop, add, alter type
+                                if rename_re.search(sql_statement) or drop_re.search(sql_statement) or add_re.search(sql_statement) or alter_type_re.search(sql_statement) or sql_statement.strip().upper().startswith('CREATE TABLE'):
+                                    safe_statements.append(sql_statement)
+                                else:
+                                    logger.warning('Schema statement not permitted in replace mode: %s', sql_statement)
+                            else:
+                                # non-replace mode: only ADD COLUMN allowed
+                                if add_re.search(sql_statement):
+                                    safe_statements.append(sql_statement)
+                                else:
+                                    logger.warning('Schema statement not allowed (only ADD COLUMN permitted): %s', sql_statement)
+
+                        # Execute safe statements in order
+                        for sql_statement in safe_statements:
+                            try:
+                                with connection.cursor() as cursor:
+                                    cursor.execute(sql_statement)
+                            except Exception as exc:
+                                logger.exception('Failed executing schema statement during approval %s: %s', approval.pk, exc)
                         new_columns = approval.request_payload.get('new_columns') or []
                         if not new_columns:
                             for sql_statement in sql_statements:

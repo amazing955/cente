@@ -223,3 +223,7 @@ JAZZMIN_UI_TWEAKS = {
     'theme': 'cosmo',
 }
 
+# If True, the application will automatically apply ALTER TABLE statements
+# to add new columns detected in uploaded Excel files. Use with caution.
+AUTO_APPLY_SCHEMA = True
+

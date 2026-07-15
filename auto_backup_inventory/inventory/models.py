@@ -403,6 +403,7 @@ class Tape(models.Model):
     audit_hold = models.BooleanField(default=False)
     remarks = models.TextField(blank=True)
     date_registered = models.DateTimeField(auto_now_add=True)
+    extra = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ['-date_registered']
@@ -775,7 +776,14 @@ class PendingApproval(models.Model):
         if self.related_model == 'shipment':
             return Shipment.objects.filter(pk=self.related_object_id).first()
         if self.related_model == 'tape':
-            return Tape.objects.filter(pk=self.related_object_id).first()
+            # related_object_id may be blank or a non-UUID placeholder for bulk imports.
+            # Guard against invalid UUIDs to avoid exceptions when filtering by PK.
+            try:
+                if not self.related_object_id:
+                    return None
+                return Tape.objects.filter(pk=self.related_object_id).first()
+            except Exception:
+                return None
         return None
 
     def get_display_reference(self):
@@ -785,6 +793,12 @@ class PendingApproval(models.Model):
                 value = getattr(related_object, attr, None)
                 if value:
                     return str(value)
+        # Fall back to a human-friendly summary when there is no related object
+        if self.request_payload and isinstance(self.request_payload, dict):
+            if 'file_name' in self.request_payload:
+                return f"Import: {self.request_payload.get('file_name')}"
+            if 'shipment_id' in self.request_payload:
+                return str(self.request_payload.get('shipment_id'))
         return str(self.id)
 
 

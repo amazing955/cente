@@ -28,6 +28,24 @@ from .models import (
 )
 
 
+class RoleAdminForm(forms.ModelForm):
+    features_checklist = forms.ModelMultipleChoiceField(
+        queryset=Feature.objects.all(),
+        required=False,
+        widget=FilteredSelectMultiple('Features', is_stacked=False),
+        label='Features',
+    )
+
+    class Meta:
+        model = Role
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance and getattr(self.instance, 'pk', None):
+            self.fields['features_checklist'].initial = list(self.instance.features.all())
+
+
 class BaseCustomUserAdminForm(forms.ModelForm):
     password = forms.CharField(
         required=False,
@@ -168,13 +186,59 @@ class DashboardFeatureExemptionAdmin(admin.ModelAdmin):
     search_fields = ('user__username', 'user__email', 'feature_key', 'reason')
 
 
+class RoleFeatureInline(admin.TabularInline):
+    model = RoleFeature
+    extra = 1
+    fields = ('feature', 'is_active', 'assigned_by', 'assigned_at')
+    readonly_fields = ('assigned_by', 'assigned_at')
+    show_change_link = True
+
+
 @admin.register(Role)
 class RoleAdmin(admin.ModelAdmin):
-    list_display = ('name', 'dashboard_key', 'group', 'is_active', 'sort_order')
+    list_display = ('name', 'dashboard_key', 'group', 'is_active', 'sort_order', 'assigned_features')
     list_filter = ('is_active', 'dashboard_key')
     search_fields = ('name', 'slug', 'dashboard_key', 'description', 'group__name')
     prepopulated_fields = {'slug': ('name',)}
     raw_id_fields = ('features',)
+    inlines = (RoleFeatureInline,)
+    readonly_fields = ('display_assigned_features',)
+    form = RoleAdminForm
+
+    def assigned_features(self, obj):
+        return ', '.join([f.name for f in obj.features.all()]) or '-'
+    assigned_features.short_description = 'Assigned Features'
+
+    def display_assigned_features(self, obj):
+        groups = {}
+        for f in obj.features.all().order_by('menu_group', 'display_order', 'name'):
+            groups.setdefault(f.menu_group or 'General', []).append(f.name)
+        lines = [f"{grp}: {', '.join(names)}" for grp, names in groups.items()]
+        return '\n'.join(lines) or '-'
+    display_assigned_features.short_description = 'Assigned Features (grouped)'
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        # Sync RoleFeature through-model entries from the checklist field
+        selected = form.cleaned_data.get('features_checklist') or []
+        selected_ids = {f.id for f in selected}
+        existing = {rf.feature_id: rf for rf in RoleFeature.objects.filter(role=obj)}
+
+        # Create or activate selected features
+        for f in selected:
+            rf = existing.pop(f.id, None)
+            if rf:
+                if not rf.is_active:
+                    rf.is_active = True
+                    rf.save(update_fields=['is_active', 'updated_at'])
+            else:
+                RoleFeature.objects.create(role=obj, feature=f, is_active=True, assigned_by=request.user)
+
+        # Remove any remaining RoleFeature entries that were deselected
+        for rf in existing.values():
+            rf.delete()
+
+
 
 
 @admin.register(Feature)

@@ -74,7 +74,7 @@
                     </div>
                     <div style="padding: 14px; border: 1px dashed #cbd5e1; border-radius: 1rem; background: #fff; text-align: center;">
                         <div style="font-size: 0.75rem; color: #6b7280; text-transform: uppercase; letter-spacing: .08em;">Release</div>
-                        <div style="font-weight: 700; margin-top: 6px;">{{ shipment.release_datetime|date:'M d, Y H:i'|default:'Pending' }}</div>
+                        <div style="font-weight: 700; margin-top: 6px;">{% if shipment.release_datetime %}{{ shipment.release_datetime|date:"M d, Y H:i" }}{% else %}Pending{% endif %}</div>
                     </div>
                 </div>
             </div>
