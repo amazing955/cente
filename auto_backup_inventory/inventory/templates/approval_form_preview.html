@@ -25,6 +25,7 @@
         border:1px solid #000;
         box-sizing: border-box;
         page-break-inside: avoid;
+        position: relative;
     }
 
     .logo{
@@ -84,6 +85,18 @@
         font-size:13px;
     }
 
+    /* Approved stamp */
+    .stamp{
+        position: absolute;
+        right: 18mm;
+        top: 40mm;
+        width: 80mm;
+        opacity: 0.95;
+        transform: rotate(-12deg);
+        pointer-events: none;
+        mix-blend-mode: multiply;
+    }
+
     /* Print rules */
     @page { size: A4 landscape; margin: 10mm; }
     @media print{
@@ -119,6 +132,9 @@
         <img src="{% static 'inventory/lo.png' %}" alt="Centenary Bank Logo">
         <strong>Centenary Bank</strong>
     </div>
+
+    <!-- Approved stamp (place approved.jpg in static/inventory/) -->
+    <img src="{% static 'inventory/approved.jpg' %}" alt="Approved" class="stamp" />
 
     <h2>CENTENARY RURAL DEVELOPMENT BANK LTD</h2>
     <h3>ASSET MOVEMENT VOUCHER</h3>

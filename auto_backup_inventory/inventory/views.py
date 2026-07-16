@@ -59,6 +59,7 @@ def _build_pending_tape_approval(request, transaction_type, summary, payload_fie
     }
     if object_id:
         requested_change['object_id'] = str(object_id)
+    status_value = 'Awaiting Supreme Approval' if is_backup_administrator(request.user) else 'Pending'
     return create_pending_approval(
         transaction_type=transaction_type,
         module='Inventory',
@@ -67,7 +68,7 @@ def _build_pending_tape_approval(request, transaction_type, summary, payload_fie
         backup_administrator=backup_admin,
         priority=priority,
         risk_level=risk_level,
-        status='Pending',
+        status=status_value,
         request_payload=request_payload,
         requested_changes=[requested_change],
         related_model='tape',
@@ -91,6 +92,7 @@ def _build_pending_inventory_import_approval(request, workbook, file_name='inven
         'row_count': len(requested_changes),
     }
 
+    status_value = 'Awaiting Supreme Approval' if is_backup_administrator(request.user) else 'Pending'
     return create_pending_approval(
         transaction_type='Import Inventory Excel',
         module='Inventory',
@@ -99,7 +101,7 @@ def _build_pending_inventory_import_approval(request, workbook, file_name='inven
         backup_administrator=backup_admin,
         priority='Medium',
         risk_level='High',
-        status='Pending',
+        status=status_value,
         request_payload=request_payload,
         requested_changes=requested_changes,
         related_model='tape',
@@ -192,6 +194,7 @@ def _create_bulk_tape_import_pending_approval(request, workbook, file_name='inve
         'file_name': file_name,
         'row_count': len(requested_changes),
     }
+    status_value = 'Awaiting Supreme Approval' if is_backup_administrator(request.user) else 'Pending'
     return create_pending_approval(
         transaction_type='Bulk Tape Import',
         module='Inventory',
@@ -200,7 +203,7 @@ def _create_bulk_tape_import_pending_approval(request, workbook, file_name='inve
         backup_administrator=backup_admin,
         priority='High',
         risk_level='High',
-        status='Pending',
+        status=status_value,
         request_payload=request_payload,
         requested_changes=requested_changes,
         related_model='tape',
