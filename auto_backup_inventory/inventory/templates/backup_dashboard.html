@@ -754,7 +754,7 @@ footer{
                     <h6 class="mb-2">Requested Tapes</h6>
                     <div class="list-group small">
                         {% for tape in approval_shipment.tapes.all %}
-                        <div class="list-group-item d-flex justify-content-between align-items-center">
+                        <div class="list-group-item d-flex justify-content-between align-items-center" data-tape-id="{{ tape.pk }}" data-tape-label="{{ tape.volser }}" data-tape-barcode="{{ tape.barcode|default:'' }}" data-tape-volser="{{ tape.volser }}">
                             <div>
                                 <div class="fw-semibold">{{ tape.volser }}</div>
                                 <div class="text-muted small">{{ tape.tape_type|default:'-' }}</div>
@@ -765,6 +765,19 @@ footer{
                             </div>
                         </div>
                         {% endfor %}
+                    </div>
+                    <div class="mt-3 border rounded p-3 bg-light">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <label class="form-label mb-0">Scan status</label>
+                            <span id="scan-summary" class="badge bg-secondary">0 / {{ approval_shipment.tapes.count }}</span>
+                        </div>
+                        <div id="scan-checklist" class="d-flex flex-column gap-2"></div>
+                        {{ assignment_form.scanned_tapes }}
+                        <div class="mt-3">
+                            <label class="form-label">Reason for unscanned tapes</label>
+                            {{ assignment_form.unscanned_reason }}
+                            {% if assignment_form.unscanned_reason.errors %}<div class="text-danger small mt-1">{{ assignment_form.unscanned_reason.errors|join:", " }}</div>{% endif %}
+                        </div>
                     </div>
                 </div>
                 {% endif %}
@@ -780,6 +793,7 @@ footer{
                             <label class="form-label">Scan or enter tape barcode</label>
                             {{ assignment_form.barcode }}
                             {% if assignment_form.barcode.errors %}<div class="text-danger small mt-1">{{ assignment_form.barcode.errors|join:", " }}</div>{% endif %}
+                            <div class="form-text">Scan each requested tape; green items indicate a successful scan.</div>
                         </div>
                         <div class="col-md-6">
                             <label class="form-label">Courier</label>
@@ -2977,7 +2991,73 @@ footer{
 </div>
 {% endif %}
 
-    {% endblock %}
+    <script>
+(function() {
+    const scanInput = document.getElementById('id_barcode');
+    const scannedField = document.getElementById('id_scanned_tapes');
+    const scanSummary = document.getElementById('scan-summary');
+    const scanChecklist = document.getElementById('scan-checklist');
+    const tapeItems = Array.from(document.querySelectorAll('[data-tape-id]'));
+    const tapeMap = new Map();
+    tapeItems.forEach(function(item) {
+        const values = [item.dataset.tapeId, item.dataset.tapeBarcode, item.dataset.tapeVolser].filter(Boolean);
+        values.forEach(function(value) {
+            tapeMap.set(value, item.dataset.tapeId);
+        });
+    });
+
+    function updateScanState() {
+        if (!scanInput || !scannedField || !scanSummary || !scanChecklist) {
+            return;
+        }
+        const scannedIds = new Set((scannedField.value || '').split(',').filter(Boolean));
+        let scannedCount = scannedIds.size;
+        const requestedCount = tapeItems.length;
+        scanSummary.textContent = scannedCount + ' / ' + requestedCount;
+        scanSummary.className = 'badge ' + (scannedCount === requestedCount ? 'bg-success' : 'bg-secondary');
+        scanChecklist.innerHTML = '';
+        tapeItems.forEach(function(item) {
+            const id = item.dataset.tapeId;
+            const row = document.createElement('div');
+            row.className = 'd-flex align-items-center justify-content-between rounded px-2 py-1 ' + (scannedIds.has(id) ? 'bg-success-subtle text-success-emphasis' : 'bg-white');
+            row.innerHTML = '<span><i class="bi ' + (scannedIds.has(id) ? 'bi-check-circle-fill' : 'bi-circle') + ' me-2"></i>' + item.dataset.tapeLabel + '</span><span class="small fw-semibold">' + (scannedIds.has(id) ? 'Scanned' : 'Pending') + '</span>';
+            scanChecklist.appendChild(row);
+        });
+    }
+
+    function addScannedTape(value) {
+        const normalized = String(value || '').trim();
+        if (!normalized) {
+            return;
+        }
+        const id = tapeMap.get(normalized);
+        if (!id) {
+            return;
+        }
+        const current = new Set((scannedField.value || '').split(',').filter(Boolean));
+        current.add(normalized);
+        scannedField.value = Array.from(current).join(',');
+        updateScanState();
+    }
+
+    if (scanInput) {
+        scanInput.addEventListener('keydown', function(event) {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                addScannedTape(scanInput.value);
+                scanInput.value = '';
+            }
+        });
+        scanInput.addEventListener('change', function() {
+            addScannedTape(scanInput.value);
+            scanInput.value = '';
+        });
+    }
+
+    updateScanState();
+})();
+</script>
+{% endblock %}
 
 </div>
 

@@ -437,6 +437,16 @@ class BackupShipmentAssignmentForm(forms.Form):
         widget=forms.Select(attrs={'class': 'form-select'}),
         required=False,
     )
+    scanned_tapes = forms.CharField(
+        required=False,
+        widget=forms.HiddenInput(),
+        label='Scanned Tape IDs',
+    )
+    unscanned_reason = forms.CharField(
+        required=False,
+        widget=forms.Textarea(attrs={'class': 'form-control', 'rows': 3, 'placeholder': 'Explain why any requested tapes remain unscanned'}),
+        label='Reason for unscanned tapes',
+    )
     courier = forms.ChoiceField(
         label='Courier',
         widget=forms.Select(attrs={'class': 'form-select'}),
@@ -526,6 +536,7 @@ class BackupShipmentAssignmentForm(forms.Form):
         barcode = (cleaned_data.get('barcode') or '').strip()
         tape = cleaned_data.get('tape')
         courier = cleaned_data.get('courier')
+        scanned_tapes = [item.strip() for item in (cleaned_data.get('scanned_tapes') or '').split(',') if item.strip()]
 
         if not tape and barcode:
             tape = Tape.objects.filter(barcode__iexact=barcode).first() or Tape.objects.filter(volser__iexact=barcode).first()
@@ -535,8 +546,19 @@ class BackupShipmentAssignmentForm(forms.Form):
         if submit_action == 'reject':
             return cleaned_data
 
-        if not tape and not (self.shipment and getattr(self.shipment, 'shipment_type', '') == 'Return'):
-            raise forms.ValidationError('Please provide a valid tape by scanning its barcode or selecting one from the list.')
+        if self.shipment:
+            requested_tapes = list(self.shipment.tapes.all())
+            if requested_tapes:
+                if not scanned_tapes:
+                    raise forms.ValidationError('Please scan each requested tape before approving the shipment.')
+                expected_ids = {str(tape.pk) for tape in requested_tapes}
+                scanned_ids = set(scanned_tapes)
+                missing_ids = expected_ids - scanned_ids
+                if missing_ids:
+                    if not (cleaned_data.get('unscanned_reason') or '').strip():
+                        raise forms.ValidationError('Please add a reason for the unscanned requested tapes before approving the shipment.')
+            elif not tape and not (self.shipment and getattr(self.shipment, 'shipment_type', '') == 'Return'):
+                raise forms.ValidationError('Please provide a valid tape by scanning its barcode or selecting one from the list.')
 
         if not courier:
             if self.data.get('courier'):

@@ -126,7 +126,7 @@
 </head>
 <body>
     <center>
-        <button class="no-print btn btn-secondary" onclick="window.print()">Print this approval form</button>
+        <button id="printApprovalFormButton" type="button" class="no-print btn btn-secondary">Print this approval form</button>
     </center>
     <br>
     <div class="voucher">
@@ -202,5 +202,28 @@
 
 </div>
 
+<script>
+(function() {
+    const button = document.getElementById('printApprovalFormButton');
+    if (!button) return;
+    button.addEventListener('click', function() {
+        const formData = new FormData();
+        formData.append('form_type', 'mark_approval_form_printed');
+        const csrfToken = document.cookie.split('; ').find(function(item) { return item.startsWith('csrftoken='); });
+        const headers = {};
+        if (csrfToken) {
+            headers['X-CSRFToken'] = csrfToken.split('=')[1];
+        }
+        fetch(window.location.href, {
+            method: 'POST',
+            headers: headers,
+            body: formData,
+            credentials: 'same-origin'
+        }).finally(function() {
+            window.print();
+        });
+    });
+})();
+</script>
 </body>
 </html>

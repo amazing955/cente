@@ -2951,6 +2951,75 @@ class BackupDashboardShipmentApprovalTests(TestCase):
         self.assertIn('target_url=', notification.message)
         self.assertIn(reverse('approval-form-preview', args=[shipment.pk]), notification.message)
 
+    def test_printing_approval_form_marks_shipment_taken(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-print-state',
+            email='backup-print-state@example.com',
+            password='pass1234',
+            first_name='Backup',
+            last_name='Admin',
+        )
+        backup_admin.groups.add(backup_group)
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            destination_location='Mombasa Branch',
+            status='Approved',
+            approval_stage='approved',
+            approved_by_backup=backup_admin,
+            created_by=backup_admin,
+            last_updated_by=backup_admin,
+            release_datetime=timezone.now(),
+            approval_remarks='Ready for release.',
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.post(
+            reverse('approval-form-preview', args=[shipment.pk]),
+            {'form_type': 'mark_approval_form_printed'},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        shipment.refresh_from_db()
+        self.assertIsNotNone(shipment.approval_form_printed_at)
+
+        awaiting_release = self.client.get(reverse('awaiting-release'))
+        self.assertEqual(awaiting_release.status_code, 200)
+        self.assertContains(awaiting_release, 'Taken')
+        self.assertNotContains(awaiting_release, 'Release')
+        self.assertNotContains(awaiting_release, 'Print')
+
+    def test_assignment_form_requires_reason_when_requested_tapes_remain_unscanned(self):
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi',
+            destination_location='Mombasa',
+            status='Pending',
+        )
+        tape = Tape.objects.create(
+            volser='TAPE-UNSCANNED-001',
+            barcode='BAR-UNSCANNED-001',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+        )
+        shipment.tapes.add(tape)
+
+        form = BackupShipmentAssignmentForm(
+            data={
+                'scanned_tapes': '',
+                'courier': '',
+                'decision': 'approve',
+                'comments': 'Please review',
+                'unscanned_reason': '',
+            },
+            shipment=shipment,
+        )
+
+        self.assertFalse(form.is_valid())
+        self.assertIn('Please add a reason', str(form.errors['__all__']))
+
     def test_assignment_form_includes_courier_group_user_without_existing_profile(self):
         courier_group = Group.objects.create(name='Courier')
         courier_user = get_user_model().objects.create_user(

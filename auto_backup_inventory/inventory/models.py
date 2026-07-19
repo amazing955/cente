@@ -865,6 +865,7 @@ class Shipment(models.Model):
     )
     releasing_custodian = models.CharField(max_length=150, blank=True)
     release_datetime = models.DateTimeField(null=True, blank=True)
+    approval_form_printed_at = models.DateTimeField(null=True, blank=True)
 
     destination_location = models.CharField(max_length=200, blank=True)
     receiving_organization = models.CharField(max_length=200, blank=True)

@@ -32,6 +32,7 @@ from django.http import Http404, HttpResponse, HttpResponseBadRequest, JsonRespo
 from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse
 from django.utils import timezone
+from django.views.decorators.csrf import ensure_csrf_cookie
 
 from .authentication import AuditedJWTAuthentication
 from .permissions import InvestigationPermission
@@ -668,6 +669,7 @@ def approve_close_exception(request, close_request_id):
 
 
 
+@ensure_csrf_cookie
 @login_required(login_url='signin')
 def approval_form_preview(request, shipment_pk):
     """Render a printable approval form preview for a shipment.
@@ -684,6 +686,16 @@ def approval_form_preview(request, shipment_pk):
     )
     if not allowed:
         raise PermissionDenied
+
+    if request.method == 'POST' and request.POST.get('form_type') == 'mark_approval_form_printed':
+        if shipment.release_datetime and not shipment.approval_form_printed_at:
+            shipment.approval_form_printed_at = timezone.localtime()
+            shipment.last_updated_by = request.user if getattr(request.user, 'is_authenticated', False) else shipment.last_updated_by
+            shipment.save(update_fields=['approval_form_printed_at', 'last_updated_by', 'last_updated_at'])
+        return JsonResponse({
+            'detail': 'Approval form print recorded.',
+            'approval_form_printed_at': shipment.approval_form_printed_at.isoformat() if shipment.approval_form_printed_at else None,
+        })
 
     # support alternative printable voucher format via query `?format=voucher`
     # generate asset description from package/tapes when not explicitly provided
@@ -3948,6 +3960,7 @@ def backup_dashboard(request):
         if form_type == 'backup_admin_assignment':
             shipment_id = request.POST.get('shipment_id')
             shipment = get_object_by_uuid_pk(Shipment, shipment_id)
+            assignment_form = BackupShipmentAssignmentForm(request.POST or None, shipment=shipment)
             submit_action = (request.POST.get('submit_action') or request.POST.get('decision') or 'approve').lower()
             decision = 'approve' if submit_action != 'reject' else 'reject'
             if shipment:
@@ -3958,6 +3971,7 @@ def backup_dashboard(request):
                     # Backup admin approval moves the shipment to awaiting supreme approval.
                     # Do NOT notify or assign courier for pickup at this stage.
                     tape = assignment_form.cleaned_data['tape']
+                    scan_reason = (assignment_form.cleaned_data.get('unscanned_reason') or '').strip()
                     courier_selection = assignment_form.cleaned_data['courier']
                     courier_profile = None
                     courier_user = None
@@ -4003,7 +4017,10 @@ def backup_dashboard(request):
                     shipment.approved_by_backup = request.user
                     shipment.approved_by = request.user
                     shipment.approval_date = timezone.localtime()
-                    shipment.approval_remarks = comments or 'Approved by backup administrator. Pending supreme approver.'
+                    approval_remarks = comments or 'Approved by backup administrator. Pending supreme approver.'
+                    if scan_reason:
+                        approval_remarks = f"{approval_remarks}\nBackup scan note: {scan_reason}"
+                    shipment.approval_remarks = approval_remarks
                     shipment.last_updated_by = request.user
                     shipment.save(update_fields=['status', 'approved_by', 'approved_by_backup', 'approval_stage', 'approval_date', 'approval_remarks', 'last_updated_by', 'last_updated_at', 'courier_name', 'courier_contact', 'tracking_number', 'number_of_tapes'])
                     ShipmentApprovalHistory.objects.create(shipment=shipment, action='Backup Approved', comments=comments, user=request.user)
@@ -7028,7 +7045,7 @@ def shipment_detail(request, shipment_pk):
         initial={'receiving_custodian': request.user.get_full_name() or request.user.username}
     )
     approval_form = ShipmentApprovalDecisionForm(request.POST or None, initial={'shipment_pk': shipment.pk})
-    assignment_form = BackupShipmentAssignmentForm(request.POST or None)
+    assignment_form = BackupShipmentAssignmentForm(request.POST or None, shipment=shipment)
     manifest_search_form = ManifestSearchForm(request.GET or None)
     manifest_tapes = shipment.tapes.all()
 

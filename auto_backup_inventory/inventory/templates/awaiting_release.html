@@ -40,7 +40,11 @@
                             <td>{{ shipment.description|default:shipment.approval_remarks|default:'-' }}</td>
                             <td class="text-end">
                                 <a href="{% url 'shipment-detail' shipment.pk %}" class="btn btn-sm btn-outline-primary">Details</a>
-                                {% if can_release and shipment.approval_stage == 'approved' %}
+                                {% if shipment.release_datetime and shipment.approval_form_printed_at %}
+                                <span class="badge bg-success ms-2">Taken</span>
+                                {% elif shipment.release_datetime %}
+                                <a href="{% url 'approval-form-preview' shipment.pk %}?format=voucher" target="_blank" class="btn btn-sm btn-outline-secondary ms-2">Print</a>
+                                {% elif can_release and shipment.approval_stage == 'approved' %}
                                 <button type="button" class="btn btn-sm btn-success ms-2 release-btn" data-shipment-pk="{{ shipment.pk }}" data-release-url="{% url 'shipment-detail' shipment.pk %}">Release</button>
                                 {% endif %}
                                 
