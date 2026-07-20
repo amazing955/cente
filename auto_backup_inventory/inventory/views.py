@@ -3970,7 +3970,7 @@ def backup_dashboard(request):
                 if decision == 'approve':
                     # Backup admin approval moves the shipment to awaiting supreme approval.
                     # Do NOT notify or assign courier for pickup at this stage.
-                    tape = assignment_form.cleaned_data['tape']
+                    tape = assignment_form.cleaned_data.get('tape')
                     scan_reason = (assignment_form.cleaned_data.get('unscanned_reason') or '').strip()
                     courier_selection = assignment_form.cleaned_data['courier']
                     courier_profile = None
@@ -4005,8 +4005,26 @@ def backup_dashboard(request):
                                     courier_contact = courier_user.email or ''
                                     courier_profile = getattr(courier_user, 'courier_profile', None)
 
-                    # Persist the selected tape and courier details but do not notify courier.
-                    shipment.tapes.add(tape)
+                    # Persist the selected tape(s) and courier details but do not notify courier.
+                    resolved_tapes = []
+                    if tape:
+                        resolved_tapes.append(tape)
+
+                    scanned_tape_ids = assignment_form.cleaned_data.get('scanned_tape_ids') or []
+                    for scan_value in scanned_tape_ids:
+                        try:
+                            scanned_tape = Tape.objects.filter(pk=scan_value).first()
+                        except Exception:
+                            scanned_tape = None
+                        if scanned_tape and scanned_tape not in resolved_tapes:
+                            resolved_tapes.append(scanned_tape)
+
+                    if not resolved_tapes and shipment.tapes.exists():
+                        resolved_tapes = list(shipment.tapes.all())
+
+                    for resolved_tape in resolved_tapes:
+                        shipment.tapes.add(resolved_tape)
+
                     shipment.number_of_tapes = shipment.tapes.count()
                     shipment.courier_name = courier_name or (courier_profile.full_name if courier_profile else '')
                     shipment.courier_contact = courier_contact or (courier_profile.phone_number if courier_profile else '')
@@ -7192,7 +7210,7 @@ def shipment_detail(request, shipment_pk):
                 messages.error(request, 'Please select a courier and provide return notes.')
         elif request.POST.get('form_type') == 'backup_admin_assignment':
             if assignment_form.is_valid():
-                tape = assignment_form.cleaned_data['tape']
+                tape = assignment_form.cleaned_data.get('tape')
                 courier_selection = assignment_form.cleaned_data['courier']
                 decision = assignment_form.cleaned_data['decision']
                 comments = assignment_form.cleaned_data.get('comments', '').strip()

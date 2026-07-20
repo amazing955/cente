@@ -539,11 +539,18 @@ class BackupShipmentAssignmentForm(forms.Form):
         scanned_tapes_source = (cleaned_data.get('scanned_tapes') or self.data.get('scanned_tapes') or '')
         scanned_tapes = [item.strip() for item in scanned_tapes_source.split(',') if item.strip()]
         cleaned_data['scanned_tapes'] = ','.join(scanned_tapes)
+        cleaned_data['scanned_tape_ids'] = scanned_tapes
 
         if not tape and barcode:
             tape = Tape.objects.filter(barcode__iexact=barcode).first() or Tape.objects.filter(volser__iexact=barcode).first()
             if tape:
                 cleaned_data['tape'] = tape
+
+        if not tape and len(scanned_tapes) == 1:
+            resolved_tape = Tape.objects.filter(pk=scanned_tapes[0]).first()
+            if resolved_tape:
+                cleaned_data['tape'] = resolved_tape
+                tape = resolved_tape
 
         if submit_action == 'reject':
             return cleaned_data

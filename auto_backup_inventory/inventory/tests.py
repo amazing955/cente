@@ -2812,6 +2812,82 @@ class BackupDashboardShipmentApprovalTests(TestCase):
             AuditLog.objects.filter(user=operator, action__icontains='awaiting supreme').exists()
         )
 
+    def test_backup_admin_can_approve_pending_shipment_from_dashboard_with_scanned_tapes_only(self):
+        operations_group = Group.objects.create(name='Operations Manager')
+        backup_group = Group.objects.create(name='Backup Administrator')
+        courier_group = Group.objects.create(name='Courier')
+
+        operator = get_user_model().objects.create_user(
+            username='operator-scanned-only',
+            email='operator-scanned-only@example.com',
+            password='pass1234',
+            first_name='Op',
+            last_name='User',
+        )
+        operator.groups.add(operations_group)
+
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-scanned-only',
+            email='backup-scanned-only@example.com',
+            password='pass1234',
+            first_name='Backup',
+            last_name='Admin',
+        )
+        backup_admin.groups.add(backup_group)
+
+        courier_user = get_user_model().objects.create_user(
+            username='courier-scanned-only',
+            email='courier-scanned-only@example.com',
+            password='pass1234',
+            first_name='Courier',
+            last_name='Guy',
+        )
+        courier_user.groups.add(courier_group)
+        courier_profile = CourierProfile.objects.create(
+            user=courier_user,
+            courier_id='CR-300',
+            full_name='Courier Guy',
+            phone_number='555-3000',
+            email='courier-scanned-only@example.com',
+            vehicle_number='KDA 777',
+        )
+
+        tape = Tape.objects.create(
+            volser='TAPE-300',
+            barcode='BAR-300',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+            status='Active',
+            current_location='Vault A',
+        )
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            status='Pending',
+            releasing_custodian='Op User',
+            created_by=operator,
+        )
+        shipment.tapes.add(tape)
+
+        self.client.force_login(backup_admin)
+        response = self.client.post(
+            reverse('backup-dashboard'),
+            {
+                'form_type': 'backup_admin_assignment',
+                'shipment_id': shipment.pk,
+                'courier': courier_profile.pk,
+                'decision': 'approve',
+                'comments': 'Approved from scanned tapelist.',
+                'scanned_tapes': str(tape.pk),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        shipment.refresh_from_db()
+        self.assertTrue(shipment.tapes.filter(pk=tape.pk).exists())
+        self.assertEqual(shipment.approval_stage, 'awaiting_supreme')
+
     def test_backup_admin_assignment_sends_email_to_profile_only_courier(self):
         backup_group = Group.objects.create(name='Backup Administrator')
         courier_group = Group.objects.create(name='Courier')
