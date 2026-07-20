@@ -4094,7 +4094,21 @@ def backup_dashboard(request):
                 return redirect(f'{reverse("backup-dashboard")}?show_alerts=1')
 
             show_alerts_panel = True
-            messages.error(request, 'Please provide a valid tape barcode and courier before approving the shipment.')
+            error_messages = []
+            for message in assignment_form.non_field_errors():
+                error_messages.append(str(message))
+            for field_name, field_errors in assignment_form.errors.items():
+                if field_name == '__all__':
+                    error_messages.extend(str(error) for error in field_errors)
+                    continue
+                field_label = assignment_form.fields.get(field_name)
+                field_title = getattr(field_label, 'label', None) or field_name.replace('_', ' ').title()
+                error_messages.extend(f'{field_title}: {error}' for error in field_errors)
+            if error_messages:
+                for error_message in error_messages:
+                    messages.error(request, error_message)
+            else:
+                messages.error(request, 'Please provide a valid tape barcode and courier before approving the shipment.')
         elif form_type == 'verify_user':
             user_id = request.POST.get('user_id')
             pending_user = None

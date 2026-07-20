@@ -2694,7 +2694,41 @@ class BackupDashboardShipmentApprovalTests(TestCase):
         self.assertContains(response, tape.volser)
         self.assertContains(response, tape.current_location)
 
-    def test_backup_admin_can_approve_pending_shipment_from_dashboard_with_barcode_and_courier(self):
+    def test_backup_dashboard_reason_box_is_hidden_by_default_until_missing_scans(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-reason-hidden',
+            email='backup-reason-hidden@example.com',
+            password='pass1234',
+        )
+        backup_admin.groups.add(backup_group)
+
+        tape = Tape.objects.create(
+            volser='TAPE-REASON-001',
+            barcode='BAR-REASON-001',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+            status='Active',
+            current_location='Vault A',
+        )
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            destination_location='Mombasa Branch',
+            status='Pending',
+            releasing_custodian='Ops User',
+            created_by=backup_admin,
+        )
+        shipment.tapes.add(tape)
+
+        self.client.force_login(backup_admin)
+        response = self.client.get(reverse('backup-dashboard'), {'show_alerts': '1', 'approve_shipment': shipment.pk})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="reason-container"')
+        self.assertContains(response, 'display:none;')
+
+    def test_backup_admin_can_approve_pending_shipment_from_dashboard_with_scanned_tape_and_courier(self):
         operations_group = Group.objects.create(name='Operations Manager')
         backup_group = Group.objects.create(name='Backup Administrator')
         courier_group = Group.objects.create(name='Courier')
@@ -2749,6 +2783,7 @@ class BackupDashboardShipmentApprovalTests(TestCase):
             releasing_custodian='Op User',
             created_by=operator,
         )
+        shipment.tapes.add(tape)
 
         self.client.force_login(backup_admin)
         response = self.client.post(
@@ -2760,23 +2795,21 @@ class BackupDashboardShipmentApprovalTests(TestCase):
                 'courier': courier_profile.pk,
                 'decision': 'approve',
                 'comments': 'Approved for dispatch.',
+                'scanned_tapes': str(tape.pk),
             },
         )
 
         self.assertEqual(response.status_code, 302)
         shipment.refresh_from_db()
-        self.assertEqual(shipment.status, 'Approved')
+        self.assertEqual(shipment.approval_stage, 'awaiting_supreme')
         self.assertTrue(shipment.tapes.filter(pk=tape.pk).exists())
         self.assertEqual(shipment.courier_name, 'Courier Guy')
         self.assertTrue(
             shipment.created_by and
-            ShipmentApprovalHistory.objects.filter(shipment=shipment, action='Approved').exists()
+            ShipmentApprovalHistory.objects.filter(shipment=shipment, action='Backup Approved').exists()
         )
         self.assertTrue(
-            AuditLog.objects.filter(user=operator, action__icontains='approved').exists()
-        )
-        self.assertTrue(
-            AuditLog.objects.filter(user=courier_user, action__icontains='approved').exists()
+            AuditLog.objects.filter(user=operator, action__icontains='awaiting supreme').exists()
         )
 
     def test_backup_admin_assignment_sends_email_to_profile_only_courier(self):

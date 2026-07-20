@@ -750,41 +750,40 @@ footer{
                 <p class="small text-muted mb-3">{{ approval_shipment.source_location|default:'-' }} → {{ approval_shipment.destination_location|default:'Pending review' }}</p>
                 <p class="mb-3">{{ approval_shipment.approval_remarks|default:'No request details have been provided yet.' }}</p>
                 {% if approval_shipment.tapes.all %}
-                <div class="mb-3">
-                    <h6 class="mb-2">Requested Tapes</h6>
-                    <div class="list-group small">
-                        {% for tape in approval_shipment.tapes.all %}
-                        <div class="list-group-item d-flex justify-content-between align-items-center" data-tape-id="{{ tape.pk }}" data-tape-label="{{ tape.volser }}" data-tape-barcode="{{ tape.barcode|default:'' }}" data-tape-volser="{{ tape.volser }}">
-                            <div>
-                                <div class="fw-semibold">{{ tape.volser }}</div>
-                                <div class="text-muted small">{{ tape.tape_type|default:'-' }}</div>
-                            </div>
-                            <div class="text-end">
-                                <div class="small text-muted">Location</div>
-                                <div class="fw-semibold">{{ tape.current_location|default:'-' }}</div>
-                            </div>
-                        </div>
-                        {% endfor %}
-                    </div>
-                    <div class="mt-3 border rounded p-3 bg-light">
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <label class="form-label mb-0">Scan status</label>
-                            <span id="scan-summary" class="badge bg-secondary">0 / {{ approval_shipment.tapes.count }}</span>
-                        </div>
-                        <div id="scan-checklist" class="d-flex flex-column gap-2"></div>
-                        {{ assignment_form.scanned_tapes }}
-                        <div class="mt-3">
-                            <label class="form-label">Reason for unscanned tapes</label>
-                            {{ assignment_form.unscanned_reason }}
-                            {% if assignment_form.unscanned_reason.errors %}<div class="text-danger small mt-1">{{ assignment_form.unscanned_reason.errors|join:", " }}</div>{% endif %}
-                        </div>
-                    </div>
-                </div>
-                {% endif %}
                 <form method="post" action="{% url 'backup-dashboard' %}">
                     {% csrf_token %}
                     <input type="hidden" name="form_type" value="backup_admin_assignment">
                     <input type="hidden" name="shipment_id" value="{{ approval_shipment.id }}">
+                    <div class="mb-3">
+                        <h6 class="mb-2">Requested Tapes</h6>
+                        <div class="list-group small">
+                            {% for tape in approval_shipment.tapes.all %}
+                            <div class="list-group-item d-flex justify-content-between align-items-center" data-tape-id="{{ tape.pk }}" data-tape-label="{{ tape.volser }}" data-tape-barcode="{{ tape.barcode|default:'' }}" data-tape-volser="{{ tape.volser }}">
+                                <div>
+                                    <div class="fw-semibold">{{ tape.volser }}</div>
+                                    <div class="text-muted small">{{ tape.tape_type|default:'-' }}</div>
+                                </div>
+                                <div class="text-end">
+                                    <div class="small text-muted">Location</div>
+                                    <div class="fw-semibold">{{ tape.current_location|default:'-' }}</div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        <div class="mt-3 border rounded p-3 bg-light">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <label class="form-label mb-0">Scan status</label>
+                                <span id="scan-summary" class="badge bg-secondary">0 / {{ approval_shipment.tapes.count }}</span>
+                            </div>
+                            <div id="scan-checklist" class="d-flex flex-column gap-2"></div>
+                            {{ assignment_form.scanned_tapes }}
+                            <div id="reason-container" class="mt-3" data-reason-visible="{% if assignment_form.is_bound and assignment_form.errors %}true{% else %}false{% endif %}" style="{% if assignment_form.is_bound and assignment_form.errors %}display:block;{% else %}display:none;{% endif %}">
+                                <label class="form-label">Reason for unscanned tapes</label>
+                                {{ assignment_form.unscanned_reason }}
+                                {% if assignment_form.unscanned_reason.errors %}<div class="text-danger small mt-1">{{ assignment_form.unscanned_reason.errors|join:", " }}</div>{% endif %}
+                            </div>
+                        </div>
+                    </div>
                     {% if assignment_form.non_field_errors %}
                         <div class="alert alert-danger">{{ assignment_form.non_field_errors }}</div>
                     {% endif %}
@@ -816,6 +815,7 @@ footer{
                 </form>
             </div>
         </div>
+        {% endif %}
         {% endif %}
 
         <div class="mb-4">
@@ -2997,6 +2997,8 @@ footer{
     const scannedField = document.getElementById('id_scanned_tapes');
     const scanSummary = document.getElementById('scan-summary');
     const scanChecklist = document.getElementById('scan-checklist');
+    const reasonContainer = document.getElementById('reason-container');
+    const approveButton = document.querySelector('button[name="submit_action"][value="approve"]');
     const tapeItems = Array.from(document.querySelectorAll('[data-tape-id]'));
     const tapeMap = new Map();
     tapeItems.forEach(function(item) {
@@ -3005,6 +3007,16 @@ footer{
             tapeMap.set(value, item.dataset.tapeId);
         });
     });
+    const initialReasonVisible = reasonContainer ? reasonContainer.getAttribute('data-reason-visible') === 'true' : false;
+
+    function updateReasonVisibility(forceVisible) {
+        if (!reasonContainer) {
+            return;
+        }
+        const shouldShow = forceVisible === true || (forceVisible !== false && initialReasonVisible);
+        reasonContainer.style.display = shouldShow ? 'block' : 'none';
+        reasonContainer.setAttribute('data-reason-visible', shouldShow ? 'true' : 'false');
+    }
 
     function updateScanState() {
         if (!scanInput || !scannedField || !scanSummary || !scanChecklist) {
@@ -3035,7 +3047,7 @@ footer{
             return;
         }
         const current = new Set((scannedField.value || '').split(',').filter(Boolean));
-        current.add(normalized);
+        current.add(id);
         scannedField.value = Array.from(current).join(',');
         updateScanState();
     }
@@ -3054,7 +3066,17 @@ footer{
         });
     }
 
+    if (approveButton) {
+        approveButton.addEventListener('click', function() {
+            const scannedIds = new Set((scannedField.value || '').split(',').filter(Boolean));
+            const requestedCount = tapeItems.length;
+            const hasMissingScans = requestedCount > 0 && scannedIds.size < requestedCount;
+            updateReasonVisibility(hasMissingScans);
+        });
+    }
+
     updateScanState();
+    updateReasonVisibility(false);
 })();
 </script>
 {% endblock %}

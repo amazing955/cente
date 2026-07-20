@@ -536,7 +536,9 @@ class BackupShipmentAssignmentForm(forms.Form):
         barcode = (cleaned_data.get('barcode') or '').strip()
         tape = cleaned_data.get('tape')
         courier = cleaned_data.get('courier')
-        scanned_tapes = [item.strip() for item in (cleaned_data.get('scanned_tapes') or '').split(',') if item.strip()]
+        scanned_tapes_source = (cleaned_data.get('scanned_tapes') or self.data.get('scanned_tapes') or '')
+        scanned_tapes = [item.strip() for item in scanned_tapes_source.split(',') if item.strip()]
+        cleaned_data['scanned_tapes'] = ','.join(scanned_tapes)
 
         if not tape and barcode:
             tape = Tape.objects.filter(barcode__iexact=barcode).first() or Tape.objects.filter(volser__iexact=barcode).first()
@@ -549,8 +551,6 @@ class BackupShipmentAssignmentForm(forms.Form):
         if self.shipment:
             requested_tapes = list(self.shipment.tapes.all())
             if requested_tapes:
-                if not scanned_tapes:
-                    raise forms.ValidationError('Please scan each requested tape before approving the shipment.')
                 expected_ids = {str(tape.pk) for tape in requested_tapes}
                 scanned_ids = set(scanned_tapes)
                 missing_ids = expected_ids - scanned_ids
