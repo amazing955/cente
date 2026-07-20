@@ -704,22 +704,38 @@ def approval_form_preview(request, shipment_pk):
     except Exception:
         tapes = []
 
-    # prefer an explicit description if present (some Shipment models may not have a `description` field)
-    desc = getattr(shipment, 'description', None) or getattr(shipment, 'approval_remarks', None)
-    if desc:
-        asset_description = desc
-    elif tapes:
+    # Show the number of tapes being transported as the asset description.
+    if tapes:
         count = len(tapes)
-        src = (getattr(shipment, 'source_location', '') or 'Unknown').title()
-        dst = (getattr(shipment, 'destination_location', '') or 'Unknown').title()
-        # concise phrasing: "<N> tapes from BranchName to Destination Name"
-        asset_description = f"{count} tape{'s' if count != 1 else ''} from {src} to {dst}"
+        asset_description = f"{count} tape{'s' if count != 1 else ''} being transported"
     else:
         asset_description = 'No tapes assigned.'
+
+    transferred_by = None
+    if getattr(shipment, 'courier_name', None):
+        transferred_by = shipment.courier_name
+    elif getattr(shipment, 'created_by', None):
+        transferred_by = shipment.created_by.get_full_name() or shipment.created_by.username
+
+    released_by = None
+    if getattr(shipment, 'approved_by_backup', None):
+        released_by = shipment.approved_by_backup.get_full_name() or shipment.approved_by_backup.username
+    elif getattr(request, 'user', None) and getattr(request.user, 'is_authenticated', False):
+        released_by = request.user.get_full_name() or request.user.username
+
+    received_by = None
+    if getattr(shipment, 'created_by', None):
+        received_by = shipment.created_by.get_full_name() or shipment.created_by.username
+    elif getattr(shipment, 'courier_name', None):
+        received_by = shipment.courier_name
 
     context = {
         'shipment': shipment,
         'asset_description': asset_description,
+        'reason_for_transfer': getattr(shipment, 'approval_remarks', None) or getattr(shipment, 'description', None) or '-',
+        'transferred_by': transferred_by or '-',
+        'released_by': released_by or '-',
+        'received_by': received_by or '-',
     }
 
     if request.GET.get('format') == 'voucher':

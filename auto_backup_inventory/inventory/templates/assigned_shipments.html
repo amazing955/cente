@@ -70,7 +70,7 @@
                                 <button type="submit" class="btn btn-sm btn-outline-success ms-1">Accept</button>
                             </form>
                             {% endif %}
-                            {% if shipment.status == 'Approved' or shipment.status == 'Dispatched' %}
+                            {% if shipment.status == 'Picked Up' or shipment.status == 'In Transit' %}
                             <a href="{% url 'pickup-confirmation' shipment.pk %}" class="btn btn-sm btn-outline-success ms-1">Pickup</a>
                             {% endif %}
                             {% if shipment.status == 'Picked Up' or shipment.status == 'In Transit' %}

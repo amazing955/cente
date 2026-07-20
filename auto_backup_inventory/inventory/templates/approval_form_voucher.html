@@ -167,26 +167,25 @@
 
         <tr>
             <td>Reason for Transfer</td>
-            <td colspan="3"><span class="line">{{ shipment.approval_remarks|default:'-' }}</span></td>
+            <td colspan="3"><span class="line">{{ reason_for_transfer|default:'-' }}</span></td>
         </tr>
     </table>
 
             <td>
- 
                 Transferred By<br>
-                <span class="line">{{ shipment.created_by.get_full_name|default:shipment.created_by.username|default:'-' }}</span>
+                <span class="line">{{ transferred_by|default:'-' }}</span>
             </td>
         </tr>
 
         <tr>
             <td>
                 Released By<br>
-                <span class="line">{{ request.user.get_full_name|default:request.user.username }}</span>
+                <span class="line">{{ released_by|default:'-' }}</span>
             </td>
 
             <td>
                 Received By<br>
-                <span class="line">{{ shipment.courier_name|default:'-' }}</span>
+                <span class="line">{{ received_by|default:'-' }}</span>
             </td>
         </tr>
     </table>

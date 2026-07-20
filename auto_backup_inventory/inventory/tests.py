@@ -3271,6 +3271,58 @@ class BackupDashboardShipmentApprovalTests(TestCase):
         self.assertIn('target_url=', notification.message)
         self.assertIn(reverse('approval-form-preview', args=[shipment.pk]), notification.message)
 
+    def test_voucher_preview_uses_operator_reason_courier_and_backup_admin_fields(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-voucher-preview',
+            email='backup-voucher-preview@example.com',
+            password='pass1234',
+            first_name='Backup',
+            last_name='Voucher',
+        )
+        backup_admin.groups.add(backup_group)
+
+        operator = get_user_model().objects.create_user(
+            username='operator-voucher-preview',
+            email='operator-voucher-preview@example.com',
+            password='pass1234',
+            first_name='Operator',
+            last_name='Preview',
+        )
+
+        tape = Tape.objects.create(
+            volser='TAPE-VOUCHER-001',
+            barcode='BAR-VOUCHER-001',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+            status='Active',
+            current_location='MPEERA',
+        )
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='MPEERA',
+            destination_location='ACACIA',
+            status='Approved',
+            approval_stage='approved',
+            approved_by_backup=backup_admin,
+            created_by=operator,
+            last_updated_by=backup_admin,
+            approval_remarks='Need secure transfer for branch audit.',
+            courier_name='Courier Mike',
+        )
+        shipment.tapes.add(tape)
+
+        self.client.force_login(backup_admin)
+        response = self.client.get(reverse('approval-form-preview', args=[shipment.pk]), {'format': 'voucher'})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Need secure transfer for branch audit.')
+        self.assertContains(response, 'Courier Mike')
+        self.assertContains(response, 'Backup Voucher')
+        self.assertContains(response, '1 tape being transported')
+        self.assertContains(response, 'Operator Preview')
+
     def test_printing_approval_form_marks_shipment_taken(self):
         backup_group = Group.objects.create(name='Backup Administrator')
         backup_admin = get_user_model().objects.create_user(
@@ -3426,6 +3478,39 @@ class BackupDashboardShipmentApprovalTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, shipment.shipment_id)
         self.assertContains(response, 'Mombasa Branch')
+
+    def test_assigned_shipments_shows_pickup_only_after_acceptance(self):
+        courier_group = Group.objects.create(name='Courier')
+        courier_user = get_user_model().objects.create_user(
+            username='acceptance-courier',
+            email='acceptance-courier@example.com',
+            password='pass1234',
+            first_name='Acceptance',
+            last_name='Courier',
+        )
+        courier_user.groups.add(courier_group)
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            destination_location='Mombasa Branch',
+            status='Dispatched',
+            releasing_custodian='Ops User',
+            courier_name='Acceptance Courier',
+            courier_contact='acceptance-courier@example.com',
+        )
+
+        self.client.force_login(courier_user)
+        dispatched_response = self.client.get(reverse('assigned-shipments'))
+        self.assertContains(dispatched_response, '>Accept</button>')
+        self.assertContains(dispatched_response, f'/courier/manifest/{shipment.pk}/')
+        self.assertNotContains(dispatched_response, f'/courier/pickup-confirmation/{shipment.pk}/')
+
+        shipment.status = 'Picked Up'
+        shipment.save(update_fields=['status'])
+        accepted_response = self.client.get(reverse('assigned-shipments'))
+        self.assertContains(accepted_response, f'/courier/pickup-confirmation/{shipment.pk}/')
+        self.assertNotContains(accepted_response, '>Accept</button>')
 
     def test_manifest_detail_renders_when_approval_user_is_missing(self):
         courier_group = Group.objects.create(name='Courier')
