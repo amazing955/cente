@@ -3906,6 +3906,7 @@ def backup_dashboard(request):
     show_reconciliation_reports_panel = False
     show_add_reconciliation_panel = False
     show_unscanned_tapes = False
+    show_reconciliation_summary = False
     show_print_barcodes_panel = False
     show_admin_panel = False
     show_admin_history = False
@@ -4644,6 +4645,88 @@ def backup_dashboard(request):
             else:
                 messages.error(request, 'Please select a valid reconciliation session.')
                 return redirect('backup-dashboard')
+        elif form_type == 'record_reconciliation_scan_by_barcode':
+            reconciliation_pk = request.POST.get('reconciliation_pk')
+            barcode = (request.POST.get('barcode') or '').strip()
+            selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
+            tape = Tape.objects.filter(barcode=barcode).first() if barcode else None
+            if selected_reconciliation and tape:
+                was_scanned = tape.scan_status in ['Scanned', 'Verified']
+                tape.scan_status = 'Scanned'
+                tape.scan_progress = 100
+                tape.last_scanned_at = timezone.localtime()
+                tape.last_scanned_by = request.user
+                tape.save(update_fields=['scan_status', 'scan_progress', 'last_scanned_at', 'last_scanned_by'])
+
+                if not was_scanned:
+                    selected_reconciliation.total_tapes_scanned = selected_reconciliation.total_tapes_scanned + 1
+                    if selected_reconciliation.total_tapes_expected > 0:
+                        selected_reconciliation.total_tapes_scanned = min(
+                            selected_reconciliation.total_tapes_scanned,
+                            selected_reconciliation.total_tapes_expected
+                        )
+
+                selected_reconciliation.update_progress(scanned=selected_reconciliation.total_tapes_scanned, expected=selected_reconciliation.total_tapes_expected)
+
+                if selected_reconciliation.progress_percent == 100 and selected_reconciliation.status != 'Completed':
+                    selected_reconciliation.status = 'Completed'
+                    selected_reconciliation.save(update_fields=['status'])
+                AuditLog.objects.create(
+                    name='Reconciliation Scan Updated',
+                    action=f'Tape {tape.volser} scan status updated to {tape.scan_status} for {selected_reconciliation.reconciliation_id}',
+                    user=request.user,
+                    message=f'reconciliation_id={selected_reconciliation.reconciliation_id}|tape={tape.volser}|scan_status={tape.scan_status}|progress={tape.scan_progress}',
+                    severity='info',
+                )
+                messages.success(request, f'Barcode {barcode} matched {tape.volser} and marked as scanned.')
+            elif selected_reconciliation and not tape:
+                messages.error(request, 'No tape found for the provided barcode.')
+            else:
+                messages.error(request, 'Please provide a valid reconciliation and barcode.')
+            return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}&show_unscanned_tapes=1')
+        elif form_type == 'quick_reconciliation_scan':
+            reconciliation_pk = request.POST.get('reconciliation_pk')
+            barcode = (request.POST.get('barcode') or '').strip()
+            selected_reconciliation = get_object_by_uuid_pk(Reconciliation, reconciliation_pk)
+            if selected_reconciliation and barcode:
+                tape = Tape.objects.filter(barcode__iexact=barcode).order_by('volser').first()
+                if tape:
+                    was_scanned = tape.scan_status in ['Scanned', 'Verified']
+                    tape.scan_status = 'Scanned'
+                    tape.scan_progress = 100
+                    tape.last_scanned_at = timezone.localtime()
+                    tape.last_scanned_by = request.user
+                    tape.save(update_fields=['scan_status', 'scan_progress', 'last_scanned_at', 'last_scanned_by'])
+
+                    if not was_scanned:
+                        selected_reconciliation.total_tapes_scanned = selected_reconciliation.total_tapes_scanned + 1
+                        if selected_reconciliation.total_tapes_expected > 0:
+                            selected_reconciliation.total_tapes_scanned = min(
+                                selected_reconciliation.total_tapes_scanned,
+                                selected_reconciliation.total_tapes_expected
+                            )
+
+                    selected_reconciliation.update_progress(
+                        scanned=selected_reconciliation.total_tapes_scanned,
+                        expected=selected_reconciliation.total_tapes_expected,
+                    )
+                    if selected_reconciliation.progress_percent == 100 and selected_reconciliation.status != 'Completed':
+                        selected_reconciliation.status = 'Completed'
+                        selected_reconciliation.save(update_fields=['status'])
+
+                    AuditLog.objects.create(
+                        name='Reconciliation Scan Updated',
+                        action=f'Tape {tape.volser} scanned via barcode for {selected_reconciliation.reconciliation_id}',
+                        user=request.user,
+                        message=f'reconciliation_id={selected_reconciliation.reconciliation_id}|tape={tape.volser}|scan_status={tape.scan_status}|progress={tape.scan_progress}',
+                        severity='info',
+                    )
+                    messages.success(request, f'Tape {tape.volser} marked as scanned and completed.')
+                else:
+                    messages.error(request, 'No tape matched the scanned barcode.')
+            else:
+                messages.error(request, 'Please provide a valid reconciliation and barcode.')
+            return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}&show_unscanned_tapes=1')
         elif form_type == 'record_reconciliation_scan':
             reconciliation_pk = request.POST.get('reconciliation_pk')
             tape_id = request.POST.get('scan_tape_id')
@@ -4687,7 +4770,7 @@ def backup_dashboard(request):
                 messages.success(request, 'Scan record saved and reconciliation progress updated.')
             else:
                 messages.error(request, 'Please provide a valid reconciliation, tape, and scan status.')
-            return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}')
+            return redirect(f'{reverse("backup-dashboard")}?show_reconciliation=1&reconciliation_pk={selected_reconciliation.id if selected_reconciliation else ""}&show_unscanned_tapes=1')
         elif form_type == 'system_settings':
             settings_form = SystemSettingsForm(request.POST, instance=application_settings)
             if settings_form.is_valid():
@@ -5078,7 +5161,12 @@ def backup_dashboard(request):
         Q(role='operations_manager') | Q(groups__name='Operations Manager')
     ).order_by('username').distinct()
     if selected_reconciliation and show_unscanned_tapes:
-        unscanned_tapes = Tape.objects.filter(scan_status__in=['Pending', 'Assigned', 'Scanning']).order_by('volser')
+        unscanned_tapes = Tape.objects.filter(
+            scan_status__in=['Pending', 'Assigned', 'Scanning', 'Scanned', 'Verified', 'Exception']
+        ).order_by('volser')
+    if selected_reconciliation and selected_reconciliation.status in ['Completed', 'Closed']:
+        show_reconciliation_summary = True
+        show_unscanned_tapes = False
     recent_activities = AuditLog.objects.order_by('-timestamp')[:6]
     recent_alerts = list(AuditLog.objects.filter(severity__in=['warning', 'error']).order_by('-timestamp')[:5])
     unread_alert_id_set = set(unread_alert_ids)
@@ -6856,6 +6944,38 @@ def approval_review(request, approval_id):
             messages.warning(request, 'Approval request rejected and discarded.')
         return redirect(reverse('supreme-approver-dashboard'))
 
+    shipment_tape_details = []
+    shipment_scan_summary = None
+    shipment_reason_text = ''
+    if related_object and hasattr(related_object, 'tapes'):
+        requested_tapes = list(related_object.tapes.all())
+        scanned_tape_count = len(requested_tapes)
+        expected_tape_count = max(int(getattr(related_object, 'number_of_tapes', 0) or 0), scanned_tape_count)
+        shipment_scan_summary = f"{scanned_tape_count} of {expected_tape_count} tapes scanned"
+        for tape in requested_tapes:
+            shipment_tape_details.append({
+                'volser': getattr(tape, 'volser', ''),
+                'barcode': getattr(tape, 'barcode', ''),
+                'status': getattr(tape, 'status', 'Unknown'),
+                'current_location': getattr(tape, 'current_location', ''),
+            })
+
+        missing_tape_count = max(expected_tape_count - scanned_tape_count, 0)
+        for index in range(missing_tape_count):
+            shipment_tape_details.append({
+                'volser': f'Unscanned tape {index + 1}',
+                'barcode': '-',
+                'status': 'Not scanned',
+                'current_location': '-',
+            })
+
+        approval_notes = (getattr(related_object, 'approval_remarks', '') or '').strip()
+        if approval_notes:
+            shipment_reason_text = approval_notes
+
+    if not shipment_tape_details and related_object and getattr(related_object, 'number_of_tapes', 0):
+        shipment_scan_summary = f"0 of {int(related_object.number_of_tapes)} tapes scanned"
+
     context = {
         'approval': approval,
         'related_object': related_object,
@@ -6865,6 +6985,9 @@ def approval_review(request, approval_id):
         'current_user': request.user,
         'dashboard_title': 'Approval Review',
         'is_read_only': True,
+        'shipment_tape_details': shipment_tape_details,
+        'shipment_scan_summary': shipment_scan_summary,
+        'shipment_reason_text': shipment_reason_text,
     }
     return render(request, 'approval_review.html', context)
 
@@ -7914,6 +8037,35 @@ def assigned_shipments(request):
     courier = get_courier_profile(request.user)
     filter_form = CourierShipmentFilterForm(request.GET or None)
     shipments = get_courier_shipments(request.user)
+
+    if request.method == 'POST':
+        shipment_pk = request.POST.get('shipment_pk')
+        action = (request.POST.get('action') or '').strip().lower()
+        shipment = get_object_by_uuid_pk(Shipment, shipment_pk)
+        if shipment and action == 'accept' and shipment.status == 'Dispatched':
+            shipment.status = 'Picked Up'
+            shipment.last_updated_by = request.user
+            shipment.save(update_fields=['status', 'last_updated_by', 'last_updated_at'])
+            ShipmentTransportEvent.objects.create(
+                shipment=shipment,
+                courier=courier,
+                event_type='Accepted',
+                event_date=timezone.localdate(),
+                event_time=timezone.localtime().time(),
+                comments='Shipment accepted by courier.',
+            )
+            backup_admins = User.objects.filter(is_active=True, groups__name='Backup Administrator').distinct()
+            for backup_admin in backup_admins:
+                AuditLog.objects.create(
+                    name='Courier Shipment Accepted',
+                    action=f'Courier {request.user.get_full_name() or request.user.username} accepted shipment {shipment.shipment_id}.',
+                    user=backup_admin,
+                    severity='info',
+                )
+            messages.success(request, f'Shipment {shipment.shipment_id} accepted and notified to backup administration.')
+        else:
+            messages.error(request, 'Unable to accept the selected shipment.')
+        return redirect('assigned-shipments')
 
     # Only show shipments that have been released to couriers
     shipments = shipments.exclude(status__in=['Pending', 'Awaiting Supreme Approval', 'Approved', 'Draft', 'Cancelled', 'Rejected'])

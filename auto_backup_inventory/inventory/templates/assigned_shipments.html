@@ -62,6 +62,14 @@
                         <td>{{ shipment.destination_location|default:'N/A' }}</td>
                         <td>
                             <a href="{% url 'manifest-detail' shipment.pk %}" class="btn btn-sm btn-outline-primary">Manifest</a>
+                            {% if shipment.status == 'Dispatched' %}
+                            <form method="post" action="{% url 'assigned-shipments' %}" class="d-inline">
+                                {% csrf_token %}
+                                <input type="hidden" name="shipment_pk" value="{{ shipment.pk }}">
+                                <input type="hidden" name="action" value="accept">
+                                <button type="submit" class="btn btn-sm btn-outline-success ms-1">Accept</button>
+                            </form>
+                            {% endif %}
                             {% if shipment.status == 'Approved' or shipment.status == 'Dispatched' %}
                             <a href="{% url 'pickup-confirmation' shipment.pk %}" class="btn btn-sm btn-outline-success ms-1">Pickup</a>
                             {% endif %}

@@ -411,6 +411,78 @@ class SupremeApproverDashboardTests(TestCase):
         self.assertEqual(shipment.status, 'Approved')
         self.assertEqual(approval_response.status_code, 302)
 
+    def test_supreme_approver_review_page_shows_tape_summary_and_scan_reason(self):
+        supreme_group = Group.objects.create(name='Supreme Approver')
+        backup_group = Group.objects.create(name='Backup Administrator')
+        supreme_user = get_user_model().objects.create_user(
+            username='supreme-tape-review-user',
+            email='supreme-tape-review-user@example.com',
+            password='StrongPass123!',
+        )
+        supreme_user.groups.add(supreme_group)
+        backup_user = get_user_model().objects.create_user(
+            username='backup-tape-review-user',
+            email='backup-tape-review-user@example.com',
+            password='StrongPass123!',
+        )
+        backup_user.groups.add(backup_group)
+
+        tape = Tape.objects.create(
+            volser='TAPE-REVIEW-001',
+            barcode='BAR-REVIEW-001',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+            status='Active',
+            current_location='Vault A',
+        )
+        second_tape = Tape.objects.create(
+            volser='TAPE-REVIEW-002',
+            barcode='BAR-REVIEW-002',
+            tape_type='LTO-8',
+            retention_end_date=date(2030, 1, 1),
+            status='Active',
+            current_location='Vault B',
+        )
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Vault',
+            destination_location='Kampala Branch',
+            status='Approved',
+            approval_stage='awaiting_supreme',
+            approved_by_backup=backup_user,
+            created_by=backup_user,
+            last_updated_by=backup_user,
+            number_of_tapes=2,
+            approval_remarks='Approved by backup administrator. Pending supreme approver.\nBackup scan note: One tape was not scanned because the barcode label was unreadable.',
+        )
+        shipment.tapes.add(tape)
+
+        approval_request = PendingApproval.objects.create(
+            transaction_type='Shipment',
+            module='Shipment Workflow',
+            summary='Shipment pending supreme approval.',
+            requester=backup_user,
+            backup_administrator=backup_user,
+            branch=backup_user.assigned_branch,
+            status='Awaiting Supreme Approval',
+            risk_level='Medium',
+            related_object_id=shipment.pk,
+            related_model='shipment',
+            request_payload={'shipment_id': shipment.shipment_id},
+        )
+
+        self.client.force_login(supreme_user)
+        response = self.client.get(reverse('approval-review', kwargs={'approval_id': approval_request.pk}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'View Tapes')
+        self.assertContains(response, '1 of 2 tapes scanned')
+        self.assertContains(response, 'Backup scan note')
+        self.assertContains(response, tape.volser)
+        self.assertContains(response, 'Unscanned tape 2')
+        self.assertContains(response, 'Vault A → Kampala Branch')
+        self.assertContains(response, 'Vault B → Kampala Branch')
+
     def test_non_supreme_user_receives_forbidden(self):
         user = get_user_model().objects.create_user(
             username='regular-user',
@@ -537,6 +609,145 @@ class BackupDashboardSignedNavigationTests(TestCase):
 
 
 class ReconciliationInitiationWorkflowTests(TestCase):
+    def test_quick_barcode_scan_marks_matching_tape_complete(self):
+        backup_admin = get_user_model().objects.create_superuser(
+            username='backup-admin-quick-scan',
+            email='backup-admin-quick-scan@example.com',
+            password='StrongPass123!',
+        )
+        reconciliation = Reconciliation.objects.create(
+            location='Head Office',
+            performed_by=backup_admin,
+            status='In Progress',
+            total_tapes_expected=1,
+            total_tapes_scanned=0,
+        )
+        tape = Tape.objects.create(
+            volser='TAP-2001',
+            barcode='BC-2001',
+            tape_type='LTO-8',
+            current_location='Vault B',
+            scan_status='Pending',
+            scan_progress=0,
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.post(reverse('backup-dashboard'), {
+            'form_type': 'quick_reconciliation_scan',
+            'reconciliation_pk': str(reconciliation.id),
+            'barcode': tape.barcode,
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('show_reconciliation=1', response.url)
+        self.assertIn('show_unscanned_tapes=1', response.url)
+        self.assertIn('reconciliation_pk=', response.url)
+        tape.refresh_from_db()
+        self.assertEqual(tape.scan_status, 'Scanned')
+        self.assertEqual(tape.scan_progress, 100)
+        self.assertIsNotNone(tape.last_scanned_at)
+        reconciliation.refresh_from_db()
+        self.assertEqual(reconciliation.total_tapes_scanned, 1)
+
+    def test_closed_reconciliation_shows_summary_instead_of_queue(self):
+        backup_admin = get_user_model().objects.create_superuser(
+            username='backup-admin-close-scan',
+            email='backup-admin-close-scan@example.com',
+            password='StrongPass123!',
+        )
+        reconciliation = Reconciliation.objects.create(
+            location='Head Office',
+            performed_by=backup_admin,
+            status='Completed',
+            total_tapes_expected=2,
+            total_tapes_scanned=2,
+            progress_percent=100,
+            notes='Scan completed successfully.',
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.get(reverse('backup-dashboard'), {
+            'show_reconciliation': '1',
+            'show_unscanned_tapes': '1',
+            'reconciliation_pk': str(reconciliation.id),
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Close Scan')
+        self.assertContains(response, 'Reconciliation Summary')
+        self.assertNotContains(response, 'Unscanned Tape Queue')
+
+    def test_reconciliation_scan_queue_marks_scanned_tapes_as_success(self):
+        backup_admin = get_user_model().objects.create_superuser(
+            username='backup-admin-scan-queue',
+            email='backup-admin-scan-queue@example.com',
+            password='StrongPass123!',
+        )
+        reconciliation = Reconciliation.objects.create(
+            location='Head Office',
+            performed_by=backup_admin,
+            status='In Progress',
+            total_tapes_expected=1,
+            total_tapes_scanned=1,
+        )
+        tape = Tape.objects.create(
+            volser='TAP-1001',
+            barcode='BC-1001',
+            tape_type='LTO-8',
+            current_location='Vault A',
+            scan_status='Scanned',
+            scan_progress=100,
+            last_scanned_at=timezone.now(),
+            last_scanned_by=backup_admin,
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.get(reverse('backup-dashboard'), {
+            'show_reconciliation': '1',
+            'show_unscanned_tapes': '1',
+            'reconciliation_pk': str(reconciliation.id),
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, tape.volser)
+        self.assertContains(response, 'table-success')
+
+    def test_barcode_scan_marks_matching_tape_as_complete(self):
+        backup_admin = get_user_model().objects.create_superuser(
+            username='backup-admin-barcode-scan',
+            email='backup-admin-barcode-scan@example.com',
+            password='StrongPass123!',
+        )
+        reconciliation = Reconciliation.objects.create(
+            location='Head Office',
+            performed_by=backup_admin,
+            status='In Progress',
+            total_tapes_expected=1,
+            total_tapes_scanned=0,
+        )
+        tape = Tape.objects.create(
+            volser='TAP-2001',
+            barcode='BC-2001',
+            tape_type='LTO-8',
+            current_location='Vault B',
+            scan_status='Pending',
+            scan_progress=0,
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.post(reverse('backup-dashboard'), {
+            'form_type': 'record_reconciliation_scan_by_barcode',
+            'reconciliation_pk': str(reconciliation.id),
+            'barcode': tape.barcode,
+        })
+
+        self.assertEqual(response.status_code, 302)
+        tape.refresh_from_db()
+        reconciliation.refresh_from_db()
+        self.assertEqual(tape.scan_status, 'Scanned')
+        self.assertEqual(tape.scan_progress, 100)
+        self.assertEqual(reconciliation.total_tapes_scanned, 1)
+
     def test_shift_reconciliation_allows_multiple_operator_selection(self):
         backup_admin = get_user_model().objects.create_superuser(
             username='backup-admin-shift-multi',

@@ -1034,7 +1034,31 @@ footer{
                     <strong>Notes</strong>
                     <p class="text-muted">{{ selected_reconciliation.notes|default:'No notes provided.' }}</p>
                 </div>
-                {% if show_unscanned_tapes and selected_reconciliation.status != 'Closed' %}
+                {% if show_reconciliation_summary or selected_reconciliation.status in 'Completed,Closed' %}
+                <div class="mt-4 border rounded p-3 bg-light">
+                    <h6 class="fw-semibold mb-3">Reconciliation Summary</h6>
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <div class="text-muted small">Status</div>
+                            <div class="fw-semibold">{{ selected_reconciliation.status }}</div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="text-muted small">Scanned</div>
+                            <div class="fw-semibold">{{ selected_reconciliation.total_tapes_scanned }} / {{ selected_reconciliation.total_tapes_expected }}</div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="text-muted small">Progress</div>
+                            <div class="fw-semibold">{{ selected_reconciliation.progress_percent }}%</div>
+                        </div>
+                    </div>
+                    {% if selected_reconciliation.notes %}
+                    <div class="mt-3">
+                        <div class="text-muted small">Notes</div>
+                        <div>{{ selected_reconciliation.notes }}</div>
+                    </div>
+                    {% endif %}
+                </div>
+                {% elif show_unscanned_tapes and selected_reconciliation.status != 'Closed' %}
                 <div class="mt-4 d-flex justify-content-between align-items-center flex-wrap gap-3">
                     <div>
                         <h6 class="fw-semibold mb-0">Unscanned Tape Queue</h6>
@@ -1061,6 +1085,13 @@ footer{
                             <input type="hidden" name="reconciliation_pk" value="{{ selected_reconciliation.id }}">
                             <button type="submit" class="btn btn-danger">Finish Scan</button>
                         </form>
+                        {% elif selected_reconciliation.status == 'Completed' %}
+                        <form method="post" action="{% url 'backup-dashboard' %}">
+                            {% csrf_token %}
+                            <input type="hidden" name="form_type" value="close_reconciliation">
+                            <input type="hidden" name="reconciliation_pk" value="{{ selected_reconciliation.id }}">
+                            <button type="submit" class="btn btn-outline-secondary">Close Scan</button>
+                        </form>
                         {% endif %}
                         <form method="post" action="{% url 'backup-dashboard' %}">
                             {% csrf_token %}
@@ -1077,6 +1108,32 @@ footer{
                         </form>
                     </div>
                 </div>
+                <form method="post" action="{% url 'backup-dashboard' %}" class="row g-2 mb-3">
+                    {% csrf_token %}
+                    <input type="hidden" name="form_type" value="record_reconciliation_scan_by_barcode">
+                    <input type="hidden" name="reconciliation_pk" value="{{ selected_reconciliation.id }}">
+                    <div class="col-md-8">
+                        <label class="form-label">Barcode</label>
+                        <input type="text" name="barcode" class="form-control" placeholder="Scan or type barcode" autocomplete="off">
+                    </div>
+                    <div class="col-md-4 d-flex align-items-end">
+                        <button type="submit" class="btn btn-primary w-100">Submit Barcode</button>
+                    </div>
+                </form>
+                <form method="post" action="{% url 'backup-dashboard' %}" class="mt-3">
+                    {% csrf_token %}
+                    <input type="hidden" name="form_type" value="quick_reconciliation_scan">
+                    <input type="hidden" name="reconciliation_pk" value="{{ selected_reconciliation.id }}">
+                    <div class="row g-2 align-items-end">
+                        <div class="col-md-8">
+                            <label class="form-label fw-semibold">Barcode Scan</label>
+                            <input type="text" name="barcode" class="form-control" placeholder="Scan or type barcode" autocomplete="off" autofocus>
+                        </div>
+                        <div class="col-md-4">
+                            <button type="submit" class="btn btn-primary w-100">Scan Barcode</button>
+                        </div>
+                    </div>
+                </form>
                 <div class="table-responsive mt-3">
                     <table class="table table-sm table-bordered mb-0">
                         <thead class="table-dark">
@@ -1090,10 +1147,22 @@ footer{
                         </thead>
                         <tbody>
                             {% for tape in unscanned_tapes %}
+                            {% if tape.scan_status == 'Scanned' or tape.scan_status == 'Verified' %}
+                            <tr class="table-success">
+                            {% elif selected_reconciliation.status == 'In Progress' and tape.scan_status in 'Pending,Assigned,Scanning' %}
+                            <tr class="table-warning">
+                            {% elif tape.scan_status == 'Exception' %}
+                            <tr class="table-warning">
+                            {% else %}
                             <tr class="table-danger">
+                            {% endif %}
                                 <td class="fw-semibold">{{ tape.volser }}</td>
                                 <td>{{ tape.current_location|default:'Unknown' }}</td>
-                                <td>{{ tape.scan_status }}</td>
+                                <td>
+                                    <span class="badge {% if tape.scan_status == 'Scanned' or tape.scan_status == 'Verified' %}bg-success{% elif tape.scan_status == 'Scanning' %}bg-warning text-dark{% elif tape.scan_status == 'Exception' %}bg-warning text-dark{% else %}bg-danger{% endif %}">
+                                        {{ tape.scan_status }}
+                                    </span>
+                                </td>
                                 <td>{{ tape.scan_progress }}%</td>
                                 <td>{% if tape.last_scanned_at %}{{ tape.last_scanned_at|date:'Y-m-d H:i' }}{% else %}<span class="text-danger">Not scanned</span>{% endif %}</td>
                             </tr>

@@ -68,6 +68,66 @@
               <div class="mt-2">{{ related_object.approval_remarks|linebreaksbr }}</div>
             </div>
             {% endif %}
+
+            {% if shipment_scan_summary or shipment_tape_details %}
+            <div class="card border-0 shadow-sm mt-3">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                  <h6 class="fw-semibold mb-0">Tapes for this shipment</h6>
+                  <div class="d-flex align-items-center gap-2">
+                    <span class="badge bg-primary-subtle text-primary">{{ shipment_scan_summary|default:'Tape details available' }}</span>
+                    <button class="btn btn-outline-primary btn-sm" type="button" data-bs-toggle="collapse" data-bs-target="#tape-review-details">View Tapes</button>
+                  </div>
+                </div>
+                <div id="tape-review-details" class="collapse">
+                  {% if shipment_tape_details %}
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                      <thead>
+                        <tr>
+                          <th>Volser</th>
+                          <th>Barcode</th>
+                          <th>Status</th>
+                          <th>Location</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {% for tape in shipment_tape_details %}
+                        <tr>
+                          <td>{{ tape.volser|default:'-' }}</td>
+                          <td>{{ tape.barcode|default:'-' }}</td>
+                          <td>{{ tape.status|default:'Unknown' }}</td>
+                          <td>
+                            {% with current_location=tape.current_location|default:'' %}
+                              {% if current_location and related_object.destination_location %}
+                                {{ current_location }} → {{ related_object.destination_location }}
+                              {% elif current_location %}
+                                {{ current_location }}
+                              {% elif related_object.destination_location %}
+                                → {{ related_object.destination_location }}
+                              {% else %}
+                                -
+                              {% endif %}
+                            {% endwith %}
+                          </td>
+                        </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
+                  </div>
+                  {% else %}
+                  <div class="text-muted small">No tapes attached to this shipment yet.</div>
+                  {% endif %}
+                </div>
+                {% if shipment_reason_text %}
+                <div class="alert alert-secondary mt-3 mb-0">
+                  <div class="fw-semibold">Scan notes</div>
+                  <div class="small mt-1">{{ shipment_reason_text|linebreaksbr }}</div>
+                </div>
+                {% endif %}
+              </div>
+            </div>
+            {% endif %}
           </section>
 
           <section id="changed-fields">
