@@ -3511,7 +3511,7 @@ def active_directory_authentication(username, password):
 
     status = False
     try:
-        conn = ldap.initialize('ldap://' + os.getenv('AD_AUTH_IP', 'XX.XXX.XXX.XX'))
+        conn = ldap.initialize('ldap://' + '10.222.100.10')
         conn.protocol_version = 3
         conn.set_option(ldap.OPT_REFERRALS, 0)
         conn.simple_bind_s(username, password)
