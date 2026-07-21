@@ -45,7 +45,15 @@
                                 {% elif shipment.release_datetime %}
                                 <a href="{% url 'approval-form-preview' shipment.pk %}?format=voucher" target="_blank" class="btn btn-sm btn-outline-secondary ms-2">Print</a>
                                 {% elif can_release and shipment.approval_stage == 'approved' %}
-                                <button type="button" class="btn btn-sm btn-success ms-2 release-btn" data-shipment-pk="{{ shipment.pk }}" data-release-url="{% url 'shipment-detail' shipment.pk %}">Release</button>
+                                <div class="d-inline-flex align-items-center gap-2 release-progress-wrapper" data-shipment-pk="{{ shipment.pk }}" data-release-url="{% url 'shipment-detail' shipment.pk %}">
+                                    <button type="button" class="btn btn-sm btn-success release-btn">Release</button>
+                                    <div class="release-progress-bar d-none" role="status" aria-live="polite" aria-label="Releasing shipment">
+                                        <div class="progress" style="height: 6px; min-width: 90px;">
+                                            <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 100%"></div>
+                                        </div>
+                                    </div>
+                                    <small class="release-status-text text-muted d-none">Notifying courier…</small>
+                                </div>
                                 {% endif %}
                                 
                             </td>
@@ -96,13 +104,22 @@ function getCookie(name) {
 }
 
 document.addEventListener('DOMContentLoaded', function(){
-    document.querySelectorAll('.release-btn').forEach(function(btn){
+    document.querySelectorAll('.release-progress-wrapper').forEach(function(wrapper){
+        const btn = wrapper.querySelector('.release-btn');
+        const progress = wrapper.querySelector('.release-progress-bar');
+        const statusText = wrapper.querySelector('.release-status-text');
+
         btn.addEventListener('click', function(e){
-            const pk = this.dataset.shipmentPk;
-            const url = this.dataset.releaseUrl || ('/shipment-approvals/' + pk + '/');
+            const pk = wrapper.dataset.shipmentPk;
+            const url = wrapper.dataset.releaseUrl || ('/shipment-approvals/' + pk + '/');
             if (!confirm('Release this shipment to courier? This will notify the courier.')) return;
+
             const csrftoken = getCookie('csrftoken');
-            const button = this;
+            btn.disabled = true;
+            btn.textContent = 'Releasing...';
+            progress.classList.remove('d-none');
+            statusText.classList.remove('d-none');
+
             fetch(url, {
                 method: 'POST',
                 headers: {
@@ -112,16 +129,19 @@ document.addEventListener('DOMContentLoaded', function(){
                 body: new URLSearchParams({'form_type':'release_shipment'})
             }).then(function(resp){
                 if (!resp.ok) throw new Error('Network response was not ok');
-                // Replace button with Print link
-                const printLink = document.createElement('a');
-                printLink.className = 'btn btn-sm btn-outline-secondary ms-2';
-                printLink.target = '_blank';
-                printLink.href = '/approval-form-preview/' + pk + '/?format=voucher';
-                printLink.textContent = 'Print';
-                button.replaceWith(printLink);
-                alert('Shipment released and courier notified. You can print the release document.');
+                statusText.textContent = 'Courier notified';
+                progress.classList.add('d-none');
+                btn.className = 'btn btn-sm btn-outline-secondary release-btn';
+                btn.textContent = 'Print';
+                btn.onclick = function(){ window.open('/approval-form-preview/' + pk + '/?format=voucher', '_blank'); };
             }).catch(function(err){
                 console.error('Release failed', err);
+                btn.disabled = false;
+                btn.textContent = 'Release';
+                progress.classList.add('d-none');
+                statusText.textContent = 'Release failed';
+                statusText.classList.remove('text-muted');
+                statusText.classList.add('text-danger');
                 alert('Failed to release shipment. Please try again or check the server logs.');
             });
         });

@@ -3323,6 +3323,36 @@ class BackupDashboardShipmentApprovalTests(TestCase):
         self.assertContains(response, '1 tape being transported')
         self.assertContains(response, 'Operator Preview')
 
+    def test_awaiting_release_page_shows_release_progress_ui(self):
+        backup_group = Group.objects.create(name='Backup Administrator')
+        backup_admin = get_user_model().objects.create_user(
+            username='backup-release-progress',
+            email='backup-release-progress@example.com',
+            password='pass1234',
+            first_name='Backup',
+            last_name='Progress',
+        )
+        backup_admin.groups.add(backup_group)
+
+        shipment = Shipment.objects.create(
+            shipment_type='Off-Site Transfer',
+            source_location='Nairobi Branch',
+            destination_location='Mombasa Branch',
+            status='Approved',
+            approval_stage='approved',
+            approved_by_backup=backup_admin,
+            created_by=backup_admin,
+            last_updated_by=backup_admin,
+            approval_remarks='Ready for release.',
+        )
+
+        self.client.force_login(backup_admin)
+        response = self.client.get(reverse('awaiting-release'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'release-progress-wrapper')
+        self.assertContains(response, 'release-progress-bar')
+
     def test_printing_approval_form_marks_shipment_taken(self):
         backup_group = Group.objects.create(name='Backup Administrator')
         backup_admin = get_user_model().objects.create_user(

@@ -123,7 +123,6 @@
                         <th>Source / Destination</th>
                         <th>Status</th>
                         <th>Risk</th>
-                        <th>Compliance</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
@@ -150,13 +149,6 @@
                             {% endif %}
                         </td>
                         <td>{{ shipment.risk_level }}</td>
-                        <td>
-                            {% if shipment.compliance_passed %}
-                                <span class="badge bg-success">Pass</span>
-                            {% else %}
-                                <span class="badge bg-danger">Fail</span>
-                            {% endif %}
-                        </td>
                         <td>
                             <a class="btn btn-sm btn-outline-primary partial-load" data-url="{% url 'shipment-detail' shipment.pk %}?partial=1" href="{% url 'shipment-detail' shipment.pk %}?partial=1">Review</a>
                             {% if shipment.status == 'Pending' %}
