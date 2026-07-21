@@ -8,7 +8,13 @@ import logging
 import random
 import re
 import string
+import os
 from urllib.parse import urlencode
+
+try:
+    import ldap
+except ImportError:  # pragma: no cover - runtime fallback for environments without python-ldap
+    ldap = None
 from django.core import signing
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -37,6 +43,108 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 from .authentication import AuditedJWTAuthentication
 from .permissions import InvestigationPermission
 from .serializer import AuditLogSerializer, ShipmentSerializer, TapeSerializer
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.permissions import AllowAny
+from rest_framework.authtoken.models import Token
+
+
+#decoding
+def custom_decrypt_string(value):
+    """Placeholder decrypt function. Replace with real decryption logic."""
+    if value is None:
+        raise ValueError('No value to decrypt')
+    # Basic pass-through; assume client sends plaintext or base64 encoded string.
+    try:
+        # attempt base64 decode when it looks like base64
+        import base64
+        decoded = base64.b64decode(value).decode('utf-8')
+        # if decoding yields a sensible string, return it
+        if decoded:
+            return decoded
+    except Exception:
+        pass
+    return value
+
+
+
+#email completion
+
+def get_complete_email(email):
+    # The domain to append if not already present
+    domain = "@centenarybank.co.ug"
+    
+    # Check if the email already contains the domain
+    if not email.endswith(domain):
+        email += domain  # Append the domain to the email
+    return email.lower()
+
+
+class LoginView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        encrypted_username = request.data.get("username")
+        encrypted_password = request.data.get("password")
+
+        # Decrypt credentials
+        try:
+            password = custom_decrypt_string(encrypted_password)
+            username = custom_decrypt_string(encrypted_username)
+        except ValueError as e:
+            logger.error(f"LoginView: decryption error: {e}")
+            return Response({"error": "Failed to decrypt credentials. Ensure the client is encrypting correctly."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Convert username to lowercase and get complete email
+        username = (username or '').lower()
+        username = get_complete_email(username)
+
+        # AD Authentication starts
+        isAuth = active_directory_authentication(username, password)
+        if not isAuth:
+            return Response({"error": "Invalid username or password."}, status=status.HTTP_400_BAD_REQUEST)
+
+        user_model = get_user_model()
+        try:
+            user = user_model.objects.get(username=username)
+        except user_model.DoesNotExist:
+            user = None
+
+        # Authenticate user and issue token
+        if user is not None:
+            Token.objects.filter(user=user).delete()
+            token, _ = Token.objects.get_or_create(user=user)
+
+            # Build a simple profile payload from the user model
+            profile_data = {
+                'id': str(user.pk),
+                'username': user.username,
+                'email': getattr(user, 'email', ''),
+                'first_name': getattr(user, 'first_name', ''),
+                'last_name': getattr(user, 'last_name', ''),
+                'is_superuser': getattr(user, 'is_superuser', False),
+            }
+
+            # Audit log
+            try:
+                AuditLog.objects.create(
+                    name='User Login',
+                    action=f'Logged in user {user.username}',
+                    user=user,
+                    message=f'User {user.username} logged in via AD API',
+                    severity='success',
+                )
+            except Exception:
+                logger.exception('Failed to write audit log for login')
+
+            return Response({
+                "message": "Login successful.",
+                "token": token.key,
+                "profile": profile_data
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({"error": "Invalid Username or Password"}, status=status.HTTP_400_BAD_REQUEST)
 from .utils import create_pending_approval
 
 logger = logging.getLogger(__name__)
@@ -3392,7 +3500,34 @@ def _send_otp_email(user, otp_code):
         'Please use this code to complete your sign-in.\n'
     )
     send_mail(subject, body, settings.DEFAULT_FROM_EMAIL, [user.email], fail_silently=True)
+'''
+#AD login auth
+def active_directory_authentication(username, password):
+    if not username or not password:
+        return False
+    if ldap is None:
+        logger.warning('python-ldap is not installed; Active Directory authentication is unavailable.')
+        return False
 
+    status = False
+    try:
+        conn = ldap.initialize('ldap://' + os.getenv('AD_AUTH_IP', 'XX.XXX.XXX.XX'))
+        conn.protocol_version = 3
+        conn.set_option(ldap.OPT_REFERRALS, 0)
+        conn.simple_bind_s(username, password)
+        status = True
+    except ldap.INVALID_CREDENTIALS:
+        status = False
+    except Exception as exc:
+        logger.warning('Active Directory authentication failed: %s', exc)
+        status = False
+    finally:
+        try:
+            conn.unbind_s()
+        except Exception:
+            pass
+    return status
+'''
 
 def signin(request):
     pending_user_id = request.session.get('pending_2fa_user_id')
@@ -3545,7 +3680,20 @@ def signin(request):
         if pending_user and not username and not password:
             return render(request, 'signin.html', _build_login_context(request, pending_user=pending_user, pending_2fa=True))
 
+
+
+
+
+        # OPTION 1: Local Django Authentication
         user = authenticate(request, username=username, password=password)
+
+        # OPTION 2: Active Directory Authentication
+        # Uncomment the following line to use Active Directory auth instead of Django local auth.
+        # user = active_directory_authentication(username, password)
+
+
+
+
 
         if user:
             request.session['invalid_login_attempts'] = 0
