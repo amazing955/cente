@@ -309,6 +309,8 @@ Applied Information Technology
 
 Java Developer
 
+Django Developer
+
 NextSolutech
 
 Innovation. Code. Future.
